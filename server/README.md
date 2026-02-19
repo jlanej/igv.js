@@ -15,7 +15,7 @@ OpenDemand desktop access).
   alignment tracks at the variant position
 - **Manual curation** – mark variants as Pass / Fail / Uncertain with free-text
   notes; curation state is persisted to disk
-- **Gene summary** – post-filtering summarization showing genes that harbour
+- **Gene summary** – post-filtering summarization showing genes that harbor
   multiple variants passing current filters
 - **TSV export** – download filtered + curated variants as a TSV file
 

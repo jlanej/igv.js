@@ -376,9 +376,12 @@
     }
 
     async function batchCurate(status) {
-        if (selectedIds.size === 0) return alert('No variants selected')
+        if (selectedIds.size === 0) {
+            showNotification('No variants selected', 'warn')
+            return
+        }
 
-        const res = await fetch('/api/variants/batch/curate', {
+        const res = await fetch('/api/curate/batch', {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ids: [...selectedIds], status})
@@ -516,6 +519,21 @@
         const div = document.createElement('div')
         div.textContent = str
         return div.innerHTML
+    }
+
+    function showNotification(msg, type) {
+        let el = document.getElementById('notification')
+        if (!el) {
+            el = document.createElement('div')
+            el.id = 'notification'
+            el.style.cssText = 'position:fixed;top:60px;right:20px;padding:10px 18px;border-radius:6px;font-size:13px;z-index:999;transition:opacity 0.3s;'
+            document.body.appendChild(el)
+        }
+        el.style.background = type === 'warn' ? '#f39c12' : '#27ae60'
+        el.style.color = '#fff'
+        el.textContent = msg
+        el.style.opacity = '1'
+        setTimeout(() => { el.style.opacity = '0' }, 2500)
     }
 
     // -----------------------------------------------------------------------

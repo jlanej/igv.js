@@ -228,8 +228,8 @@ app.get('/api/variants/:id', (req, res) => {
     res.json(v)
 })
 
-// Batch curation (must be before :id route)
-app.put('/api/variants/batch/curate', (req, res) => {
+// Batch curation
+app.put('/api/curate/batch', (req, res) => {
     const {ids, status, note} = req.body
     if (!Array.isArray(ids)) return res.status(400).json({error: 'ids must be an array'})
     const allowedStatuses = ['pending', 'pass', 'fail', 'uncertain']
