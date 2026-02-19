@@ -29,6 +29,7 @@ const VARIANTS_FILE = getArg('variants', path.join(__dirname, 'example_data', 'v
 const DATA_DIR = getArg('data-dir', getArg('data_dir', path.join(__dirname, 'example_data')))
 const CURATION_FILE = getArg('curation-file', VARIANTS_FILE.replace(/\.tsv$/, '.curation.json'))
 const GENOME = getArg('genome', 'hg38')
+const HOST = getArg('host', '127.0.0.1')
 
 // ---------------------------------------------------------------------------
 // Data loading
@@ -339,13 +340,10 @@ app.get('/api/export', (req, res) => {
 // ---------------------------------------------------------------------------
 loadVariants()
 
-app.listen(PORT, '127.0.0.1', () => {
-    console.log(`\n╔══════════════════════════════════════════════════════╗`)
-    console.log(`║        IGV Variant Review Server                     ║`)
-    console.log(`╠══════════════════════════════════════════════════════╣`)
-    console.log(`║  URL:        http://127.0.0.1:${PORT}                    ║`)
-    console.log(`║  Variants:   ${variants.length} loaded${' '.repeat(Math.max(0, 33 - String(variants.length).length - 7))}║`)
-    console.log(`║  Genome:     ${GENOME}${' '.repeat(Math.max(0, 40 - GENOME.length))}║`)
-    console.log(`║  Data dir:   ${DATA_DIR.substring(0, 38)}${DATA_DIR.length > 38 ? '…' : ' '.repeat(Math.max(0, 40 - DATA_DIR.length))}║`)
-    console.log(`╚══════════════════════════════════════════════════════╝\n`)
+app.listen(PORT, HOST, () => {
+    console.log(`\n  IGV Variant Review Server`)
+    console.log(`  URL:        http://${HOST}:${PORT}`)
+    console.log(`  Variants:   ${variants.length} loaded`)
+    console.log(`  Genome:     ${GENOME}`)
+    console.log(`  Data dir:   ${DATA_DIR}\n`)
 })

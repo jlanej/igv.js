@@ -112,11 +112,75 @@ naming (`.bam.bai`, `.cram.crai`), the index columns can be omitted.
 
 ## HPC Deployment
 
-### Interactive Session (OpenDemand Desktop)
+### Docker / Singularity (recommended)
+
+Most HPC clusters don't have Node.js or npm available.  Building a Docker
+image and converting it to a Singularity/Apptainer container is the most
+portable approach.
+
+**Build the Docker image** (on a machine with Docker):
+
+```bash
+# From the repo root
+docker build -t igv-variant-review .
+```
+
+**Convert to a Singularity SIF** (on a machine with Singularity, or the
+cluster login node if Docker images can be pulled):
+
+```bash
+# From a Docker archive
+docker save igv-variant-review -o igv-variant-review.tar
+singularity build igv-variant-review.sif docker-archive://igv-variant-review.tar
+
+# Or build directly from a registry if you pushed the image
+# singularity build igv-variant-review.sif docker://registry/igv-variant-review:latest
+```
+
+**Run with Singularity on the cluster:**
+
+```bash
+singularity run \
+  --bind /scratch/project/alignments:/data \
+  --bind /scratch/project/denovo_variants.tsv:/variants.tsv \
+  --bind /scratch/project/curation.json:/curation.json \
+  igv-variant-review.sif \
+  --variants /variants.tsv \
+  --data-dir /data \
+  --curation-file /curation.json \
+  --port 8080
+
+# Open browser: http://127.0.0.1:8080
+```
+
+**SLURM job script example:**
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=igv-review
+#SBATCH --time=8:00:00
+#SBATCH --mem=4G
+
+singularity run \
+  --bind /scratch/project/alignments:/data \
+  --bind /scratch/project/denovo_variants.tsv:/variants.tsv \
+  igv-variant-review.sif \
+  --variants /variants.tsv \
+  --data-dir /data \
+  --port 3000
+
+# Forward the port from a login node:
+# ssh -L 3000:$SLURMD_NODENAME:3000 login-node
+```
+
+### Native Node.js (if available)
+
+If Node.js is available on your cluster (via `module load` or otherwise),
+you can run without containers:
 
 ```bash
 # From an OpenDemand desktop terminal:
-module load nodejs   # or however Node.js is available on your cluster
+module load nodejs
 
 cd /path/to/igv.js/server
 npm install
@@ -159,6 +223,8 @@ pipelines.
 ## Architecture
 
 ```
+Dockerfile              # Multi-stage Docker build (→ Singularity SIF)
+.dockerignore           # Docker build exclusions
 server/
 ├── server.js           # Express server & REST API
 ├── package.json        # Dependencies
