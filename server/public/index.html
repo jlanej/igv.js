@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>IGV Variant Review</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <h1>🧬 IGV De Novo Variant Review</h1>
+        <div id="stats-bar">
+            <span id="stat-total">–</span> variants |
+            <span id="stat-filtered">–</span> shown |
+            <span class="curation-pass">✓ <span id="stat-pass">0</span></span>
+            <span class="curation-fail">✗ <span id="stat-fail">0</span></span>
+            <span class="curation-uncertain">? <span id="stat-uncertain">0</span></span>
+            <span class="curation-pending">○ <span id="stat-pending">0</span></span>
+        </div>
+    </header>
+
+    <div id="app">
+        <!-- Filter sidebar -->
+        <aside id="filter-panel">
+            <h2>Filters</h2>
+            <div id="filter-controls"></div>
+            <div class="filter-actions">
+                <button id="btn-apply-filters" class="btn btn-primary">Apply Filters</button>
+                <button id="btn-clear-filters" class="btn">Clear All</button>
+            </div>
+            <hr>
+            <h2>Quick Curation</h2>
+            <p class="hint">Apply to all selected variants:</p>
+            <div class="curation-buttons">
+                <button class="btn curation-pass" data-status="pass">✓ Pass</button>
+                <button class="btn curation-fail" data-status="fail">✗ Fail</button>
+                <button class="btn curation-uncertain" data-status="uncertain">? Uncertain</button>
+                <button class="btn" data-status="pending">○ Reset</button>
+            </div>
+            <hr>
+            <h2>Export</h2>
+            <button id="btn-export" class="btn">📥 Export TSV</button>
+        </aside>
+
+        <!-- Main content -->
+        <main>
+            <!-- Tabs -->
+            <div id="tabs">
+                <button class="tab active" data-tab="variants">Variant Table</button>
+                <button class="tab" data-tab="summary">Gene Summary</button>
+            </div>
+
+            <!-- Variant table tab -->
+            <div id="tab-variants" class="tab-content active">
+                <div class="table-controls">
+                    <label><input type="checkbox" id="select-all"> Select all on page</label>
+                    <span id="page-info"></span>
+                    <div class="pagination">
+                        <button id="btn-prev" class="btn btn-sm" disabled>← Prev</button>
+                        <button id="btn-next" class="btn btn-sm" disabled>Next →</button>
+                    </div>
+                </div>
+                <div id="variant-table-wrap">
+                    <table id="variant-table">
+                        <thead><tr id="table-header"></tr></thead>
+                        <tbody id="table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Gene summary tab -->
+            <div id="tab-summary" class="tab-content">
+                <div id="summary-info"></div>
+                <div id="summary-table-wrap">
+                    <table id="summary-table">
+                        <thead>
+                            <tr>
+                                <th>Gene</th>
+                                <th>Total</th>
+                                <th>Pass</th>
+                                <th>Fail</th>
+                                <th>Uncertain</th>
+                                <th>Pending</th>
+                                <th>Variants</th>
+                            </tr>
+                        </thead>
+                        <tbody id="summary-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- IGV viewer -->
+            <div id="igv-section">
+                <div id="igv-header">
+                    <h2 id="igv-title">Select a variant to view alignments</h2>
+                    <div id="igv-curation" style="display:none;">
+                        <button class="btn curation-pass" data-status="pass">✓ Pass</button>
+                        <button class="btn curation-fail" data-status="fail">✗ Fail</button>
+                        <button class="btn curation-uncertain" data-status="uncertain">? Uncertain</button>
+                        <textarea id="curation-note" placeholder="Curation note…" rows="1"></textarea>
+                        <button id="btn-save-note" class="btn btn-sm">Save Note</button>
+                    </div>
+                </div>
+                <div id="igv-div"></div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
