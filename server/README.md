@@ -109,6 +109,7 @@ naming (`.bam.bai`, `.cram.crai`), the index columns can be omitted.
 | `--genome`         | `hg38`                             | Reference genome for igv.js    |
 | `--port`           | `3000`                             | HTTP port                      |
 | `--curation-file`  | `<variants>.curation.json`         | Curation persistence file      |
+| `--host`           | `127.0.0.1`                        | Bind address (use `0.0.0.0` in containers) |
 
 ## HPC Deployment
 
@@ -118,10 +119,13 @@ Most HPC clusters don't have Node.js or npm available.  Building a Docker
 image and converting it to a Singularity/Apptainer container is the most
 portable approach.
 
-**Build the Docker image** (on a machine with Docker):
+**Pull a pre-built image** from GitHub Container Registry, or build locally:
 
 ```bash
-# From the repo root
+# Pre-built (after CI publishes it)
+docker pull ghcr.io/jlanej/igv-variant-review:latest
+
+# Or build locally from the repo root
 docker build -t igv-variant-review .
 ```
 
@@ -129,12 +133,12 @@ docker build -t igv-variant-review .
 cluster login node if Docker images can be pulled):
 
 ```bash
-# From a Docker archive
+# Directly from the registry
+singularity build igv-variant-review.sif docker://ghcr.io/jlanej/igv-variant-review:latest
+
+# Or from a local Docker archive
 docker save igv-variant-review -o igv-variant-review.tar
 singularity build igv-variant-review.sif docker-archive://igv-variant-review.tar
-
-# Or build directly from a registry if you pushed the image
-# singularity build igv-variant-review.sif docker://registry/igv-variant-review:latest
 ```
 
 **Run with Singularity on the cluster:**
@@ -223,18 +227,23 @@ pipelines.
 ## Architecture
 
 ```
-Dockerfile              # Multi-stage Docker build (→ Singularity SIF)
-.dockerignore           # Docker build exclusions
+Dockerfile                          # Multi-stage Docker build (→ Singularity SIF)
+.dockerignore                       # Docker build exclusions
+.github/workflows/
+├── server_test.yml                 # CI: run integration tests on push/PR
+└── docker_publish.yml              # CI: build & publish Docker image to GHCR
 server/
-├── server.js           # Express server & REST API
-├── package.json        # Dependencies
+├── server.js                       # Express server & REST API
+├── package.json                    # Dependencies
 ├── public/
-│   ├── index.html      # Web UI
-│   ├── app.js          # Client-side application logic
-│   └── styles.css      # Styling
+│   ├── index.html                  # Web UI
+│   ├── app.js                      # Client-side application logic
+│   └── styles.css                  # Styling
+├── test/
+│   └── server.test.js              # Integration tests (Mocha/Chai/Supertest)
 ├── example_data/
-│   └── variants.tsv    # Example variant file
-└── README.md           # This file
+│   └── variants.tsv                # Example variant file
+└── README.md                       # This file
 ```
 
 The server loads variant data from a TSV file into memory, serves a REST API

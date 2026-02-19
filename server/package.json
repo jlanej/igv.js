@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js --port 3000"
+    "dev": "node server.js --port 3000",
+    "test": "mocha --exit test/"
   },
   "dependencies": {
     "express": "^4.21.0"
@@ -14,5 +15,10 @@
     "node": ">=16.0.0"
   },
   "private": true,
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "chai": "^6.2.2",
+    "mocha": "^11.7.5",
+    "supertest": "^7.2.2"
+  }
 }

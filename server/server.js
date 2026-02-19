@@ -336,14 +336,18 @@ app.get('/api/export', (req, res) => {
 })
 
 // ---------------------------------------------------------------------------
-// Start server
+// Start server (only when run directly, not when required for testing)
 // ---------------------------------------------------------------------------
 loadVariants()
 
-app.listen(PORT, HOST, () => {
-    console.log(`\n  IGV Variant Review Server`)
-    console.log(`  URL:        http://${HOST}:${PORT}`)
-    console.log(`  Variants:   ${variants.length} loaded`)
-    console.log(`  Genome:     ${GENOME}`)
-    console.log(`  Data dir:   ${DATA_DIR}\n`)
-})
+if (require.main === module) {
+    app.listen(PORT, HOST, () => {
+        console.log(`\n  IGV Variant Review Server`)
+        console.log(`  URL:        http://${HOST}:${PORT}`)
+        console.log(`  Variants:   ${variants.length} loaded`)
+        console.log(`  Genome:     ${GENOME}`)
+        console.log(`  Data dir:   ${DATA_DIR}\n`)
+    })
+}
+
+module.exports = app
