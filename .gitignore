@@ -13,3 +13,6 @@ igv.js.iml
 /css/igv.css
 /css/igv.css.map
 /remove-license.cjs
+/server/node_modules
+/server/*.curation.json
+/server/example_data/*.curation.json

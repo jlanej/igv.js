@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.github
+.idea
+*.iml
+test
+dev
+deploy
+npm-debug.log
+server/node_modules
+server/*.curation.json
+server/example_data/*.curation.json

@@ -1,0 +1,11 @@
+chrom	pos	ref	alt	gene	impact	frequency	inheritance	quality	child_gt	mother_gt	father_gt	child_file	mother_file	father_file
+chr1	12345	A	G	GENE1	HIGH	0.0001	de_novo	35	0/1	0/0	0/0	child.cram	mother.cram	father.cram
+chr1	54321	C	T	GENE1	MODERATE	0.001	de_novo	42	0/1	0/0	0/0	child.cram	mother.cram	father.cram
+chr2	98765	G	A	GENE2	HIGH	0.0	de_novo	50	0/1	0/0	0/0	child.cram	mother.cram	father.cram
+chr3	11111	T	C	GENE3	LOW	0.05	inherited	28	0/1	0/1	0/0	child.cram	mother.cram	father.cram
+chr5	22222	A	T	GENE2	HIGH	0.0002	de_novo	38	1/1	0/0	0/0	child.cram	mother.cram	father.cram
+chr7	33333	G	C	GENE4	MODERATE	0.01	de_novo	45	0/1	0/0	0/0	child.cram	mother.cram	father.cram
+chr10	44444	C	A	GENE5	HIGH	0.0	de_novo	55	0/1	0/0	0/0	child.cram	mother.cram	father.cram
+chr12	55555	T	G	GENE3	MODERATE	0.003	inherited	32	0/1	0/0	0/1	child.cram	mother.cram	father.cram
+chr15	66666	A	C	GENE6	HIGH	0.0001	de_novo	48	0/1	0/0	0/0	child.cram	mother.cram	father.cram
+chr20	77777	G	T	GENE4	LOW	0.02	de_novo	30	0/1	0/0	0/0	child.cram	mother.cram	father.cram
