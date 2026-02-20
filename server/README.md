@@ -114,6 +114,7 @@ naming (`.bam.bai`, `.cram.crai`), the index columns can be omitted.
 | `--port`           | `3000`                             | HTTP port                      |
 | `--curation-file`  | `<variants>.curation.json`         | Curation persistence file      |
 | `--host`           | `127.0.0.1`                        | Bind address (use `0.0.0.0` in containers) |
+| `--log-level`      | `info`                             | Log verbosity: `debug`, `info`, `warn`, `error` |
 
 ## HPC Deployment
 
@@ -255,6 +256,7 @@ Dockerfile                          # Multi-stage Docker build (→ Singularity 
 └── docker_publish.yml              # CI: build & publish Docker image to GHCR
 server/
 ├── server.js                       # Express server & REST API
+├── logger.js                       # Leveled logger with timestamps
 ├── package.json                    # Dependencies
 ├── public/
 │   ├── index.html                  # Web UI
