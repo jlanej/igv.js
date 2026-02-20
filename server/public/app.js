@@ -274,14 +274,16 @@
         const flank = 100
         const locus = `${variant.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
 
+        // Build tracks from variant's file references
+        const tracks = buildTracks(variant)
+
         if (igvBrowser) {
-            // Navigate existing browser
+            // Remove existing tracks and load new ones for the selected variant
+            igvBrowser.removeAllTracks()
+            await igvBrowser.loadTrackList(tracks)
             await igvBrowser.search(locus)
             return
         }
-
-        // Build tracks from variant's file references
-        const tracks = buildTracks(variant)
 
         const igvDiv = document.getElementById('igv-div')
         igvDiv.innerHTML = ''
