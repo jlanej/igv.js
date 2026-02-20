@@ -1,5 +1,7 @@
 FROM node:18-alpine AS build
 
+RUN apk add --no-cache git
+
 WORKDIR /app
 
 # Copy and build igv.js
@@ -16,7 +18,7 @@ WORKDIR /app/server
 
 # Copy server package and install deps
 COPY server/package.json ./
-RUN npm install --production
+RUN npm install --omit=dev
 
 # Copy server source
 COPY server/server.js ./
