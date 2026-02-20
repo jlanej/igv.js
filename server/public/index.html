@@ -28,6 +28,10 @@
                 <button id="btn-apply-filters" class="btn btn-primary">Apply Filters</button>
                 <button id="btn-clear-filters" class="btn">Clear All</button>
             </div>
+            <div class="filter-actions">
+                <button id="btn-save-filters" class="btn btn-sm">💾 Save Filters</button>
+                <button id="btn-load-filters" class="btn btn-sm">📂 Load Filters</button>
+            </div>
             <hr>
             <h2>Quick Curation</h2>
             <p class="hint">Apply to all selected variants:</p>
@@ -94,6 +98,9 @@
                 </div>
             </div>
 
+            <!-- Resize handle for variant table -->
+            <div id="table-resize-handle" title="Drag to resize table"></div>
+
             <!-- IGV viewer -->
             <div id="igv-section">
                 <div id="igv-header">
@@ -116,8 +123,8 @@
     <button id="shortcuts-toggle" title="Keyboard shortcuts (?)">?</button>
     <div id="shortcuts-panel">
         <h3>Keyboard Shortcuts</h3>
-        <div class="shortcut-row"><span>Next variant</span> <span><kbd>j</kbd> or <kbd>↓</kbd></span></div>
-        <div class="shortcut-row"><span>Previous variant</span> <span><kbd>k</kbd> or <kbd>↑</kbd></span></div>
+        <div class="shortcut-row"><span>Next uncurated variant</span> <span><kbd>j</kbd> or <kbd>↓</kbd></span></div>
+        <div class="shortcut-row"><span>Prev uncurated variant</span> <span><kbd>k</kbd> or <kbd>↑</kbd></span></div>
         <div class="shortcut-row"><span>Mark as Pass</span> <kbd>p</kbd></div>
         <div class="shortcut-row"><span>Mark as Fail</span> <kbd>f</kbd></div>
         <div class="shortcut-row"><span>Mark as Uncertain</span> <kbd>u</kbd></div>

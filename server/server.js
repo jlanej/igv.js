@@ -30,6 +30,7 @@ const PORT = parseInt(getArg('port', '3000'), 10)
 const VARIANTS_FILE = getArg('variants', path.join(__dirname, 'example_data', 'variants.tsv'))
 const DATA_DIR = getArg('data-dir', getArg('data_dir', path.join(__dirname, 'example_data')))
 const CURATION_FILE = getArg('curation-file', VARIANTS_FILE.replace(/\.tsv$/, '.curation.json'))
+const FILTERS_FILE = getArg('filters-file', VARIANTS_FILE.replace(/\.tsv$/, '.filters.json'))
 const GENOME = getArg('genome', 'hg38')
 const HOST = getArg('host', '127.0.0.1')
 
@@ -344,6 +345,34 @@ app.get('/api/filters', (_req, res) => {
     // Add curation status
     filters['curation_status'] = ['pending', 'pass', 'fail', 'uncertain']
     res.json({categorical: filters, numeric: numericColumns})
+})
+
+// Saved filter configuration
+app.get('/api/filter-config', (_req, res) => {
+    if (fs.existsSync(FILTERS_FILE)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(FILTERS_FILE, 'utf-8'))
+            return res.json(data)
+        } catch (e) {
+            log.warn('Could not parse filters file:', e.message)
+        }
+    }
+    res.json({})
+})
+
+app.put('/api/filter-config', (req, res) => {
+    const filters = req.body
+    if (!filters || typeof filters !== 'object') {
+        return res.status(400).json({error: 'Request body must be a JSON object'})
+    }
+    try {
+        fs.writeFileSync(FILTERS_FILE, JSON.stringify(filters, null, 2), 'utf-8')
+        log.info('Saved filter configuration')
+        res.json({ok: true})
+    } catch (e) {
+        log.error('Failed to save filters:', e.message)
+        res.status(500).json({error: 'Failed to save filter configuration'})
+    }
 })
 
 // Gene-level summary (post-filtering)

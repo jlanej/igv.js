@@ -252,6 +252,19 @@ tr.active-variant { background: #b8daff; }
 
 #igv-div { min-height: 200px; }
 
+/* Resize handle between table and IGV */
+#table-resize-handle {
+    height: 6px;
+    background: var(--border);
+    cursor: ns-resize;
+    border-radius: 3px;
+    margin: 4px 0;
+    transition: background 0.15s;
+}
+#table-resize-handle:hover, #table-resize-handle.dragging {
+    background: var(--primary);
+}
+
 /* Summary table */
 #summary-info { padding: 8px 0; font-size: 13px; color: var(--text-muted); }
 

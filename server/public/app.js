@@ -48,6 +48,9 @@
             setupKeyboardShortcuts()
             setupShortcutsPanel()
 
+            setupTableResize()
+            await loadSavedFilters()
+
             await loadVariants()
         } catch (err) {
             console.error('Init failed:', err)
@@ -578,6 +581,18 @@
     function selectNextVariant() {
         if (variants.length === 0) return
         const curIdx = variants.findIndex(v => v.id === activeVariantId)
+        const startIdx = curIdx === -1 ? 0 : curIdx + 1
+
+        // Try to find next uncurated (pending) variant
+        for (let i = 0; i < variants.length; i++) {
+            const idx = (startIdx + i) % variants.length
+            if (!variants[idx].curation_status || variants[idx].curation_status === 'pending') {
+                selectVariant(variants[idx].id)
+                return
+            }
+        }
+
+        // All curated – fall back to normal next
         const nextIdx = curIdx === -1 ? 0 : (curIdx < variants.length - 1 ? curIdx + 1 : 0)
         selectVariant(variants[nextIdx].id)
     }
@@ -585,6 +600,18 @@
     function selectPrevVariant() {
         if (variants.length === 0) return
         const curIdx = variants.findIndex(v => v.id === activeVariantId)
+        const startIdx = curIdx <= 0 ? variants.length - 1 : curIdx - 1
+
+        // Try to find previous uncurated (pending) variant
+        for (let i = 0; i < variants.length; i++) {
+            const idx = (startIdx - i + variants.length) % variants.length
+            if (!variants[idx].curation_status || variants[idx].curation_status === 'pending') {
+                selectVariant(variants[idx].id)
+                return
+            }
+        }
+
+        // All curated – fall back to normal prev
         const prevIdx = curIdx <= 0 ? variants.length - 1 : curIdx - 1
         selectVariant(variants[prevIdx].id)
     }
@@ -662,6 +689,14 @@
         })
 
         document.getElementById('btn-clear-filters').addEventListener('click', clearFilters)
+
+        document.getElementById('btn-save-filters').addEventListener('click', saveFilterConfig)
+        document.getElementById('btn-load-filters').addEventListener('click', async () => {
+            await loadSavedFilters()
+            currentPage = 1
+            await loadVariants()
+            showNotification('Filters loaded', 'success')
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -828,6 +863,92 @@
         el.textContent = msg
         el.style.opacity = '1'
         setTimeout(() => { el.style.opacity = '0' }, 2500)
+    }
+
+    // -----------------------------------------------------------------------
+    // Resizable variant table
+    // -----------------------------------------------------------------------
+    function setupTableResize() {
+        const handle = document.getElementById('table-resize-handle')
+        const tableWrap = document.getElementById('variant-table-wrap')
+        if (!handle || !tableWrap) return
+
+        // Restore persisted height
+        const saved = localStorage.getItem('variantTableHeight')
+        if (saved) tableWrap.style.maxHeight = saved
+
+        let startY, startH
+
+        handle.addEventListener('mousedown', (e) => {
+            e.preventDefault()
+            startY = e.clientY
+            startH = tableWrap.offsetHeight
+            handle.classList.add('dragging')
+            document.addEventListener('mousemove', onDrag)
+            document.addEventListener('mouseup', onRelease)
+        })
+
+        function onDrag(e) {
+            const delta = e.clientY - startY
+            const newH = Math.max(100, startH + delta)
+            tableWrap.style.maxHeight = newH + 'px'
+        }
+
+        function onRelease() {
+            handle.classList.remove('dragging')
+            document.removeEventListener('mousemove', onDrag)
+            document.removeEventListener('mouseup', onRelease)
+            localStorage.setItem('variantTableHeight', tableWrap.style.maxHeight)
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Filter config persistence
+    // -----------------------------------------------------------------------
+    async function saveFilterConfig() {
+        const filters = getActiveFilters()
+        try {
+            const res = await fetch('/api/filter-config', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(filters)
+            })
+            if (res.ok) {
+                showNotification('Filters saved', 'success')
+            } else {
+                showNotification('Failed to save filters', 'warn')
+            }
+        } catch (err) {
+            showNotification('Failed to save filters', 'warn')
+        }
+    }
+
+    async function loadSavedFilters() {
+        try {
+            const res = await fetch('/api/filter-config')
+            if (!res.ok) return
+            const filters = await res.json()
+            if (!filters || Object.keys(filters).length === 0) return
+            applyFiltersToUI(filters)
+        } catch (_) { /* no saved filters */ }
+    }
+
+    function applyFiltersToUI(filters) {
+        for (const [key, val] of Object.entries(filters)) {
+            // Check for checkbox group first
+            const group = document.querySelector(`[data-checkbox-filter="${key}"]`)
+            if (group) {
+                const values = val.split(',').map(s => s.trim())
+                group.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                    cb.checked = values.includes(cb.value)
+                })
+                continue
+            }
+
+            // Drop-down or text/number input
+            const el = document.querySelector(`[data-filter="${key}"]`)
+            if (el) el.value = val
+        }
     }
 
     // -----------------------------------------------------------------------
