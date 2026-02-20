@@ -197,7 +197,7 @@
         tbody.innerHTML = variants.map(v => {
             const isSelected = selectedIds.has(v.id)
             const isActive = v.id === activeVariantId
-            const curationClass = `curation-${v.curation_status || 'pending'}`
+            const curationClass = ['pass', 'fail', 'uncertain', 'pending'].includes(v.curation_status) ? `curation-${v.curation_status}` : 'curation-pending'
             const rowClass = [curationClass, isActive ? 'active-variant' : isSelected ? 'selected' : ''].filter(Boolean).join(' ')
             return `<tr class="${rowClass}" data-id="${v.id}">
                 <td><input type="checkbox" class="row-check" ${isSelected ? 'checked' : ''}></td>
@@ -318,16 +318,20 @@
         if (!statusDiv) return
         statusDiv.innerHTML = ''
 
-        for (const t of tracks) {
+        // Create all status spans up front
+        const entries = tracks.map(t => {
             const label = t.name || t.url
             const span = document.createElement('span')
             span.className = 'track-status'
             span.textContent = `${label}: checking…`
             statusDiv.appendChild(span)
+            return {label, span, url: t.url}
+        })
 
+        // Check all tracks concurrently
+        await Promise.all(entries.map(async ({label, span, url}) => {
             try {
-                // Use a HEAD request to verify the file is accessible
-                const res = await fetch(t.url, {method: 'HEAD'})
+                const res = await fetch(url, {method: 'HEAD'})
                 if (res.ok) {
                     span.className = 'track-status track-status-ok'
                     span.textContent = `${label}: ✓ file accessible`
@@ -339,7 +343,7 @@
                 span.className = 'track-status track-status-error'
                 span.textContent = `${label}: ✗ failed to reach file`
             }
-        }
+        }))
 
         if (tracks.length === 0) {
             const span = document.createElement('span')
@@ -574,14 +578,14 @@
     function selectNextVariant() {
         if (variants.length === 0) return
         const curIdx = variants.findIndex(v => v.id === activeVariantId)
-        const nextIdx = curIdx < variants.length - 1 ? curIdx + 1 : 0
+        const nextIdx = curIdx === -1 ? 0 : (curIdx < variants.length - 1 ? curIdx + 1 : 0)
         selectVariant(variants[nextIdx].id)
     }
 
     function selectPrevVariant() {
         if (variants.length === 0) return
         const curIdx = variants.findIndex(v => v.id === activeVariantId)
-        const prevIdx = curIdx > 0 ? curIdx - 1 : variants.length - 1
+        const prevIdx = curIdx <= 0 ? variants.length - 1 : curIdx - 1
         selectVariant(variants[prevIdx].id)
     }
 
