@@ -57,6 +57,19 @@ describe('API /api/variants', function () {
         res.body.data.forEach(v => expect(v.impact).to.equal('HIGH'))
     })
 
+    it('filters by multiple impact values (comma-separated)', async function () {
+        const res = await request(app).get('/api/variants?impact=HIGH,MODERATE').expect(200)
+        expect(res.body.total).to.equal(8)
+        res.body.data.forEach(v => expect(['HIGH', 'MODERATE']).to.include(v.impact))
+    })
+
+    it('uses exact match for categorical filters', async function () {
+        // Filtering by inheritance=de_novo should NOT match "inherited" via includes
+        const res = await request(app).get('/api/variants?inheritance=de_novo').expect(200)
+        res.body.data.forEach(v => expect(v.inheritance).to.equal('de_novo'))
+        expect(res.body.total).to.equal(8) // 8 de_novo, not 10
+    })
+
     it('filters by numeric range (frequency_max)', async function () {
         const res = await request(app).get('/api/variants?frequency_max=0.001').expect(200)
         res.body.data.forEach(v => {
@@ -191,11 +204,22 @@ describe('API /api/curate/batch', function () {
 describe('API /api/filters', function () {
     it('returns filter options for columns', async function () {
         const res = await request(app).get('/api/filters').expect(200)
-        expect(res.body).to.have.property('curation_status')
-        expect(res.body.curation_status).to.include('pass')
-        expect(res.body.curation_status).to.include('fail')
-        expect(res.body).to.have.property('gene')
-        expect(res.body).to.have.property('impact')
+        expect(res.body).to.have.property('categorical').that.is.an('object')
+        expect(res.body).to.have.property('numeric').that.is.an('array')
+        expect(res.body.categorical).to.have.property('curation_status')
+        expect(res.body.categorical.curation_status).to.include('pass')
+        expect(res.body.categorical.curation_status).to.include('fail')
+        expect(res.body.categorical).to.have.property('gene')
+        expect(res.body.categorical).to.have.property('impact')
+    })
+
+    it('classifies numeric columns separately', async function () {
+        const res = await request(app).get('/api/filters').expect(200)
+        expect(res.body.numeric).to.include('frequency')
+        expect(res.body.numeric).to.include('quality')
+        // Numeric columns should not appear in categorical
+        expect(res.body.categorical).to.not.have.property('frequency')
+        expect(res.body.categorical).to.not.have.property('quality')
     })
 })
 

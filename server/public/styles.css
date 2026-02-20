@@ -75,6 +75,24 @@ header h1 { font-size: 18px; font-weight: 600; }
 }
 .filter-group .range-inputs { display: flex; gap: 6px; }
 .filter-group .range-inputs input { width: 50%; }
+.filter-group .checkbox-group {
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    padding: 4px 6px;
+}
+.filter-group .checkbox-option {
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    font-weight: normal;
+    padding: 2px 0;
+    cursor: pointer;
+    text-transform: none;
+}
+.filter-group .checkbox-option input[type="checkbox"] { margin-right: 6px; }
 
 .filter-actions { display: flex; gap: 8px; margin-top: 12px; }
 
