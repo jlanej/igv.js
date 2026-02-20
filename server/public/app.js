@@ -45,6 +45,8 @@
             setupCurationButtons()
             setupExport()
             setupPagination()
+            setupKeyboardShortcuts()
+            setupShortcutsPanel()
 
             await loadVariants()
         } catch (err) {
@@ -195,7 +197,8 @@
         tbody.innerHTML = variants.map(v => {
             const isSelected = selectedIds.has(v.id)
             const isActive = v.id === activeVariantId
-            const rowClass = isActive ? 'active-variant' : isSelected ? 'selected' : ''
+            const curationClass = ['pass', 'fail', 'uncertain', 'pending'].includes(v.curation_status) ? `curation-${v.curation_status}` : 'curation-pending'
+            const rowClass = [curationClass, isActive ? 'active-variant' : isSelected ? 'selected' : ''].filter(Boolean).join(' ')
             return `<tr class="${rowClass}" data-id="${v.id}">
                 <td><input type="checkbox" class="row-check" ${isSelected ? 'checked' : ''}></td>
                 ${displayCols.map(col => `<td title="${escapeHtml(String(v[col] || ''))}">${escapeHtml(String(v[col] || ''))}</td>`).join('')}
@@ -282,6 +285,7 @@
             igvBrowser.removeAllTracks()
             await igvBrowser.loadTrackList(tracks)
             await igvBrowser.search(locus)
+            validateTrackLoading(tracks, variant)
             return
         }
 
@@ -300,6 +304,53 @@
         }
 
         igvBrowser = await igv.createBrowser(igvDiv, igvOptions)
+        validateTrackLoading(tracks, variant)
+    }
+
+    /**
+     * Validate that alignment tracks loaded successfully by checking whether
+     * each expected track URL is reachable.  Displays per-track status below
+     * the IGV viewer so the user can tell at a glance whether an empty
+     * pileup is caused by a missing/inaccessible file vs. genuinely no reads.
+     */
+    async function validateTrackLoading(tracks, variant) {
+        const statusDiv = document.getElementById('track-load-status')
+        if (!statusDiv) return
+        statusDiv.innerHTML = ''
+
+        // Create all status spans up front
+        const entries = tracks.map(t => {
+            const label = t.name || t.url
+            const span = document.createElement('span')
+            span.className = 'track-status'
+            span.textContent = `${label}: checking…`
+            statusDiv.appendChild(span)
+            return {label, span, url: t.url}
+        })
+
+        // Check all tracks concurrently
+        await Promise.all(entries.map(async ({label, span, url}) => {
+            try {
+                const res = await fetch(url, {method: 'HEAD'})
+                if (res.ok) {
+                    span.className = 'track-status track-status-ok'
+                    span.textContent = `${label}: ✓ file accessible`
+                } else {
+                    span.className = 'track-status track-status-error'
+                    span.textContent = `${label}: ✗ HTTP ${res.status} – file not accessible`
+                }
+            } catch (err) {
+                span.className = 'track-status track-status-error'
+                span.textContent = `${label}: ✗ failed to reach file`
+            }
+        }))
+
+        if (tracks.length === 0) {
+            const span = document.createElement('span')
+            span.className = 'track-status track-status-empty'
+            span.textContent = '⚠ No alignment tracks configured for this variant'
+            statusDiv.appendChild(span)
+        }
     }
 
     function buildTracks(variant) {
@@ -519,6 +570,81 @@
         document.querySelectorAll('#filter-panel .curation-buttons [data-status]').forEach(btn => {
             btn.addEventListener('click', () => batchCurate(btn.dataset.status))
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // Keyboard shortcuts
+    // -----------------------------------------------------------------------
+    function selectNextVariant() {
+        if (variants.length === 0) return
+        const curIdx = variants.findIndex(v => v.id === activeVariantId)
+        const nextIdx = curIdx === -1 ? 0 : (curIdx < variants.length - 1 ? curIdx + 1 : 0)
+        selectVariant(variants[nextIdx].id)
+    }
+
+    function selectPrevVariant() {
+        if (variants.length === 0) return
+        const curIdx = variants.findIndex(v => v.id === activeVariantId)
+        const prevIdx = curIdx <= 0 ? variants.length - 1 : curIdx - 1
+        selectVariant(variants[prevIdx].id)
+    }
+
+    async function curateAndAdvance(status) {
+        if (activeVariantId == null) return
+        await curateVariant(activeVariantId, status)
+        selectNextVariant()
+    }
+
+    function setupKeyboardShortcuts() {
+        document.addEventListener('keydown', (e) => {
+            // Ignore shortcuts when typing in inputs or textareas
+            const tag = (e.target.tagName || '').toLowerCase()
+            if (tag === 'input' || tag === 'textarea' || tag === 'select') return
+
+            switch (e.key) {
+                case 'j':
+                case 'ArrowDown':
+                    e.preventDefault()
+                    selectNextVariant()
+                    break
+                case 'k':
+                case 'ArrowUp':
+                    e.preventDefault()
+                    selectPrevVariant()
+                    break
+                case 'p':
+                    if (activeVariantId != null) curateVariant(activeVariantId, 'pass')
+                    break
+                case 'f':
+                    if (activeVariantId != null) curateVariant(activeVariantId, 'fail')
+                    break
+                case 'u':
+                    if (activeVariantId != null) curateVariant(activeVariantId, 'uncertain')
+                    break
+                case 'P':
+                    curateAndAdvance('pass')
+                    break
+                case 'F':
+                    curateAndAdvance('fail')
+                    break
+                case 'U':
+                    curateAndAdvance('uncertain')
+                    break
+                case '?':
+                    toggleShortcutsPanel()
+                    break
+            }
+        })
+    }
+
+    function setupShortcutsPanel() {
+        const toggle = document.getElementById('shortcuts-toggle')
+        if (toggle) toggle.addEventListener('click', toggleShortcutsPanel)
+    }
+
+    function toggleShortcutsPanel() {
+        const panel = document.getElementById('shortcuts-panel')
+        if (panel) panel.classList.toggle('visible')
     }
 
     function setupExport() {
