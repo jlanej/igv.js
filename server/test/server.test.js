@@ -3,6 +3,7 @@ const {expect} = require('chai')
 const request = require('supertest')
 const fs = require('fs')
 const path = require('path')
+const ExcelJS = require('exceljs')
 
 const app = require('../server')
 
@@ -137,8 +138,9 @@ describe('API /api/variants/:id/curate', function () {
             .expect(200)
         expect(fs.existsSync(curationFile)).to.be.true
         const data = JSON.parse(fs.readFileSync(curationFile, 'utf-8'))
-        expect(data).to.have.property('1')
-        expect(data['1'].status).to.equal('fail')
+        // Curation is now persisted using stable key (chrom:pos:ref:alt)
+        expect(data).to.have.property('chr1:54321:C:T')
+        expect(data['chr1:54321:C:T'].status).to.equal('fail')
     })
 
     it('rejects invalid curation status', async function () {
@@ -242,6 +244,144 @@ describe('API /api/export', function () {
             .expect(200)
         const lines = res.text.trim().split('\n')
         expect(lines.length).to.equal(6) // header + 5 HIGH-impact variants
+    })
+})
+
+describe('API /api/export/xlsx', function () {
+    it('returns XLSX with variant data', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2]})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+            .expect('Content-Type', /spreadsheetml/)
+        expect(Buffer.isBuffer(res.body)).to.be.true
+        expect(res.body.length).to.be.greaterThan(0)
+    })
+
+    it('exports all variants when no ids specified', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+            .expect('Content-Type', /spreadsheetml/)
+        expect(res.body.length).to.be.greaterThan(0)
+    })
+
+    it('includes screenshot tabs when screenshots provided', async function () {
+        this.timeout(10000)
+        // Minimal 1x1 red PNG as base64
+        const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0],
+                screenshots: {'0': tinyPng}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+            .expect('Content-Type', /spreadsheetml/)
+        expect(res.body.length).to.be.greaterThan(0)
+    })
+
+    it('returns 400 when no variants match', async function () {
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [9999]})
+            .expect(400)
+        expect(res.body).to.have.property('error')
+    })
+
+    it('produces a valid workbook with correct structure', async function () {
+        this.timeout(10000)
+        const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1],
+                screenshots: {'0': tinyPng}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        // Parse the XLSX back
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        // Should have at least 2 sheets: Variants + 1 screenshot
+        expect(workbook.worksheets.length).to.be.at.least(2)
+        const variantsSheet = workbook.getWorksheet('Variants')
+        expect(variantsSheet).to.exist
+
+        // Header row should include Screenshot, chrom, pos, ref, alt
+        const headerRow = variantsSheet.getRow(1)
+        const headerValues = []
+        headerRow.eachCell(cell => headerValues.push(cell.value))
+        expect(headerValues).to.include('Chrom')
+        expect(headerValues).to.include('Pos')
+        expect(headerValues).to.include('Ref')
+        expect(headerValues).to.include('Alt')
+        expect(headerValues).to.include('Screenshot')
+
+        // Should have 2 data rows (variants 0 and 1)
+        expect(variantsSheet.rowCount).to.equal(3) // header + 2 data rows
+
+        // Screenshot sheet should exist for variant 0
+        const screenshotSheet = workbook.worksheets.find(s => s.name !== 'Variants')
+        expect(screenshotSheet).to.exist
+        // Should have back-link text
+        expect(screenshotSheet.getCell('D1').value).to.have.property('text', '← Back to Variants')
+    })
+})
+
+describe('Stable curation keys', function () {
+    after(function () {
+        if (fs.existsSync(curationFile)) fs.unlinkSync(curationFile)
+    })
+
+    it('saves curation with stable chrom:pos:ref:alt key', async function () {
+        await request(app)
+            .put('/api/variants/0/curate')
+            .send({status: 'pass'})
+            .expect(200)
+        const data = JSON.parse(fs.readFileSync(curationFile, 'utf-8'))
+        // Variant 0: chr1:12345:A:G
+        expect(data).to.have.property('chr1:12345:A:G')
+        expect(data['chr1:12345:A:G'].status).to.equal('pass')
+        // Should NOT have numeric key
+        expect(data).to.not.have.property('0')
+    })
+
+    it('includes curation note in stable key entry', async function () {
+        await request(app)
+            .put('/api/variants/0/curate')
+            .send({note: 'Test note'})
+            .expect(200)
+        const data = JSON.parse(fs.readFileSync(curationFile, 'utf-8'))
+        expect(data['chr1:12345:A:G'].note).to.equal('Test note')
     })
 })
 

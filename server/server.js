@@ -14,6 +14,7 @@
 const express = require('express')
 const fs = require('fs')
 const path = require('path')
+const ExcelJS = require('exceljs')
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -36,6 +37,18 @@ const HOST = getArg('host', '127.0.0.1')
 // ---------------------------------------------------------------------------
 let variants = []
 let headerColumns = []
+
+/**
+ * Generate a stable key for a variant based on genomic coordinates and
+ * optional sample/trio identifier.  This key survives row reordering and
+ * addition/removal of variants in the TSV.
+ */
+function variantKey(v) {
+    let key = `${v.chrom}:${v.pos}:${v.ref}:${v.alt}`
+    if (v.trio_id) key += `:${v.trio_id}`
+    else if (v.sample_id) key += `:${v.sample_id}`
+    return key
+}
 
 function loadVariants() {
     if (!fs.existsSync(VARIANTS_FILE)) {
@@ -73,6 +86,8 @@ function loadVariants() {
             }
             obj[h] = val
         })
+        // Assign a stable key for curation persistence
+        obj._key = variantKey(obj)
         return obj
     })
 
@@ -80,13 +95,36 @@ function loadVariants() {
     if (fs.existsSync(CURATION_FILE)) {
         try {
             const curationData = JSON.parse(fs.readFileSync(CURATION_FILE, 'utf-8'))
+
+            // Build a lookup by stable key for fast matching
+            const keyMap = new Map(variants.map(v => [v._key, v]))
+
+            let migratedOldFormat = false
             for (const [idStr, curation] of Object.entries(curationData)) {
-                const id = parseInt(idStr, 10)
-                const v = variants.find(x => x.id === id)
-                if (v) {
-                    v.curation_status = curation.status || 'pending'
-                    v.curation_note = curation.note || ''
+                // Try stable key first
+                const byKey = keyMap.get(idStr)
+                if (byKey) {
+                    byKey.curation_status = curation.status || 'pending'
+                    byKey.curation_note = curation.note || ''
+                } else {
+                    // Fall back to legacy numeric-index format
+                    const id = parseInt(idStr, 10)
+                    if (!isNaN(id)) {
+                        const v = variants.find(x => x.id === id)
+                        if (v) {
+                            v.curation_status = curation.status || 'pending'
+                            v.curation_note = curation.note || ''
+                            migratedOldFormat = true
+                        }
+                    }
                 }
+            }
+
+            // Re-save with stable keys if we migrated from old format
+            if (migratedOldFormat) {
+                console.log('Migrating curation file to stable key format...')
+                // defer save until defaults are set
+                process.nextTick(() => saveCuration())
             }
         } catch (e) {
             console.warn('Warning: could not parse curation file:', e.message)
@@ -106,7 +144,7 @@ function saveCuration() {
     const data = {}
     variants.forEach(v => {
         if (v.curation_status !== 'pending' || v.curation_note) {
-            data[v.id] = {status: v.curation_status, note: v.curation_note}
+            data[v._key] = {status: v.curation_status, note: v.curation_note}
         }
     })
     fs.writeFileSync(CURATION_FILE, JSON.stringify(data, null, 2), 'utf-8')
@@ -333,6 +371,222 @@ app.get('/api/export', (req, res) => {
     res.setHeader('Content-Type', 'text/tab-separated-values')
     res.setHeader('Content-Disposition', 'attachment; filename="variants_export.tsv"')
     res.send(tsv)
+})
+
+// -------------------------------------------------------------------------
+// XLSX Export – publication-quality workbook with variant data and optional
+// IGV screenshots on per-variant tabs, linked from the main sheet.
+// -------------------------------------------------------------------------
+app.use('/api/export/xlsx', express.json({limit: '200mb'}))
+
+app.post('/api/export/xlsx', async (req, res) => {
+    try {
+        const {variantIds, screenshots} = req.body || {}
+
+        // Determine which variants to include
+        let filtered
+        if (Array.isArray(variantIds) && variantIds.length > 0) {
+            filtered = variants.filter(v => variantIds.includes(v.id))
+        } else {
+            filtered = applyFilters(req.query)
+        }
+
+        if (filtered.length === 0) {
+            return res.status(400).json({error: 'No variants to export'})
+        }
+
+        const workbook = new ExcelJS.Workbook()
+        workbook.creator = 'IGV Variant Review'
+        workbook.created = new Date()
+
+        // --- Styles ---------------------------------------------------------
+        const headerFill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FF2C3E50'}}
+        const headerFont = {bold: true, color: {argb: 'FFFFFFFF'}, size: 11}
+        const borderThin = {
+            top: {style: 'thin', color: {argb: 'FFD5D8DC'}},
+            bottom: {style: 'thin', color: {argb: 'FFD5D8DC'}},
+            left: {style: 'thin', color: {argb: 'FFD5D8DC'}},
+            right: {style: 'thin', color: {argb: 'FFD5D8DC'}}
+        }
+        const statusColors = {
+            pass: 'FF27AE60',
+            fail: 'FFE74C3C',
+            uncertain: 'FFF39C12',
+            pending: 'FF95A5A6'
+        }
+
+        // --- Main "Variants" worksheet --------------------------------------
+        const exportCols = [...headerColumns, 'curation_status', 'curation_note']
+        const uniqueCols = [...new Set(exportCols)]
+
+        // If screenshots are present, prepend a "Screenshot" link column
+        const hasScreenshots = screenshots && typeof screenshots === 'object' && Object.keys(screenshots).length > 0
+        const mainCols = hasScreenshots ? ['Screenshot', ...uniqueCols] : [...uniqueCols]
+
+        const ws = workbook.addWorksheet('Variants', {
+            views: [{state: 'frozen', ySplit: 1}]
+        })
+
+        // Column definitions
+        ws.columns = mainCols.map(col => ({
+            header: col.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+            key: col,
+            width: col === 'curation_note' ? 30 : col === 'Screenshot' ? 14 : Math.max(12, col.length + 4)
+        }))
+
+        // Style the header row
+        const headerRow = ws.getRow(1)
+        headerRow.eachCell(cell => {
+            cell.fill = headerFill
+            cell.font = headerFont
+            cell.border = borderThin
+            cell.alignment = {vertical: 'middle', horizontal: 'center'}
+        })
+        headerRow.height = 24
+
+        // Build safe sheet-name lookup for screenshot sheets
+        const sheetNames = new Map()
+
+        // Data rows
+        filtered.forEach((v, rowIdx) => {
+            const row = {}
+            for (const col of uniqueCols) {
+                row[col] = v[col] ?? ''
+            }
+
+            // Create screenshot sheet name (max 31 chars for Excel)
+            if (hasScreenshots && screenshots[String(v.id)]) {
+                const label = `${v.chrom}_${v.pos}`.replace(/[:\\/?*[\]]/g, '_').substring(0, 27)
+                let sheetName = label
+                // Ensure unique name
+                let suffix = 2
+                while (sheetNames.has(sheetName)) {
+                    sheetName = `${label.substring(0, 27 - String(suffix).length - 1)}_${suffix}`
+                    suffix++
+                }
+                sheetNames.set(sheetName, v.id)
+                row['Screenshot'] = sheetName  // placeholder, will add hyperlink below
+            } else if (hasScreenshots) {
+                row['Screenshot'] = ''
+            }
+
+            const dataRow = ws.addRow(row)
+            const excelRowNum = rowIdx + 2  // 1-based, row 1 is header
+
+            // Style data cells
+            dataRow.eachCell((cell, colNumber) => {
+                cell.border = borderThin
+                cell.alignment = {vertical: 'middle', wrapText: mainCols[colNumber - 1] === 'curation_note'}
+
+                // Alternate row shading
+                if (rowIdx % 2 === 1) {
+                    cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
+                }
+            })
+
+            // Color the curation status cell
+            const statusColIdx = mainCols.indexOf('curation_status') + 1
+            if (statusColIdx > 0) {
+                const statusCell = dataRow.getCell(statusColIdx)
+                const color = statusColors[v.curation_status] || statusColors.pending
+                statusCell.font = {bold: true, color: {argb: color}}
+            }
+
+            // Add hyperlink from Screenshot column to the screenshot sheet
+            if (hasScreenshots && screenshots[String(v.id)] && row['Screenshot']) {
+                const linkCell = dataRow.getCell(1)  // Screenshot is first column
+                linkCell.value = {
+                    text: '📷 View',
+                    hyperlink: `#'${row['Screenshot']}'!A1`
+                }
+                linkCell.font = {color: {argb: 'FF2980B9'}, underline: true}
+            }
+        })
+
+        // Auto-filter on the main sheet
+        if (filtered.length > 0) {
+            ws.autoFilter = {from: 'A1', to: {row: 1, column: mainCols.length}}
+        }
+
+        // --- Screenshot worksheets ------------------------------------------
+        if (hasScreenshots) {
+            for (const [sheetName, vid] of sheetNames) {
+                const v = filtered.find(x => x.id === vid)
+                const imgData = screenshots[String(vid)]
+                if (!v || !imgData) continue
+
+                const sws = workbook.addWorksheet(sheetName)
+
+                // Header row with variant info
+                sws.getCell('A1').value = 'Variant:'
+                sws.getCell('A1').font = {bold: true, size: 12}
+                sws.getCell('B1').value = `${v.chrom}:${v.pos} ${v.ref}→${v.alt}`
+                sws.getCell('B1').font = {size: 12}
+
+                if (v.gene) {
+                    sws.getCell('A2').value = 'Gene:'
+                    sws.getCell('A2').font = {bold: true}
+                    sws.getCell('B2').value = v.gene
+                }
+
+                sws.getCell('A3').value = 'Status:'
+                sws.getCell('A3').font = {bold: true}
+                sws.getCell('B3').value = v.curation_status || 'pending'
+                const sColor = statusColors[v.curation_status] || statusColors.pending
+                sws.getCell('B3').font = {bold: true, color: {argb: sColor}}
+
+                if (v.curation_note) {
+                    sws.getCell('A4').value = 'Note:'
+                    sws.getCell('A4').font = {bold: true}
+                    sws.getCell('B4').value = v.curation_note
+                }
+
+                // Back-link to the Variants sheet
+                sws.getCell('D1').value = {text: '← Back to Variants', hyperlink: '#Variants!A1'}
+                sws.getCell('D1').font = {color: {argb: 'FF2980B9'}, underline: true}
+
+                // Set column widths
+                sws.getColumn(1).width = 12
+                sws.getColumn(2).width = 30
+                sws.getColumn(3).width = 5
+                sws.getColumn(4).width = 22
+
+                // Embed the screenshot image
+                try {
+                    // imgData should be a base64 PNG data URI or raw base64
+                    let base64 = imgData
+                    if (base64.startsWith('data:image/png;base64,')) {
+                        base64 = base64.replace('data:image/png;base64,', '')
+                    } else if (base64.startsWith('data:image/jpeg;base64,')) {
+                        base64 = base64.replace('data:image/jpeg;base64,', '')
+                    }
+
+                    const imageId = workbook.addImage({
+                        base64: base64,
+                        extension: 'png'
+                    })
+
+                    // Place image starting at row 6 to leave room for header info
+                    sws.addImage(imageId, {
+                        tl: {col: 0, row: 5},
+                        ext: {width: 900, height: 400}
+                    })
+                } catch (imgErr) {
+                    sws.getCell('A6').value = '(Screenshot could not be embedded)'
+                    sws.getCell('A6').font = {italic: true, color: {argb: 'FF999999'}}
+                }
+            }
+        }
+
+        // --- Send workbook as download --------------------------------------
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        res.setHeader('Content-Disposition', 'attachment; filename="variants_export.xlsx"')
+        await workbook.xlsx.write(res)
+        res.end()
+    } catch (err) {
+        console.error('XLSX export error:', err)
+        res.status(500).json({error: 'Failed to generate XLSX export'})
+    }
 })
 
 // ---------------------------------------------------------------------------
