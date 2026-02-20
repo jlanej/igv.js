@@ -326,7 +326,8 @@ app.get('/api/filters', (_req, res) => {
         // Detect whether the column is predominantly numeric
         const nonEmpty = variants.filter(v => v[col] !== '' && v[col] !== undefined && v[col] !== null)
         const numericCount = nonEmpty.filter(v => !isNaN(Number(v[col]))).length
-        if (nonEmpty.length > 0 && numericCount / nonEmpty.length > 0.5) {
+        const NUMERIC_COLUMN_THRESHOLD = 0.5
+        if (nonEmpty.length > 0 && numericCount / nonEmpty.length > NUMERIC_COLUMN_THRESHOLD) {
             numericColumns.push(col)
             continue
         }

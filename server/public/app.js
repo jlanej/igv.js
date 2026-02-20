@@ -57,6 +57,7 @@
     // -----------------------------------------------------------------------
     // Filter panel
     // -----------------------------------------------------------------------
+    // Maximum unique values for a category to display as checkboxes instead of a dropdown
     const CHECKBOX_THRESHOLD = 10
 
     function buildFilterPanel() {
