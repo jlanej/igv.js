@@ -57,26 +57,32 @@
     // -----------------------------------------------------------------------
     // Filter panel
     // -----------------------------------------------------------------------
+    const CHECKBOX_THRESHOLD = 10
+
     function buildFilterPanel() {
         const container = document.getElementById('filter-controls')
         container.innerHTML = ''
 
+        const categorical = filterOptions.categorical || {}
+        const numericColumns = filterOptions.numeric || []
+
         // Curation status filter
-        const curationGroup = createFilterGroup('curation_status', filterOptions['curation_status'] || [])
-        container.appendChild(curationGroup)
+        const curationValues = categorical['curation_status'] || []
+        container.appendChild(createCheckboxGroup('curation_status', curationValues))
 
         for (const col of config.columns) {
             if (col === 'curation_status' || col === 'curation_note') continue
 
-            const values = filterOptions[col]
-            if (values) {
-                // Categorical filter (dropdown)
-                container.appendChild(createFilterGroup(col, values))
+            if (numericColumns.includes(col)) {
+                container.appendChild(createRangeFilter(col))
             } else {
-                // Numeric / text range or free-text
-                const isNumeric = ['pos', 'quality'].includes(col) || col.startsWith('freq')
-                if (isNumeric) {
-                    container.appendChild(createRangeFilter(col))
+                const values = categorical[col]
+                if (values) {
+                    if (values.length <= CHECKBOX_THRESHOLD) {
+                        container.appendChild(createCheckboxGroup(col, values))
+                    } else {
+                        container.appendChild(createFilterGroup(col, values))
+                    }
                 }
             }
         }
@@ -90,6 +96,18 @@
                 <option value="">All</option>
                 ${options.map(o => `<option value="${o}">${o}</option>`).join('')}
             </select>`
+        return div
+    }
+
+    function createCheckboxGroup(col, options) {
+        const div = document.createElement('div')
+        div.className = 'filter-group'
+        div.innerHTML = `<label>${formatLabel(col)}</label>
+            <div class="checkbox-group" data-checkbox-filter="${col}">
+                ${options.map(o => `<label class="checkbox-option">
+                    <input type="checkbox" value="${escapeHtml(o)}"> ${escapeHtml(o)}
+                </label>`).join('')}
+            </div>`
         return div
     }
 
@@ -111,11 +129,18 @@
             const val = el.value.trim()
             if (val) params[key] = val
         })
+        document.querySelectorAll('[data-checkbox-filter]').forEach(group => {
+            const key = group.dataset.checkboxFilter
+            const checked = [...group.querySelectorAll('input[type="checkbox"]:checked')]
+                .map(cb => cb.value)
+            if (checked.length > 0) params[key] = checked.join(',')
+        })
         return params
     }
 
     function clearFilters() {
         document.querySelectorAll('[data-filter]').forEach(el => { el.value = '' })
+        document.querySelectorAll('[data-checkbox-filter] input[type="checkbox"]').forEach(cb => { cb.checked = false })
         currentPage = 1
         loadVariants()
     }

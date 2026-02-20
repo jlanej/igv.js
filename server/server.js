@@ -190,11 +190,11 @@ function applyFilters(query) {
                 })
             }
         } else {
-            // Exact or multi-value match (comma-separated)
+            // Exact multi-value match (comma-separated)
             const values = val.split(',').map(s => s.trim().toLowerCase())
             filtered = filtered.filter(v => {
                 const cell = String(v[key] || '').toLowerCase()
-                return values.some(match => cell === match || cell.includes(match))
+                return values.some(match => cell === match)
             })
         }
     }
@@ -318,9 +318,19 @@ app.put('/api/variants/:id/curate', (req, res) => {
 // Filter metadata (unique values per column for filter dropdowns)
 app.get('/api/filters', (_req, res) => {
     const filters = {}
+    const numericColumns = []
     const skipCols = new Set(['id', 'pos', 'ref', 'alt', 'curation_note'])
     for (const col of headerColumns) {
         if (skipCols.has(col)) continue
+
+        // Detect whether the column is predominantly numeric
+        const nonEmpty = variants.filter(v => v[col] !== '' && v[col] !== undefined && v[col] !== null)
+        const numericCount = nonEmpty.filter(v => !isNaN(Number(v[col]))).length
+        if (nonEmpty.length > 0 && numericCount / nonEmpty.length > 0.5) {
+            numericColumns.push(col)
+            continue
+        }
+
         const unique = [...new Set(variants.map(v => String(v[col] || '')))]
             .filter(Boolean)
             .sort()
@@ -330,7 +340,7 @@ app.get('/api/filters', (_req, res) => {
     }
     // Add curation status
     filters['curation_status'] = ['pending', 'pass', 'fail', 'uncertain']
-    res.json(filters)
+    res.json({categorical: filters, numeric: numericColumns})
 })
 
 // Gene-level summary (post-filtering)
