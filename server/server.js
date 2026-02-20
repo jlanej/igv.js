@@ -123,8 +123,6 @@ function loadVariants() {
             // Re-save with stable keys if we migrated from old format
             if (migratedOldFormat) {
                 console.log('Migrating curation file to stable key format...')
-                // defer save until defaults are set
-                process.nextTick(() => saveCuration())
             }
         } catch (e) {
             console.warn('Warning: could not parse curation file:', e.message)
@@ -136,6 +134,15 @@ function loadVariants() {
         if (!v.curation_status) v.curation_status = 'pending'
         if (!v.curation_note) v.curation_note = ''
     })
+
+    // Perform migration save after defaults are applied
+    if (fs.existsSync(CURATION_FILE)) {
+        try {
+            const curationData = JSON.parse(fs.readFileSync(CURATION_FILE, 'utf-8'))
+            const hasLegacyKeys = Object.keys(curationData).some(k => /^\d+$/.test(k))
+            if (hasLegacyKeys) saveCuration()
+        } catch (_) { /* already warned above */ }
+    }
 
     console.log(`Loaded ${variants.length} variants from ${VARIANTS_FILE}`)
 }
@@ -377,7 +384,7 @@ app.get('/api/export', (req, res) => {
 // XLSX Export – publication-quality workbook with variant data and optional
 // IGV screenshots on per-variant tabs, linked from the main sheet.
 // -------------------------------------------------------------------------
-app.use('/api/export/xlsx', express.json({limit: '200mb'}))
+app.use('/api/export/xlsx', express.json({limit: '50mb'}))
 
 app.post('/api/export/xlsx', async (req, res) => {
     try {
@@ -446,6 +453,7 @@ app.post('/api/export/xlsx', async (req, res) => {
 
         // Build safe sheet-name lookup for screenshot sheets
         const sheetNames = new Map()
+        const MAX_SHEET_NAME = 31  // Excel worksheet name limit
 
         // Data rows
         filtered.forEach((v, rowIdx) => {
@@ -456,12 +464,13 @@ app.post('/api/export/xlsx', async (req, res) => {
 
             // Create screenshot sheet name (max 31 chars for Excel)
             if (hasScreenshots && screenshots[String(v.id)]) {
-                const label = `${v.chrom}_${v.pos}`.replace(/[:\\/?*[\]]/g, '_').substring(0, 27)
+                const maxBase = MAX_SHEET_NAME - 4  // room for '_NN' suffix
+                const label = `${v.chrom}_${v.pos}`.replace(/[:\\/?*\[\]]/g, '_').substring(0, maxBase)
                 let sheetName = label
                 // Ensure unique name
                 let suffix = 2
                 while (sheetNames.has(sheetName)) {
-                    sheetName = `${label.substring(0, 27 - String(suffix).length - 1)}_${suffix}`
+                    sheetName = `${label.substring(0, maxBase - String(suffix).length - 1)}_${suffix}`
                     suffix++
                 }
                 sheetNames.set(sheetName, v.id)
@@ -553,17 +562,19 @@ app.post('/api/export/xlsx', async (req, res) => {
 
                 // Embed the screenshot image
                 try {
-                    // imgData should be a base64 PNG data URI or raw base64
+                    // imgData should be a base64 PNG/JPEG data URI or raw base64
                     let base64 = imgData
-                    if (base64.startsWith('data:image/png;base64,')) {
-                        base64 = base64.replace('data:image/png;base64,', '')
-                    } else if (base64.startsWith('data:image/jpeg;base64,')) {
+                    let extension = 'png'
+                    if (base64.startsWith('data:image/jpeg;base64,')) {
                         base64 = base64.replace('data:image/jpeg;base64,', '')
+                        extension = 'jpeg'
+                    } else if (base64.startsWith('data:image/png;base64,')) {
+                        base64 = base64.replace('data:image/png;base64,', '')
                     }
 
                     const imageId = workbook.addImage({
                         base64: base64,
-                        extension: 'png'
+                        extension: extension
                     })
 
                     // Place image starting at row 6 to leave room for header info

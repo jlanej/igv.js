@@ -519,12 +519,18 @@
         const progressText = document.getElementById('xlsx-progress-text')
         const btn = document.getElementById('btn-export-xlsx')
 
-        // Fetch all filtered variants (unpaginated)
+        // Fetch all filtered variants across pages
         const filters = getActiveFilters()
-        const params = new URLSearchParams({...filters, per_page: 200, page: 1})
-        const res = await fetch(`/api/variants?${params}`)
-        const data = await res.json()
-        const allVariants = data.data
+        let allVariants = []
+        let page = 1
+        while (true) {
+            const params = new URLSearchParams({...filters, per_page: 200, page})
+            const res = await fetch(`/api/variants?${params}`)
+            const data = await res.json()
+            allVariants = allVariants.concat(data.data)
+            if (page >= data.pages) break
+            page++
+        }
 
         if (allVariants.length === 0) {
             showNotification('No variants to export', 'warn')
@@ -635,7 +641,7 @@
             try {
                 ctx.drawImage(c, x, y)
             } catch (e) {
-                // canvas may be tainted – skip it
+                console.warn('Skipped canvas due to CORS/tainting:', e)
             }
         }
 
