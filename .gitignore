@@ -15,4 +15,6 @@ igv.js.iml
 /remove-license.cjs
 /server/node_modules
 /server/*.curation.json
+/server/*.filters.json
 /server/example_data/*.curation.json
+/server/example_data/*.filters.json

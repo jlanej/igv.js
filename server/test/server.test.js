@@ -455,8 +455,8 @@ describe('UI: Keyboard shortcuts', function () {
 
     it('shortcuts panel documents all shortcut keys', async function () {
         const res = await request(app).get('/').expect(200)
-        expect(res.text).to.include('Next variant')
-        expect(res.text).to.include('Previous variant')
+        expect(res.text).to.include('Next uncurated variant')
+        expect(res.text).to.include('Prev uncurated variant')
         expect(res.text).to.include('Mark as Pass')
         expect(res.text).to.include('Mark as Fail')
         expect(res.text).to.include('Mark as Uncertain')
@@ -485,5 +485,95 @@ describe('UI: Track load validation', function () {
         expect(res.text).to.include('.track-status-ok')
         expect(res.text).to.include('.track-status-error')
         expect(res.text).to.include('.track-status-empty')
+    })
+})
+
+describe('API /api/filter-config', function () {
+    const filtersFile = path.join(__dirname, '..', 'example_data', 'variants.filters.json')
+
+    after(function () {
+        if (fs.existsSync(filtersFile)) fs.unlinkSync(filtersFile)
+    })
+
+    it('returns empty object when no saved filters exist', async function () {
+        if (fs.existsSync(filtersFile)) fs.unlinkSync(filtersFile)
+        const res = await request(app).get('/api/filter-config').expect(200)
+        expect(res.body).to.deep.equal({})
+    })
+
+    it('saves filter configuration', async function () {
+        const filters = {impact: 'HIGH', quality_min: '30'}
+        const res = await request(app)
+            .put('/api/filter-config')
+            .send(filters)
+            .expect(200)
+        expect(res.body).to.have.property('ok', true)
+        expect(fs.existsSync(filtersFile)).to.be.true
+        const saved = JSON.parse(fs.readFileSync(filtersFile, 'utf-8'))
+        expect(saved).to.deep.equal(filters)
+    })
+
+    it('loads previously saved filter configuration', async function () {
+        const filters = {gene: 'GENE1', frequency_max: '0.01'}
+        fs.writeFileSync(filtersFile, JSON.stringify(filters), 'utf-8')
+        const res = await request(app).get('/api/filter-config').expect(200)
+        expect(res.body).to.deep.equal(filters)
+    })
+
+    it('overwrites previously saved filters', async function () {
+        const filters1 = {impact: 'HIGH'}
+        const filters2 = {gene: 'GENE2', quality_min: '50'}
+        await request(app).put('/api/filter-config').send(filters1).expect(200)
+        await request(app).put('/api/filter-config').send(filters2).expect(200)
+        const res = await request(app).get('/api/filter-config').expect(200)
+        expect(res.body).to.deep.equal(filters2)
+    })
+})
+
+describe('UI: Resizable table', function () {
+    it('index.html includes resize handle', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('id="table-resize-handle"')
+    })
+
+    it('styles.css includes resize handle styles', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('#table-resize-handle')
+        expect(res.text).to.include('ns-resize')
+    })
+
+    it('app.js includes setupTableResize function', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('setupTableResize')
+        expect(res.text).to.include('variantTableHeight')
+    })
+})
+
+describe('UI: Uncurated variant navigation', function () {
+    it('app.js navigates to uncurated variants', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('curation_status')
+        expect(res.text).to.include("=== 'pending'")
+    })
+
+    it('index.html documents uncurated navigation in shortcuts', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('Next uncurated variant')
+        expect(res.text).to.include('Prev uncurated variant')
+    })
+})
+
+describe('UI: Filter persistence buttons', function () {
+    it('index.html includes save and load filter buttons', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('id="btn-save-filters"')
+        expect(res.text).to.include('id="btn-load-filters"')
+    })
+
+    it('app.js includes filter persistence functions', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('saveFilterConfig')
+        expect(res.text).to.include('loadSavedFilters')
+        expect(res.text).to.include('applyFiltersToUI')
     })
 })
