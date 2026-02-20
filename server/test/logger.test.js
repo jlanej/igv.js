@@ -20,4 +20,15 @@ describe('Logger', function () {
         const res = {on: () => {}, statusCode: 200}
         logger.requestLogger(req, res, done)
     })
+
+    it('requestLogger logs on response finish', function (done) {
+        const req = {method: 'GET', originalUrl: '/test'}
+        let finishCb
+        const res = {on: (event, cb) => { if (event === 'finish') finishCb = cb }, statusCode: 200}
+        logger.requestLogger(req, res, () => {
+            // Trigger the finish event; logger.info should not throw
+            finishCb()
+            done()
+        })
+    })
 })
