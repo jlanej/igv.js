@@ -15,6 +15,7 @@ const express = require('express')
 const fs = require('fs')
 const path = require('path')
 const ExcelJS = require('exceljs')
+const log = require('./logger')
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -52,16 +53,16 @@ function variantKey(v) {
 
 function loadVariants() {
     if (!fs.existsSync(VARIANTS_FILE)) {
-        console.error(`Variants file not found: ${VARIANTS_FILE}`)
-        console.error('Please provide a TSV file with --variants <path>')
-        console.error('See server/README.md and server/example_data/ for format details.')
+        log.error(`Variants file not found: ${VARIANTS_FILE}`)
+        log.error('Please provide a TSV file with --variants <path>')
+        log.error('See server/README.md and server/example_data/ for format details.')
         process.exit(1)
     }
 
     const raw = fs.readFileSync(VARIANTS_FILE, 'utf-8')
     const lines = raw.trim().split('\n')
     if (lines.length < 2) {
-        console.error('Variants file must have a header line and at least one data line.')
+        log.error('Variants file must have a header line and at least one data line.')
         process.exit(1)
     }
 
@@ -69,7 +70,7 @@ function loadVariants() {
     const required = ['chrom', 'pos', 'ref', 'alt']
     for (const r of required) {
         if (!headerColumns.includes(r)) {
-            console.error(`Variants TSV missing required column: ${r}`)
+            log.error(`Variants TSV missing required column: ${r}`)
             process.exit(1)
         }
     }
@@ -122,10 +123,10 @@ function loadVariants() {
 
             // Re-save with stable keys if we migrated from old format
             if (migratedOldFormat) {
-                console.log('Migrating curation file to stable key format...')
+                log.info('Migrating curation file to stable key format...')
             }
         } catch (e) {
-            console.warn('Warning: could not parse curation file:', e.message)
+            log.warn('Could not parse curation file:', e.message)
         }
     }
 
@@ -144,7 +145,7 @@ function loadVariants() {
         } catch (_) { /* already warned above */ }
     }
 
-    console.log(`Loaded ${variants.length} variants from ${VARIANTS_FILE}`)
+    log.info(`Loaded ${variants.length} variants from ${VARIANTS_FILE}`)
 }
 
 function saveCuration() {
@@ -218,6 +219,7 @@ function applyFilters(query) {
 // ---------------------------------------------------------------------------
 const app = express()
 app.use(express.json())
+app.use(log.requestLogger)
 
 // Serve static UI files
 app.use(express.static(path.join(__dirname, 'public')))
@@ -606,7 +608,7 @@ app.post('/api/export/xlsx', async (req, res) => {
         await workbook.xlsx.write(res)
         res.end()
     } catch (err) {
-        console.error('XLSX export error:', err)
+        log.error('XLSX export error:', err.message)
         res.status(500).json({error: 'Failed to generate XLSX export'})
     }
 })
@@ -618,11 +620,11 @@ loadVariants()
 
 if (require.main === module) {
     app.listen(PORT, HOST, () => {
-        console.log(`\n  IGV Variant Review Server`)
-        console.log(`  URL:        http://${HOST}:${PORT}`)
-        console.log(`  Variants:   ${variants.length} loaded`)
-        console.log(`  Genome:     ${GENOME}`)
-        console.log(`  Data dir:   ${DATA_DIR}\n`)
+        log.info(`IGV Variant Review Server started`)
+        log.info(`URL:        http://${HOST}:${PORT}`)
+        log.info(`Variants:   ${variants.length} loaded`)
+        log.info(`Genome:     ${GENOME}`)
+        log.info(`Data dir:   ${DATA_DIR}`)
     })
 }
 
