@@ -500,12 +500,152 @@
             window.open(`/api/export?${params}`, '_blank')
         })
 
+        document.getElementById('btn-export-xlsx').addEventListener('click', () => exportXlsx())
+
         document.getElementById('btn-apply-filters').addEventListener('click', () => {
             currentPage = 1
             loadVariants()
         })
 
         document.getElementById('btn-clear-filters').addEventListener('click', clearFilters)
+    }
+
+    // -----------------------------------------------------------------------
+    // XLSX Export with IGV screenshots
+    // -----------------------------------------------------------------------
+    async function exportXlsx() {
+        const progressDiv = document.getElementById('xlsx-progress')
+        const progressFill = document.getElementById('xlsx-progress-fill')
+        const progressText = document.getElementById('xlsx-progress-text')
+        const btn = document.getElementById('btn-export-xlsx')
+
+        // Fetch all filtered variants across pages
+        const filters = getActiveFilters()
+        let allVariants = []
+        let page = 1
+        while (true) {
+            const params = new URLSearchParams({...filters, per_page: 200, page})
+            const res = await fetch(`/api/variants?${params}`)
+            const data = await res.json()
+            allVariants = allVariants.concat(data.data)
+            if (page >= data.pages) break
+            page++
+        }
+
+        if (allVariants.length === 0) {
+            showNotification('No variants to export', 'warn')
+            return
+        }
+
+        btn.disabled = true
+        progressDiv.style.display = 'block'
+        progressText.textContent = 'Preparing screenshots…'
+        progressFill.style.width = '0%'
+
+        const screenshots = {}
+        const variantIds = allVariants.map(v => v.id)
+
+        // Capture IGV screenshots if the browser is available
+        if (igvBrowser) {
+            for (let i = 0; i < allVariants.length; i++) {
+                const v = allVariants[i]
+                const pct = Math.round(((i + 1) / allVariants.length) * 80)
+                progressText.textContent = `Screenshot ${i + 1}/${allVariants.length}: ${v.chrom}:${v.pos}`
+                progressFill.style.width = `${pct}%`
+
+                try {
+                    // Navigate to variant
+                    const pos = parseInt(v.pos, 10)
+                    const flank = 100
+                    const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
+                    await igvBrowser.search(locus)
+                    // Allow time for tracks to render
+                    await new Promise(resolve => setTimeout(resolve, 1500))
+
+                    // Capture the IGV div as a canvas image
+                    const imgData = await captureIgvScreenshot()
+                    if (imgData) {
+                        screenshots[String(v.id)] = imgData
+                    }
+                } catch (err) {
+                    console.warn(`Screenshot failed for variant ${v.id}:`, err)
+                }
+            }
+        }
+
+        // Send to server for XLSX generation
+        progressText.textContent = 'Generating XLSX…'
+        progressFill.style.width = '90%'
+
+        try {
+            const xlsxRes = await fetch('/api/export/xlsx', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({variantIds, screenshots})
+            })
+
+            if (!xlsxRes.ok) {
+                const err = await xlsxRes.json()
+                throw new Error(err.error || 'Export failed')
+            }
+
+            const blob = await xlsxRes.blob()
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = 'variants_export.xlsx'
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            URL.revokeObjectURL(url)
+
+            progressText.textContent = 'Done!'
+            progressFill.style.width = '100%'
+            showNotification(`Exported ${allVariants.length} variants to XLSX`, 'success')
+        } catch (err) {
+            console.error('XLSX export error:', err)
+            showNotification('XLSX export failed: ' + err.message, 'warn')
+        } finally {
+            btn.disabled = false
+            setTimeout(() => { progressDiv.style.display = 'none' }, 2000)
+        }
+    }
+
+    /**
+     * Capture the IGV viewer as a PNG data URL by compositing all child
+     * canvases in the IGV container onto a single off-screen canvas.
+     */
+    async function captureIgvScreenshot() {
+        const igvDiv = document.getElementById('igv-div')
+        if (!igvDiv) return null
+
+        const canvases = igvDiv.querySelectorAll('canvas')
+        if (canvases.length === 0) return null
+
+        // Determine bounding box of all canvases relative to igvDiv
+        const divRect = igvDiv.getBoundingClientRect()
+        const totalWidth = Math.ceil(divRect.width)
+        const totalHeight = Math.ceil(divRect.height)
+
+        const offscreen = document.createElement('canvas')
+        offscreen.width = totalWidth
+        offscreen.height = totalHeight
+        const ctx = offscreen.getContext('2d')
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, totalWidth, totalHeight)
+
+        for (const c of canvases) {
+            const r = c.getBoundingClientRect()
+            const x = r.left - divRect.left
+            const y = r.top - divRect.top
+            try {
+                ctx.drawImage(c, x, y)
+            } catch (e) {
+                console.warn('Skipped canvas due to CORS/tainting:', e)
+            }
+        }
+
+        return offscreen.toDataURL('image/png')
     }
 
     // -----------------------------------------------------------------------

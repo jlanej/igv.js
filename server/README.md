@@ -14,10 +14,14 @@ OpenDemand desktop access).
 - **IGV alignment review** – click a variant to load child / mother / father
   alignment tracks at the variant position
 - **Manual curation** – mark variants as Pass / Fail / Uncertain with free-text
-  notes; curation state is persisted to disk
+  notes; curation state is persisted to disk using stable genomic-coordinate
+  keys (`chrom:pos:ref:alt`) that survive row reordering and variant
+  additions/removals
 - **Gene summary** – post-filtering summarization showing genes that harbor
   multiple variants passing current filters
 - **TSV export** – download filtered + curated variants as a TSV file
+- **XLSX export** – publication-quality Excel workbook with a styled "Variants"
+  data sheet and per-variant IGV screenshot tabs with cross-sheet hyperlinks
 
 ## Quick Start
 
@@ -218,11 +222,28 @@ node /path/to/igv.js/server/server.js \
 4. **Curate** using Pass / Fail / Uncertain buttons
 5. **Add notes** in the curation text field
 6. Switch to **Gene Summary** tab to see genes with multiple passing variants
-7. **Export** filtered + curated variants as TSV
+7. **Export** filtered + curated variants as TSV or publication-quality XLSX
 
 Curation state is saved automatically to a JSON file alongside the variants
-TSV. This file can be shared, version-controlled, or used in downstream
-pipelines.
+TSV.  Keys use a stable `chrom:pos:ref:alt` format (with optional
+`trio_id` / `sample_id` suffix for multi-sample datasets) so curation data
+survives changes to the variant list across sessions.  Legacy curation files
+using row-index keys are automatically migrated on first load.
+
+### XLSX Export
+
+The **Export XLSX** button generates a publication-ready workbook containing:
+
+- **Variants** sheet – styled table of all filtered variants with curation
+  status, auto-filters, and frozen header row
+- **Per-variant screenshot tabs** – one worksheet per variant with the IGV
+  alignment view embedded as a PNG image, variant metadata, and a back-link
+  to the main Variants sheet
+- **Cross-sheet hyperlinks** – the Variants sheet includes a "📷 View" link
+  in each row that jumps to the corresponding screenshot tab
+
+If IGV has not yet been loaded (no variant clicked), the XLSX is exported
+with the data sheet only.
 
 ## Architecture
 
