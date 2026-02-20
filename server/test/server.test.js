@@ -423,3 +423,67 @@ describe('Static files', function () {
         await request(app).get('/styles.css').expect(200)
     })
 })
+
+describe('UI: Curation row coloring', function () {
+    it('index.html includes track-load-status container', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('id="track-load-status"')
+    })
+
+    it('styles.css contains curation row color classes', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('tr.curation-pass')
+        expect(res.text).to.include('tr.curation-fail')
+        expect(res.text).to.include('tr.curation-uncertain')
+        expect(res.text).to.include('tr.curation-pending')
+    })
+
+    it('app.js applies curation class to table rows', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('curationClass')
+        expect(res.text).to.include('curation-${v.curation_status')
+    })
+})
+
+describe('UI: Keyboard shortcuts', function () {
+    it('index.html contains keyboard shortcuts panel', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('id="shortcuts-panel"')
+        expect(res.text).to.include('id="shortcuts-toggle"')
+        expect(res.text).to.include('Keyboard Shortcuts')
+    })
+
+    it('shortcuts panel documents all shortcut keys', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('Next variant')
+        expect(res.text).to.include('Previous variant')
+        expect(res.text).to.include('Mark as Pass')
+        expect(res.text).to.include('Mark as Fail')
+        expect(res.text).to.include('Mark as Uncertain')
+        expect(res.text).to.include('Pass &amp; advance')
+    })
+
+    it('app.js registers keyboard event handlers', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('setupKeyboardShortcuts')
+        expect(res.text).to.include('selectNextVariant')
+        expect(res.text).to.include('selectPrevVariant')
+        expect(res.text).to.include('curateAndAdvance')
+    })
+})
+
+describe('UI: Track load validation', function () {
+    it('app.js includes validateTrackLoading function', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('validateTrackLoading')
+        expect(res.text).to.include('track-load-status')
+    })
+
+    it('styles.css includes track status indicator styles', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('.track-status')
+        expect(res.text).to.include('.track-status-ok')
+        expect(res.text).to.include('.track-status-error')
+        expect(res.text).to.include('.track-status-empty')
+    })
+})
