@@ -40,6 +40,19 @@ const HOST = getArg('host', '127.0.0.1')
 let variants = []
 let headerColumns = []
 
+// Shared sample-summary configuration
+const SAMPLE_SUMMARY_THRESHOLDS = [
+    {label: 'freq = 0', value: 0, type: 'eq'},
+    {label: 'freq < 0.0001', value: 0.0001, type: 'lt'},
+    {label: 'freq < 0.001', value: 0.001, type: 'lt'},
+    {label: 'freq < 0.01', value: 0.01, type: 'lt'}
+]
+const SAMPLE_SUMMARY_IMPACT_GROUPS = [
+    {label: 'HIGH', impacts: ['HIGH']},
+    {label: 'HIGH||MODERATE', impacts: ['HIGH', 'MODERATE']},
+    {label: 'HIGH||MODERATE||LOW', impacts: ['HIGH', 'MODERATE', 'LOW']}
+]
+
 /**
  * Generate a stable key for a variant based on genomic coordinates and
  * optional sample/trio identifier.  This key survives row reordering and
@@ -437,17 +450,8 @@ app.get('/api/sample-summary', (req, res) => {
     const freqCol = headerColumns.find(c => c.startsWith('freq')) || null
     const sampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
 
-    const thresholds = [
-        {label: 'freq = 0', value: 0, type: 'eq'},
-        {label: 'freq < 0.0001', value: 0.0001, type: 'lt'},
-        {label: 'freq < 0.001', value: 0.001, type: 'lt'},
-        {label: 'freq < 0.01', value: 0.01, type: 'lt'}
-    ]
-    const impactGroups = [
-        {label: 'HIGH', impacts: ['HIGH']},
-        {label: 'HIGH||MODERATE', impacts: ['HIGH', 'MODERATE']},
-        {label: 'HIGH||MODERATE||LOW', impacts: ['HIGH', 'MODERATE', 'LOW']}
-    ]
+    const thresholds = SAMPLE_SUMMARY_THRESHOLDS
+    const impactGroups = SAMPLE_SUMMARY_IMPACT_GROUPS
 
     // Group variants by sample
     const sampleMap = {}
@@ -752,17 +756,8 @@ app.post('/api/export/xlsx', async (req, res) => {
         const impactCol = headerColumns.includes('impact') ? 'impact' : null
         const freqCol = headerColumns.find(c => c.startsWith('freq')) || null
         const sampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
-        const ssThresholds = [
-            {label: 'freq = 0', value: 0, type: 'eq'},
-            {label: 'freq < 0.0001', value: 0.0001, type: 'lt'},
-            {label: 'freq < 0.001', value: 0.001, type: 'lt'},
-            {label: 'freq < 0.01', value: 0.01, type: 'lt'}
-        ]
-        const ssImpactGroups = [
-            {label: 'HIGH', impacts: ['HIGH']},
-            {label: 'HIGH||MODERATE', impacts: ['HIGH', 'MODERATE']},
-            {label: 'HIGH||MODERATE||LOW', impacts: ['HIGH', 'MODERATE', 'LOW']}
-        ]
+        const ssThresholds = SAMPLE_SUMMARY_THRESHOLDS
+        const ssImpactGroups = SAMPLE_SUMMARY_IMPACT_GROUPS
         {
             const sampleMap = {}
             for (const v of filtered) {

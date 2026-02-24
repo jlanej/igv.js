@@ -544,7 +544,7 @@
                 showNotification(data.error || 'Failed to flag gene', 'warn')
             }
         } catch (err) {
-            showNotification('Failed to flag gene', 'warn')
+            showNotification('Failed to flag gene: ' + err.message, 'warn')
         }
     }
 
