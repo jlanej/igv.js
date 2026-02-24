@@ -40,6 +40,12 @@
 
             document.getElementById('stat-total').textContent = config.totalVariants
 
+            // Show Sample QC tab if QC data is loaded
+            if (config.hasSampleQc) {
+                const qcTab = document.getElementById('tab-btn-sample-qc')
+                if (qcTab) qcTab.style.display = ''
+            }
+
             buildFilterPanel()
             setupTabs()
             setupCurationButtons()
@@ -193,7 +199,8 @@
                 if (sortField === col) cls = sortOrder === 'asc' ? 'sort-asc' : 'sort-desc'
                 return `<th class="${cls}" data-sort="${col}">${formatLabel(col)}</th>`
             }).join('') +
-            '<th>Curation</th>'
+            '<th>Curation</th>' +
+            (config.hasSampleQc ? '<th title="Sample QC status (worst across trio)">QC</th>' : '')
 
         // Body
         const tbody = document.getElementById('table-body')
@@ -202,10 +209,23 @@
             const isActive = v.id === activeVariantId
             const curationClass = ['pass', 'fail', 'uncertain', 'pending'].includes(v.curation_status) ? `curation-${v.curation_status}` : 'curation-pending'
             const rowClass = [curationClass, isActive ? 'active-variant' : isSelected ? 'selected' : ''].filter(Boolean).join(' ')
+
+            let qcCell = ''
+            if (config.hasSampleQc) {
+                const qcStatus = v._qc_status || ''
+                if (qcStatus) {
+                    const qcTitle = qcStatusTitle(v)
+                    qcCell = `<td title="${escapeHtml(qcTitle)}"><span class="qc-warn-indicator qc-warn-${qcStatus}"></span><span class="qc-badge qc-badge-${qcStatus}">${qcStatus}</span></td>`
+                } else {
+                    qcCell = '<td></td>'
+                }
+            }
+
             return `<tr class="${rowClass}" data-id="${v.id}">
                 <td><input type="checkbox" class="row-check" ${isSelected ? 'checked' : ''}></td>
                 ${displayCols.map(col => `<td title="${escapeHtml(String(v[col] || ''))}">${escapeHtml(String(v[col] || ''))}</td>`).join('')}
                 <td><span class="badge badge-${v.curation_status || 'pending'}">${v.curation_status || 'pending'}</span></td>
+                ${qcCell}
             </tr>`
         }).join('')
 
@@ -594,6 +614,88 @@
     }
 
     // -----------------------------------------------------------------------
+    // Sample QC
+    // -----------------------------------------------------------------------
+    async function loadSampleQc() {
+        const res = await fetch('/api/sample-qc')
+        const data = await res.json()
+
+        const info = document.getElementById('sample-qc-info')
+        const thead = document.getElementById('sample-qc-header')
+        const tbody = document.getElementById('sample-qc-body')
+
+        if (!data.loaded || !data.trios || data.trios.length === 0) {
+            info.textContent = data.message || 'No sample QC data available'
+            thead.innerHTML = '<th>Trio ID</th><th>Status</th>'
+            tbody.innerHTML = '<tr><td colspan="2">No QC data loaded</td></tr>'
+            return
+        }
+
+        info.textContent = `${data.total_trios} trios (${data.total_samples} samples) – ` +
+            `Metrics: ${data.metric_columns.join(', ')}`
+
+        const roles = ['proband', 'mother', 'father']
+        const metrics = data.metric_columns || []
+        const thresholds = data.thresholds || {}
+
+        // Build header: Trio ID | QC Status | role × (sample_id + metrics)
+        let headerHtml = '<th>Trio ID</th><th>QC Status</th>'
+        for (const role of roles) {
+            headerHtml += `<th>${escapeHtml(capitalize(role))}<br><small>Sample ID</small></th>`
+            for (const m of metrics) {
+                headerHtml += `<th>${escapeHtml(capitalize(role))}<br><small>${escapeHtml(m)}</small></th>`
+            }
+        }
+        thead.innerHTML = headerHtml
+
+        // Build body rows
+        tbody.innerHTML = data.trios.map(trio => {
+            let cells = `<td>${escapeHtml(trio.trio_id)}</td>`
+            cells += `<td><span class="qc-badge qc-badge-${trio.qc_status}">${trio.qc_status}</span></td>`
+            for (const role of roles) {
+                const sid = (trio.members[role] && trio.members[role].sample_id) || ''
+                cells += `<td>${escapeHtml(sid)}</td>`
+                for (const m of metrics) {
+                    const val = (trio.metrics[m] && trio.metrics[m][role]) != null ? trio.metrics[m][role] : ''
+                    const cls = thresholds[m] ? qcCellClass(m, val, thresholds) : ''
+                    cells += `<td class="${cls}" title="${escapeHtml(m)}: ${val}">${val}</td>`
+                }
+            }
+            return `<tr>${cells}</tr>`
+        }).join('')
+    }
+
+    /**
+     * Return a CSS class for a QC metric cell based on the metric value
+     * and configured thresholds.
+     */
+    function qcCellClass(metric, value, thresholds) {
+        const tiers = thresholds[metric]
+        if (!tiers) return ''
+        const num = Number(value)
+        if (isNaN(num)) return ''
+        for (const tier of tiers) {
+            if (tier.max !== undefined && num < tier.max) return `qc-cell-${tier.label}`
+            if (tier.min !== undefined && num >= tier.min) return `qc-cell-${tier.label}`
+        }
+        return ''
+    }
+
+    /**
+     * Build a tooltip string summarising per-metric QC statuses for a variant.
+     */
+    function qcStatusTitle(v) {
+        if (!v._qc_statuses) return v._qc_status || ''
+        return Object.entries(v._qc_statuses)
+            .map(([m, s]) => `${m}: ${s}`)
+            .join(', ')
+    }
+
+    function capitalize(s) {
+        return s.charAt(0).toUpperCase() + s.slice(1)
+    }
+
+    // -----------------------------------------------------------------------
     // Stats
     // -----------------------------------------------------------------------
     function updateStats() {
@@ -644,6 +746,7 @@
         document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === `tab-${name}`))
         if (name === 'summary') loadSummary()
         if (name === 'sample-summary') loadSampleSummary()
+        if (name === 'sample-qc') loadSampleQc()
     }
 
     // -----------------------------------------------------------------------

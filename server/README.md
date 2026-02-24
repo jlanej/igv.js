@@ -17,8 +17,10 @@ OpenDemand desktop access).
   notes; curation state is persisted to disk using stable genomic-coordinate
   keys (`chrom:pos:ref:alt`) that survive row reordering and variant
   additions/removals
-- **Gene summary** – post-filtering summarization showing genes that harbor
+- **Gene summary** – post-filtering summarization showing genes that harbour
   multiple variants passing current filters
+- **Sample QC** – load a per-sample QC file (e.g. VerifyBamID freemix) to
+  display trio-aggregated metrics and color-coded warnings in the variant table
 - **TSV export** – download filtered + curated variants as a TSV file
 - **XLSX export** – publication-quality Excel workbook with a styled "Variants"
   data sheet and per-variant IGV screenshot tabs with cross-sheet hyperlinks
@@ -40,6 +42,7 @@ cd server
 node server.js \
   --variants /path/to/your/variants.tsv \
   --data-dir /path/to/bam_cram_files \
+  --sample-qc /path/to/sample_qc.tsv \
   --genome hg38 \
   --port 3000
 
@@ -104,6 +107,70 @@ Paths in the `*_file` and `*_index` columns can be:
 If index files are co-located with the alignment files and follow standard
 naming (`.bam.bai`, `.cram.crai`), the index columns can be omitted.
 
+## Sample QC File (optional)
+
+A **tab-separated** sample QC file can be loaded with `--sample-qc <path>` to
+display per-trio quality control metrics and apply colored warnings to
+variant table rows.  This is useful for flagging contaminated samples (e.g.
+VerifyBamID freemix) or low-coverage samples before curating variants.
+
+### Required Columns
+
+| Column      | Description                                          |
+|-------------|------------------------------------------------------|
+| `trio_id`   | Identifier for the trio (must match `trio_id` in the variant TSV for variant-level warnings) |
+| `role`      | Family member role: `proband`, `mother`, or `father` |
+| `sample_id` | Sample identifier for the individual                 |
+
+### QC Metric Columns
+
+All additional columns are treated as numeric QC metrics (e.g. `freemix`,
+`mean_coverage`, `chimeric_rate`).  Values are displayed per-role in the
+**Sample QC** tab and the worst-case value across the trio determines the
+row-level warning status.
+
+### Example File
+
+```tsv
+trio_id	role	sample_id	freemix	mean_coverage
+TRIO_A	proband	SAMPLE_001	0.005	35.2
+TRIO_A	mother	SAMPLE_002	0.012	30.1
+TRIO_A	father	SAMPLE_003	0.002	32.5
+TRIO_B	proband	SAMPLE_004	0.045	28.3
+TRIO_B	mother	SAMPLE_005	0.008	31.7
+TRIO_B	father	SAMPLE_006	0.003	29.8
+```
+
+### Freemix Thresholds
+
+The `freemix` column is classified into tiers automatically:
+
+| Status       | Freemix Range | Interpretation                                |
+|--------------|---------------|-----------------------------------------------|
+| **Pass**     | ≤ 0.01 (≤1%)  | Clean – no special handling needed             |
+| **Warn**     | 0.01–0.03     | Caution – apply stricter DNM evidence filters  |
+| **Fail**     | 0.03–0.05     | Exclude sample/trio from DNM detection         |
+| **Critical** | ≥ 0.05 (≥5%)  | Hard fail – results are usually unreliable     |
+
+The thresholds are exposed via `/api/config` → `qcMetricThresholds` and can
+be extended server-side for additional metrics by adding entries to the
+`QC_METRIC_THRESHOLDS` object in `server.js`.
+
+### Linking to Variants
+
+If the variant TSV contains a `trio_id` column, variants are automatically
+annotated with their trio's worst-case QC status.  This status appears as a
+colored dot + badge in the variant table's **QC** column.
+
+### UI Features
+
+- **Sample QC tab** – aggregated view with one row per trio, metrics pivoted
+  by role (proband / mother / father), and color-coded cells
+- **Variant table warnings** – QC status badge next to each variant when a
+  matching trio is found in the QC data
+- **XLSX export** – includes a "Sample QC" sheet with styled and
+  color-coded status cells
+
 ## CLI Options
 
 | Flag               | Default                            | Description                    |
@@ -115,6 +182,7 @@ naming (`.bam.bai`, `.cram.crai`), the index columns can be omitted.
 | `--curation-file`  | `<variants>.curation.json`         | Curation persistence file      |
 | `--host`           | `127.0.0.1`                        | Bind address (use `0.0.0.0` in containers) |
 | `--log-level`      | `info`                             | Log verbosity: `debug`, `info`, `warn`, `error` |
+| `--sample-qc`      | *(none)*                           | Path to sample QC TSV file (see below) |
 
 ## HPC Deployment
 
@@ -265,7 +333,8 @@ server/
 ├── test/
 │   └── server.test.js              # Integration tests (Mocha/Chai/Supertest)
 ├── example_data/
-│   └── variants.tsv                # Example variant file
+│   ├── variants.tsv                # Example variant file
+│   └── sample_qc.tsv              # Example sample QC file
 └── README.md                       # This file
 ```
 

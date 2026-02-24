@@ -737,3 +737,69 @@ describe('UI: Gene curation buttons', function () {
         expect(res.text).to.include('gene-curate-btn')
     })
 })
+
+describe('API /api/sample-qc', function () {
+    it('returns QC structure with loaded flag', async function () {
+        const res = await request(app).get('/api/sample-qc').expect(200)
+        expect(res.body).to.have.property('loaded').that.is.a('boolean')
+        expect(res.body).to.have.property('trios').that.is.an('array')
+        expect(res.body).to.have.property('metric_columns').that.is.an('array')
+        expect(res.body).to.have.property('thresholds').that.is.an('object')
+    })
+
+    it('returns freemix threshold configuration', async function () {
+        const res = await request(app).get('/api/sample-qc').expect(200)
+        expect(res.body.thresholds).to.have.property('freemix')
+        expect(res.body.thresholds.freemix).to.be.an('array')
+        expect(res.body.thresholds.freemix.length).to.equal(4)
+        expect(res.body.thresholds.freemix[0]).to.have.property('label', 'pass')
+        expect(res.body.thresholds.freemix[1]).to.have.property('label', 'warn')
+        expect(res.body.thresholds.freemix[2]).to.have.property('label', 'fail')
+        expect(res.body.thresholds.freemix[3]).to.have.property('label', 'critical')
+    })
+})
+
+describe('API /api/config includes QC metadata', function () {
+    it('config has hasSampleQc and qcMetricThresholds', async function () {
+        const res = await request(app).get('/api/config').expect(200)
+        expect(res.body).to.have.property('hasSampleQc').that.is.a('boolean')
+        expect(res.body).to.have.property('qcMetricThresholds').that.is.an('object')
+        expect(res.body.qcMetricThresholds).to.have.property('freemix')
+    })
+})
+
+describe('UI: Sample QC tab', function () {
+    it('index.html includes sample QC tab elements', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('data-tab="sample-qc"')
+        expect(res.text).to.include('id="tab-sample-qc"')
+        expect(res.text).to.include('id="sample-qc-body"')
+    })
+
+    it('app.js includes loadSampleQc function', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('loadSampleQc')
+        expect(res.text).to.include('sample-qc')
+    })
+
+    it('app.js includes QC warning indicator rendering', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('qc-warn-indicator')
+        expect(res.text).to.include('qcStatusTitle')
+        expect(res.text).to.include('qcCellClass')
+    })
+
+    it('styles.css includes QC badge and indicator styles', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('.qc-badge')
+        expect(res.text).to.include('.qc-badge-pass')
+        expect(res.text).to.include('.qc-badge-warn')
+        expect(res.text).to.include('.qc-badge-fail')
+        expect(res.text).to.include('.qc-badge-critical')
+        expect(res.text).to.include('.qc-warn-indicator')
+        expect(res.text).to.include('.qc-cell-pass')
+        expect(res.text).to.include('.qc-cell-warn')
+        expect(res.text).to.include('.qc-cell-fail')
+        expect(res.text).to.include('.qc-cell-critical')
+    })
+})
