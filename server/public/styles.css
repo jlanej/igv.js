@@ -63,7 +63,33 @@ header h1 { font-size: 18px; font-weight: 600; }
 #filter-panel h2 { font-size: 14px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
 #filter-panel hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 
+.filter-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.filter-heading h2 { margin-bottom: 0; }
+
 .filter-group { margin-bottom: 10px; }
+.filter-group > .filter-group-header {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 3px;
+    text-transform: capitalize;
+    padding: 2px 0;
+}
+.filter-group > .filter-group-header:hover { color: var(--primary); }
+.filter-group > .filter-group-header .toggle-icon {
+    display: inline-block;
+    width: 12px;
+    margin-right: 4px;
+    font-size: 10px;
+    transition: transform 0.15s;
+    text-align: center;
+    flex-shrink: 0;
+}
+.filter-group.collapsed > .filter-group-header .toggle-icon { transform: rotate(-90deg); }
+.filter-group.collapsed > .filter-group-content { display: none; }
 .filter-group label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 3px; text-transform: capitalize; }
 .filter-group select, .filter-group input {
     width: 100%;
