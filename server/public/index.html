@@ -57,6 +57,7 @@
             <div id="tabs">
                 <button class="tab active" data-tab="variants">Variant Table</button>
                 <button class="tab" data-tab="summary">Gene Summary</button>
+                <button class="tab" data-tab="sample-summary">Sample Summary</button>
             </div>
 
             <!-- Variant table tab -->
@@ -91,9 +92,21 @@
                                 <th>Uncertain</th>
                                 <th>Pending</th>
                                 <th>Variants</th>
+                                <th>Flag Gene</th>
                             </tr>
                         </thead>
                         <tbody id="summary-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Sample summary tab -->
+            <div id="tab-sample-summary" class="tab-content">
+                <div id="sample-summary-info"></div>
+                <div id="sample-summary-table-wrap">
+                    <table id="sample-summary-table">
+                        <thead><tr id="sample-summary-header"></tr></thead>
+                        <tbody id="sample-summary-body"></tbody>
                     </table>
                 </div>
             </div>

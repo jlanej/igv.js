@@ -488,7 +488,7 @@
 
         const tbody = document.getElementById('summary-body')
         if (!data.summary || data.summary.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7">No gene data available</td></tr>'
+            tbody.innerHTML = '<tr><td colspan="8">No gene data available</td></tr>'
             return
         }
 
@@ -502,6 +502,11 @@
             <td>${g.variants.map(v =>
                 `<span class="badge badge-${v.curation_status}" title="${v.chrom}:${v.pos} ${v.ref}→${v.alt}">${v.chrom}:${v.pos}</span> `
             ).join('')}</td>
+            <td>
+                <button class="gene-curate-btn curation-pass" data-gene="${escapeHtml(g.gene)}" data-status="pass" title="Flag all ${g.gene} as Pass">✓</button>
+                <button class="gene-curate-btn curation-fail" data-gene="${escapeHtml(g.gene)}" data-status="fail" title="Flag all ${g.gene} as Fail">✗</button>
+                <button class="gene-curate-btn curation-uncertain" data-gene="${escapeHtml(g.gene)}" data-status="uncertain" title="Flag all ${g.gene} as Uncertain">?</button>
+            </td>
         </tr>`).join('')
 
         // Gene click -> filter to gene
@@ -512,6 +517,80 @@
                 if (sel) { sel.value = gene; loadVariants(); switchTab('variants') }
             })
         })
+
+        // Gene curation buttons
+        tbody.querySelectorAll('.gene-curate-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const gene = btn.dataset.gene
+                const status = btn.dataset.status
+                await curateGene(gene, status)
+            })
+        })
+    }
+
+    async function curateGene(gene, status) {
+        try {
+            const res = await fetch('/api/curate/gene', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({gene, status})
+            })
+            const data = await res.json()
+            if (res.ok) {
+                showNotification(`Flagged ${data.updated} variants in ${gene} as ${status}`, 'success')
+                await loadSummary()
+                await loadVariants()
+            } else {
+                showNotification(data.error || 'Failed to flag gene', 'warn')
+            }
+        } catch (err) {
+            showNotification('Failed to flag gene: ' + err.message, 'warn')
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Sample summary
+    // -----------------------------------------------------------------------
+    async function loadSampleSummary() {
+        const filters = getActiveFilters()
+        const params = new URLSearchParams(filters)
+        const res = await fetch(`/api/sample-summary?${params}`)
+        const data = await res.json()
+
+        document.getElementById('sample-summary-info').textContent =
+            `${data.total_samples || 0} samples with ${data.total_variants || 0} variants matching filters`
+
+        const thead = document.getElementById('sample-summary-header')
+        const tbody = document.getElementById('sample-summary-body')
+
+        if (!data.samples || data.samples.length === 0) {
+            thead.innerHTML = '<th>Sample</th><th>Total</th>'
+            tbody.innerHTML = '<tr><td colspan="2">No sample data available</td></tr>'
+            return
+        }
+
+        // Build header: Sample | Total | impact_group × threshold combos
+        const impactGroups = data.impact_groups || []
+        const thresholds = data.thresholds || []
+        let headerHtml = '<th>Sample</th><th>Total</th>'
+        for (const ig of impactGroups) {
+            for (const t of thresholds) {
+                headerHtml += `<th>${escapeHtml(ig)}<br><small>${escapeHtml(t)}</small></th>`
+            }
+        }
+        thead.innerHTML = headerHtml
+
+        // Build body rows
+        tbody.innerHTML = data.samples.map(s => {
+            let cells = `<td>${escapeHtml(s.sample_id)}</td><td>${s.total}</td>`
+            for (const ig of impactGroups) {
+                for (const t of thresholds) {
+                    const count = (s.counts[ig] && s.counts[ig][t]) || 0
+                    cells += `<td>${count}</td>`
+                }
+            }
+            return `<tr>${cells}</tr>`
+        }).join('')
     }
 
     // -----------------------------------------------------------------------
@@ -564,6 +643,7 @@
         document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name))
         document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === `tab-${name}`))
         if (name === 'summary') loadSummary()
+        if (name === 'sample-summary') loadSampleSummary()
     }
 
     // -----------------------------------------------------------------------

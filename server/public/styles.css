@@ -265,11 +265,30 @@ tr.active-variant { background: #b8daff; }
     background: var(--primary);
 }
 
-/* Summary table */
-#summary-info { padding: 8px 0; font-size: 13px; color: var(--text-muted); }
+/* Summary tables */
+#summary-info, #sample-summary-info { padding: 8px 0; font-size: 13px; color: var(--text-muted); }
 
 #summary-table .gene-link { color: var(--primary); cursor: pointer; text-decoration: underline; }
 #summary-table .gene-link:hover { color: #2980b9; }
+
+#sample-summary-table-wrap {
+    overflow-x: auto;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    max-height: 45vh;
+    overflow-y: auto;
+}
+
+.gene-curate-btn {
+    padding: 2px 6px;
+    font-size: 11px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--card);
+    cursor: pointer;
+    margin: 1px;
+}
 
 /* Checkbox */
 input[type="checkbox"] { margin-right: 4px; cursor: pointer; }
