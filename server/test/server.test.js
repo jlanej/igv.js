@@ -201,6 +201,58 @@ describe('API /api/curate/batch', function () {
     })
 })
 
+describe('API /api/curate/gene', function () {
+    after(function () {
+        if (fs.existsSync(curationFile)) fs.unlinkSync(curationFile)
+    })
+
+    it('curates all variants in a gene', async function () {
+        const res = await request(app)
+            .put('/api/curate/gene')
+            .send({gene: 'GENE2', status: 'fail'})
+            .expect(200)
+        expect(res.body).to.have.property('updated', 2)
+        expect(res.body).to.have.property('gene', 'GENE2')
+        expect(res.body.data).to.have.lengthOf(2)
+        res.body.data.forEach(v => {
+            expect(v.gene).to.equal('GENE2')
+            expect(v.curation_status).to.equal('fail')
+        })
+    })
+
+    it('requires gene parameter', async function () {
+        await request(app)
+            .put('/api/curate/gene')
+            .send({status: 'pass'})
+            .expect(400)
+    })
+
+    it('rejects invalid status', async function () {
+        await request(app)
+            .put('/api/curate/gene')
+            .send({gene: 'GENE1', status: 'bad'})
+            .expect(400)
+    })
+
+    it('returns 404 for unknown gene', async function () {
+        await request(app)
+            .put('/api/curate/gene')
+            .send({gene: 'NONEXISTENT', status: 'fail'})
+            .expect(404)
+    })
+
+    it('supports curation note for gene', async function () {
+        const res = await request(app)
+            .put('/api/curate/gene')
+            .send({gene: 'GENE1', status: 'fail', note: 'Hypervariable gene'})
+            .expect(200)
+        expect(res.body.updated).to.equal(2)
+        res.body.data.forEach(v => {
+            expect(v.curation_note).to.equal('Hypervariable gene')
+        })
+    })
+})
+
 describe('API /api/filters', function () {
     it('returns filter options for columns', async function () {
         const res = await request(app).get('/api/filters').expect(200)
@@ -246,6 +298,47 @@ describe('API /api/summary', function () {
 
     it('respects filters in summary', async function () {
         const res = await request(app).get('/api/summary?impact=HIGH').expect(200)
+        expect(res.body.total_variants).to.equal(5)
+    })
+})
+
+describe('API /api/sample-summary', function () {
+    it('returns sample-level summary', async function () {
+        const res = await request(app).get('/api/sample-summary').expect(200)
+        expect(res.body).to.have.property('total_samples').that.is.a('number')
+        expect(res.body).to.have.property('total_variants').that.is.a('number')
+        expect(res.body).to.have.property('thresholds').that.is.an('array')
+        expect(res.body).to.have.property('impact_groups').that.is.an('array')
+        expect(res.body).to.have.property('samples').that.is.an('array')
+        expect(res.body.total_samples).to.be.greaterThan(0)
+    })
+
+    it('returns correct impact groups', async function () {
+        const res = await request(app).get('/api/sample-summary').expect(200)
+        expect(res.body.impact_groups).to.deep.equal(['HIGH', 'HIGH||MODERATE', 'HIGH||MODERATE||LOW'])
+    })
+
+    it('returns correct frequency thresholds', async function () {
+        const res = await request(app).get('/api/sample-summary').expect(200)
+        expect(res.body.thresholds).to.deep.equal(['freq = 0', 'freq < 0.0001', 'freq < 0.001', 'freq < 0.01'])
+    })
+
+    it('returns per-sample counts by impact and frequency', async function () {
+        const res = await request(app).get('/api/sample-summary').expect(200)
+        const sample = res.body.samples[0]
+        expect(sample).to.have.property('sample_id')
+        expect(sample).to.have.property('total')
+        expect(sample).to.have.property('counts').that.is.an('object')
+        expect(sample.counts).to.have.property('HIGH')
+        expect(sample.counts).to.have.property('HIGH||MODERATE')
+        expect(sample.counts).to.have.property('HIGH||MODERATE||LOW')
+        // Each impact group should have counts for each threshold
+        expect(sample.counts['HIGH']).to.have.property('freq = 0')
+        expect(sample.counts['HIGH']).to.have.property('freq < 0.0001')
+    })
+
+    it('respects filters in sample summary', async function () {
+        const res = await request(app).get('/api/sample-summary?impact=HIGH').expect(200)
         expect(res.body.total_variants).to.equal(5)
     })
 })
@@ -374,10 +467,49 @@ describe('API /api/export/xlsx', function () {
         expect(variantsSheet.rowCount).to.equal(3) // header + 2 data rows
 
         // Screenshot sheet should exist for variant 0
-        const screenshotSheet = workbook.worksheets.find(s => s.name !== 'Variants')
+        const screenshotSheet = workbook.worksheets.find(s => s.name !== 'Variants' && s.name !== 'Gene Summary' && s.name !== 'Sample Summary')
         expect(screenshotSheet).to.exist
         // Should have back-link text
         expect(screenshotSheet.getCell('D1').value).to.have.property('text', '← Back to Variants')
+    })
+
+    it('includes Gene Summary and Sample Summary sheets', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4]})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        // Should have Gene Summary sheet
+        const geneSummary = workbook.getWorksheet('Gene Summary')
+        expect(geneSummary).to.exist
+        const gsHeader = []
+        geneSummary.getRow(1).eachCell(cell => gsHeader.push(cell.value))
+        expect(gsHeader).to.include('Gene')
+        expect(gsHeader).to.include('Total')
+        expect(gsHeader).to.include('Pass')
+        expect(gsHeader).to.include('Fail')
+        // Should have data rows for genes
+        expect(geneSummary.rowCount).to.be.at.least(2)
+
+        // Should have Sample Summary sheet
+        const sampleSummary = workbook.getWorksheet('Sample Summary')
+        expect(sampleSummary).to.exist
+        const ssHeader = []
+        sampleSummary.getRow(1).eachCell(cell => ssHeader.push(cell.value))
+        expect(ssHeader).to.include('Sample')
+        expect(ssHeader).to.include('Total')
+        // Should have at least one data row
+        expect(sampleSummary.rowCount).to.be.at.least(2)
     })
 })
 
@@ -575,5 +707,33 @@ describe('UI: Filter persistence buttons', function () {
         expect(res.text).to.include('saveFilterConfig')
         expect(res.text).to.include('loadSavedFilters')
         expect(res.text).to.include('applyFiltersToUI')
+    })
+})
+
+describe('UI: Sample Summary tab', function () {
+    it('index.html includes sample summary tab', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('data-tab="sample-summary"')
+        expect(res.text).to.include('id="tab-sample-summary"')
+        expect(res.text).to.include('id="sample-summary-body"')
+    })
+
+    it('app.js includes loadSampleSummary function', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('loadSampleSummary')
+        expect(res.text).to.include('sample-summary')
+    })
+})
+
+describe('UI: Gene curation buttons', function () {
+    it('index.html includes Flag Gene column header', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('Flag Gene')
+    })
+
+    it('app.js includes curateGene function', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('curateGene')
+        expect(res.text).to.include('gene-curate-btn')
     })
 })

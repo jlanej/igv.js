@@ -300,6 +300,28 @@ app.put('/api/curate/batch', (req, res) => {
     res.json({updated: updated.length, data: updated})
 })
 
+// Gene-level curation – flag all variants in a given gene
+app.put('/api/curate/gene', (req, res) => {
+    const {gene, status, note} = req.body
+    if (!gene) return res.status(400).json({error: 'gene is required'})
+    const geneCol = headerColumns.includes('gene') ? 'gene' : null
+    if (!geneCol) return res.status(400).json({error: 'No gene column found in data'})
+    const allowedStatuses = ['pending', 'pass', 'fail', 'uncertain']
+    if (status && !allowedStatuses.includes(status)) {
+        return res.status(400).json({error: `Invalid status. Use: ${allowedStatuses.join(', ')}`})
+    }
+    const geneVariants = variants.filter(v => v[geneCol] === gene)
+    if (geneVariants.length === 0) {
+        return res.status(404).json({error: `No variants found for gene: ${gene}`})
+    }
+    for (const v of geneVariants) {
+        if (status) v.curation_status = status
+        if (note !== undefined) v.curation_note = String(note)
+    }
+    saveCuration()
+    res.json({updated: geneVariants.length, gene, data: geneVariants})
+})
+
 // Update curation status (single variant)
 app.put('/api/variants/:id/curate', (req, res) => {
     const id = parseInt(req.params.id, 10)
@@ -405,6 +427,62 @@ app.get('/api/summary', (req, res) => {
         total_genes: summary.length,
         total_variants: filtered.length,
         summary
+    })
+})
+
+// Per-sample variant counts by impact level and frequency threshold
+app.get('/api/sample-summary', (req, res) => {
+    const filtered = applyFilters(req.query)
+    const impactCol = headerColumns.includes('impact') ? 'impact' : null
+    const freqCol = headerColumns.find(c => c.startsWith('freq')) || null
+    const sampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
+
+    const thresholds = [
+        {label: 'freq = 0', value: 0, type: 'eq'},
+        {label: 'freq < 0.0001', value: 0.0001, type: 'lt'},
+        {label: 'freq < 0.001', value: 0.001, type: 'lt'},
+        {label: 'freq < 0.01', value: 0.01, type: 'lt'}
+    ]
+    const impactGroups = [
+        {label: 'HIGH', impacts: ['HIGH']},
+        {label: 'HIGH||MODERATE', impacts: ['HIGH', 'MODERATE']},
+        {label: 'HIGH||MODERATE||LOW', impacts: ['HIGH', 'MODERATE', 'LOW']}
+    ]
+
+    // Group variants by sample
+    const sampleMap = {}
+    for (const v of filtered) {
+        const sampleId = sampleCol ? (v[sampleCol] || 'unknown') : 'all'
+        if (!sampleMap[sampleId]) sampleMap[sampleId] = []
+        sampleMap[sampleId].push(v)
+    }
+
+    const samples = Object.entries(sampleMap).map(([sampleId, sampleVariants]) => {
+        const counts = {}
+        for (const ig of impactGroups) {
+            counts[ig.label] = {}
+            const impactFiltered = impactCol
+                ? sampleVariants.filter(v => ig.impacts.includes(String(v[impactCol] || '').toUpperCase()))
+                : sampleVariants
+            for (const t of thresholds) {
+                if (!freqCol) {
+                    counts[ig.label][t.label] = impactFiltered.length
+                } else if (t.type === 'eq') {
+                    counts[ig.label][t.label] = impactFiltered.filter(v => Number(v[freqCol]) === t.value).length
+                } else {
+                    counts[ig.label][t.label] = impactFiltered.filter(v => Number(v[freqCol]) < t.value).length
+                }
+            }
+        }
+        return {sample_id: sampleId, total: sampleVariants.length, counts}
+    })
+
+    res.json({
+        total_samples: samples.length,
+        total_variants: filtered.length,
+        thresholds: thresholds.map(t => t.label),
+        impact_groups: impactGroups.map(ig => ig.label),
+        samples
     })
 })
 
@@ -629,6 +707,111 @@ app.post('/api/export/xlsx', async (req, res) => {
                     sws.getCell('A6').font = {italic: true, color: {argb: 'FF999999'}}
                 }
             }
+        }
+
+        // --- Gene Summary worksheet -----------------------------------------
+        const geneCol = headerColumns.includes('gene') ? 'gene' : null
+        if (geneCol) {
+            const geneMap = {}
+            for (const v of filtered) {
+                const gene = v[geneCol]
+                if (!gene) continue
+                if (!geneMap[gene]) geneMap[gene] = {gene, total: 0, pass: 0, fail: 0, uncertain: 0, pending: 0}
+                geneMap[gene].total++
+                geneMap[gene][v.curation_status || 'pending']++
+            }
+            const geneSummary = Object.values(geneMap).sort((a, b) => b.total - a.total)
+            if (geneSummary.length > 0) {
+                const gws = workbook.addWorksheet('Gene Summary', {views: [{state: 'frozen', ySplit: 1}]})
+                gws.columns = [
+                    {header: 'Gene', key: 'gene', width: 16},
+                    {header: 'Total', key: 'total', width: 10},
+                    {header: 'Pass', key: 'pass', width: 10},
+                    {header: 'Fail', key: 'fail', width: 10},
+                    {header: 'Uncertain', key: 'uncertain', width: 12},
+                    {header: 'Pending', key: 'pending', width: 10}
+                ]
+                const gsHeader = gws.getRow(1)
+                gsHeader.eachCell(cell => {
+                    cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin
+                    cell.alignment = {vertical: 'middle', horizontal: 'center'}
+                })
+                gsHeader.height = 24
+                geneSummary.forEach((g, idx) => {
+                    const row = gws.addRow(g)
+                    row.eachCell(cell => {
+                        cell.border = borderThin
+                        if (idx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
+                    })
+                })
+                gws.autoFilter = {from: 'A1', to: {row: 1, column: 6}}
+            }
+        }
+
+        // --- Sample Summary worksheet ---------------------------------------
+        const impactCol = headerColumns.includes('impact') ? 'impact' : null
+        const freqCol = headerColumns.find(c => c.startsWith('freq')) || null
+        const sampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
+        const ssThresholds = [
+            {label: 'freq = 0', value: 0, type: 'eq'},
+            {label: 'freq < 0.0001', value: 0.0001, type: 'lt'},
+            {label: 'freq < 0.001', value: 0.001, type: 'lt'},
+            {label: 'freq < 0.01', value: 0.01, type: 'lt'}
+        ]
+        const ssImpactGroups = [
+            {label: 'HIGH', impacts: ['HIGH']},
+            {label: 'HIGH||MODERATE', impacts: ['HIGH', 'MODERATE']},
+            {label: 'HIGH||MODERATE||LOW', impacts: ['HIGH', 'MODERATE', 'LOW']}
+        ]
+        {
+            const sampleMap = {}
+            for (const v of filtered) {
+                const sid = sampleCol ? (v[sampleCol] || 'unknown') : 'all'
+                if (!sampleMap[sid]) sampleMap[sid] = []
+                sampleMap[sid].push(v)
+            }
+            const ssws = workbook.addWorksheet('Sample Summary', {views: [{state: 'frozen', ySplit: 1}]})
+            // Build columns: Sample, Total, then impact_group × threshold combos
+            const ssCols = [{header: 'Sample', key: 'sample', width: 16}, {header: 'Total', key: 'total', width: 10}]
+            for (const ig of ssImpactGroups) {
+                for (const t of ssThresholds) {
+                    const key = `${ig.label}__${t.label}`
+                    ssCols.push({header: `${ig.label} | ${t.label}`, key, width: 22})
+                }
+            }
+            ssws.columns = ssCols
+            const ssHeader = ssws.getRow(1)
+            ssHeader.eachCell(cell => {
+                cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin
+                cell.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true}
+            })
+            ssHeader.height = 36
+            let ssIdx = 0
+            for (const [sid, sampleVariants] of Object.entries(sampleMap)) {
+                const rowData = {sample: sid, total: sampleVariants.length}
+                for (const ig of ssImpactGroups) {
+                    const impactFiltered = impactCol
+                        ? sampleVariants.filter(v => ig.impacts.includes(String(v[impactCol] || '').toUpperCase()))
+                        : sampleVariants
+                    for (const t of ssThresholds) {
+                        const key = `${ig.label}__${t.label}`
+                        if (!freqCol) {
+                            rowData[key] = impactFiltered.length
+                        } else if (t.type === 'eq') {
+                            rowData[key] = impactFiltered.filter(v => Number(v[freqCol]) === t.value).length
+                        } else {
+                            rowData[key] = impactFiltered.filter(v => Number(v[freqCol]) < t.value).length
+                        }
+                    }
+                }
+                const row = ssws.addRow(rowData)
+                row.eachCell(cell => {
+                    cell.border = borderThin
+                    if (ssIdx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
+                })
+                ssIdx++
+            }
+            ssws.autoFilter = {from: 'A1', to: {row: 1, column: ssCols.length}}
         }
 
         // --- Send workbook as download --------------------------------------
