@@ -803,3 +803,33 @@ describe('UI: Sample QC tab', function () {
         expect(res.text).to.include('.qc-cell-critical')
     })
 })
+
+describe('UI: Collapsible filter groups', function () {
+    it('index.html includes collapse/expand all button', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('id="btn-toggle-all-filters"')
+        expect(res.text).to.include('Collapse All')
+    })
+
+    it('app.js includes collapsible filter group functions', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('toggleFilterGroup')
+        expect(res.text).to.include('setupFilterCollapseAll')
+        expect(res.text).to.include('updateCollapseAllButton')
+    })
+
+    it('app.js creates filter groups with toggle headers', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('filter-group-header')
+        expect(res.text).to.include('filter-group-content')
+        expect(res.text).to.include('toggle-icon')
+    })
+
+    it('styles.css includes collapsible filter group styles', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('.filter-group-header')
+        expect(res.text).to.include('.filter-group-content')
+        expect(res.text).to.include('.filter-group.collapsed')
+        expect(res.text).to.include('.toggle-icon')
+    })
+})

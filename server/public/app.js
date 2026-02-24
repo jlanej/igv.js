@@ -98,40 +98,101 @@
                 }
             }
         }
+
+        setupFilterCollapseAll()
     }
 
     function createFilterGroup(col, options) {
         const div = document.createElement('div')
         div.className = 'filter-group'
-        div.innerHTML = `<label>${formatLabel(col)}</label>
+        div.dataset.filterCol = col
+        div.innerHTML = `<div class="filter-group-header" role="button" tabindex="0" aria-expanded="true"><span class="toggle-icon">▼</span>${formatLabel(col)}</div>
+            <div class="filter-group-content">
             <select data-filter="${col}">
                 <option value="">All</option>
                 ${options.map(o => `<option value="${o}">${o}</option>`).join('')}
-            </select>`
+            </select>
+            </div>`
+        setupFilterGroupToggle(div)
         return div
     }
 
     function createCheckboxGroup(col, options) {
         const div = document.createElement('div')
         div.className = 'filter-group'
-        div.innerHTML = `<label>${formatLabel(col)}</label>
+        div.dataset.filterCol = col
+        div.innerHTML = `<div class="filter-group-header" role="button" tabindex="0" aria-expanded="true"><span class="toggle-icon">▼</span>${formatLabel(col)}</div>
+            <div class="filter-group-content">
             <div class="checkbox-group" data-checkbox-filter="${col}">
                 ${options.map(o => `<label class="checkbox-option">
                     <input type="checkbox" value="${escapeHtml(o)}"> ${escapeHtml(o)}
                 </label>`).join('')}
+            </div>
             </div>`
+        setupFilterGroupToggle(div)
         return div
     }
 
     function createRangeFilter(col) {
         const div = document.createElement('div')
         div.className = 'filter-group'
-        div.innerHTML = `<label>${formatLabel(col)}</label>
+        div.dataset.filterCol = col
+        div.innerHTML = `<div class="filter-group-header" role="button" tabindex="0" aria-expanded="true"><span class="toggle-icon">▼</span>${formatLabel(col)}</div>
+            <div class="filter-group-content">
             <div class="range-inputs">
                 <input type="number" step="any" placeholder="Min" data-filter="${col}_min">
                 <input type="number" step="any" placeholder="Max" data-filter="${col}_max">
+            </div>
             </div>`
+        setupFilterGroupToggle(div)
         return div
+    }
+
+    function setupFilterGroupToggle(groupEl) {
+        const header = groupEl.querySelector('.filter-group-header')
+        header.addEventListener('click', () => toggleFilterGroup(groupEl))
+        header.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                toggleFilterGroup(groupEl)
+            }
+        })
+    }
+
+    function toggleFilterGroup(groupEl) {
+        groupEl.classList.toggle('collapsed')
+        const header = groupEl.querySelector('.filter-group-header')
+        header.setAttribute('aria-expanded', !groupEl.classList.contains('collapsed'))
+        updateCollapseAllButton()
+    }
+
+    function setupFilterCollapseAll() {
+        const btn = document.getElementById('btn-toggle-all-filters')
+        if (!btn) return
+        btn.addEventListener('click', () => {
+            const groups = document.querySelectorAll('#filter-controls .filter-group')
+            const allCollapsed = [...groups].every(g => g.classList.contains('collapsed'))
+            groups.forEach(g => {
+                const header = g.querySelector('.filter-group-header')
+                if (allCollapsed) {
+                    g.classList.remove('collapsed')
+                    if (header) header.setAttribute('aria-expanded', 'true')
+                } else {
+                    g.classList.add('collapsed')
+                    if (header) header.setAttribute('aria-expanded', 'false')
+                }
+            })
+            updateCollapseAllButton()
+        })
+    }
+
+    function updateCollapseAllButton() {
+        const btn = document.getElementById('btn-toggle-all-filters')
+        if (!btn) return
+        const groups = document.querySelectorAll('#filter-controls .filter-group')
+        const allCollapsed = [...groups].every(g => g.classList.contains('collapsed'))
+        btn.textContent = allCollapsed ? '▶ Expand All' : '▼ Collapse All'
+        btn.setAttribute('aria-expanded', !allCollapsed)
     }
 
     function getActiveFilters() {
