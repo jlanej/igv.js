@@ -389,3 +389,48 @@ input[type="checkbox"] { margin-right: 4px; cursor: pointer; }
     padding: 6px 16px;
     font-size: 12px;
 }
+
+/* Sample QC table */
+#sample-qc-table-wrap {
+    overflow-x: auto;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+/* QC status badges */
+.qc-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+.qc-badge-pass { background: #eafaf1; color: var(--pass); }
+.qc-badge-warn { background: #fef9e7; color: var(--uncertain); }
+.qc-badge-fail { background: #fdedec; color: var(--fail); }
+.qc-badge-critical { background: #f5b7b1; color: #922b21; }
+.qc-badge-unknown { background: #f2f3f4; color: var(--pending); }
+
+/* QC warning indicator on variant table rows */
+.qc-warn-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+.qc-warn-pass { background: var(--pass); }
+.qc-warn-warn { background: var(--uncertain); }
+.qc-warn-fail { background: var(--fail); }
+.qc-warn-critical { background: #922b21; }
+
+/* QC metric cell coloring in QC table */
+td.qc-cell-pass { color: var(--pass); }
+td.qc-cell-warn { color: var(--uncertain); font-weight: 600; }
+td.qc-cell-fail { color: var(--fail); font-weight: 600; }
+td.qc-cell-critical { color: #922b21; font-weight: 700; background: #fdedec; }

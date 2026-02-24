@@ -58,6 +58,7 @@
                 <button class="tab active" data-tab="variants">Variant Table</button>
                 <button class="tab" data-tab="summary">Gene Summary</button>
                 <button class="tab" data-tab="sample-summary">Sample Summary</button>
+                <button class="tab" data-tab="sample-qc" id="tab-btn-sample-qc" style="display:none;">Sample QC</button>
             </div>
 
             <!-- Variant table tab -->
@@ -107,6 +108,17 @@
                     <table id="sample-summary-table">
                         <thead><tr id="sample-summary-header"></tr></thead>
                         <tbody id="sample-summary-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Sample QC tab -->
+            <div id="tab-sample-qc" class="tab-content">
+                <div id="sample-qc-info"></div>
+                <div id="sample-qc-table-wrap">
+                    <table id="sample-qc-table">
+                        <thead><tr id="sample-qc-header"></tr></thead>
+                        <tbody id="sample-qc-body"></tbody>
                     </table>
                 </div>
             </div>

@@ -31,6 +31,7 @@ const VARIANTS_FILE = getArg('variants', path.join(__dirname, 'example_data', 'v
 const DATA_DIR = getArg('data-dir', getArg('data_dir', path.join(__dirname, 'example_data')))
 const CURATION_FILE = getArg('curation-file', VARIANTS_FILE.replace(/\.tsv$/, '.curation.json'))
 const FILTERS_FILE = getArg('filters-file', VARIANTS_FILE.replace(/\.tsv$/, '.filters.json'))
+const SAMPLE_QC_FILE = getArg('sample-qc', null)
 const GENOME = getArg('genome', 'hg38')
 const HOST = getArg('host', '127.0.0.1')
 
@@ -52,6 +53,22 @@ const SAMPLE_SUMMARY_IMPACT_GROUPS = [
     {label: 'HIGH||MODERATE', impacts: ['HIGH', 'MODERATE']},
     {label: 'HIGH||MODERATE||LOW', impacts: ['HIGH', 'MODERATE', 'LOW']}
 ]
+
+// QC metric thresholds – keyed by metric column name.  Each entry defines
+// ordered tiers evaluated top-to-bottom; the first matching tier wins.
+// Tiers use `max` (exclusive upper bound) or `min` (inclusive lower bound).
+const QC_METRIC_THRESHOLDS = {
+    freemix: [
+        {label: 'pass',    max: 0.01,  description: 'Clean (≤1%)'},
+        {label: 'warn',    max: 0.03,  description: 'Caution (1–3%) – apply stricter filters'},
+        {label: 'fail',    max: 0.05,  description: 'Fail (3–5%) – exclude from DNM detection'},
+        {label: 'critical', min: 0.05, description: 'Hard fail (≥5%) – results unreliable'}
+    ]
+}
+
+let sampleQcData = []      // raw rows from the QC TSV
+let sampleQcColumns = []   // header columns of the QC TSV
+let sampleQcTrios = []     // aggregated trio-level QC records
 
 /**
  * Generate a stable key for a variant based on genomic coordinates and
@@ -173,8 +190,132 @@ function saveCuration() {
 }
 
 // ---------------------------------------------------------------------------
+// Sample QC loading & aggregation
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify a numeric QC value against the ordered threshold tiers for a
+ * given metric.  Returns the tier label ('pass', 'warn', 'fail', 'critical')
+ * or 'unknown' when the metric has no configured thresholds.
+ */
+function classifyQcValue(metric, value) {
+    const tiers = QC_METRIC_THRESHOLDS[metric]
+    if (!tiers) return 'unknown'
+    const num = Number(value)
+    if (isNaN(num)) return 'unknown'
+    for (const tier of tiers) {
+        if (tier.max !== undefined && num < tier.max) return tier.label
+        if (tier.min !== undefined && num >= tier.min) return tier.label
+    }
+    return 'unknown'
+}
+
+/**
+ * Load and aggregate sample QC data from a TSV file.
+ *
+ * Expected columns: trio_id, role, sample_id, plus one or more numeric
+ * QC metric columns (e.g. freemix, mean_coverage).  The `role` column
+ * should contain values like 'proband', 'mother', 'father'.
+ *
+ * Aggregation groups rows by trio_id and pivots per-role metrics into a
+ * single record per trio with worst-case status across members.
+ */
+function loadSampleQc(filePath) {
+    if (!filePath || !fs.existsSync(filePath)) {
+        if (filePath) log.warn(`Sample QC file not found: ${filePath}`)
+        return
+    }
+
+    const raw = fs.readFileSync(filePath, 'utf-8')
+    const lines = raw.trim().split('\n')
+    if (lines.length < 2) {
+        log.warn('Sample QC file must have a header line and at least one data line.')
+        return
+    }
+
+    sampleQcColumns = lines[0].split('\t').map(c => c.trim())
+    const required = ['trio_id', 'role', 'sample_id']
+    for (const r of required) {
+        if (!sampleQcColumns.includes(r)) {
+            log.error(`Sample QC TSV missing required column: ${r}`)
+            return
+        }
+    }
+
+    // Identify QC metric columns (everything that is not a required column)
+    const metricCols = sampleQcColumns.filter(c => !required.includes(c))
+
+    sampleQcData = lines.slice(1).map(line => {
+        const cols = line.split('\t')
+        const obj = {}
+        sampleQcColumns.forEach((h, i) => {
+            let val = (cols[i] || '').trim()
+            if (metricCols.includes(h)) {
+                const num = Number(val)
+                if (!isNaN(num) && val !== '') val = num
+            }
+            obj[h] = val
+        })
+        return obj
+    })
+
+    // Aggregate by trio_id
+    const trioMap = {}
+    for (const row of sampleQcData) {
+        const tid = row.trio_id
+        if (!tid) continue
+        if (!trioMap[tid]) trioMap[tid] = {trio_id: tid, members: {}, metrics: {}}
+        const role = (row.role || '').toLowerCase()
+        trioMap[tid].members[role] = {sample_id: row.sample_id}
+        for (const m of metricCols) {
+            if (!trioMap[tid].metrics[m]) trioMap[tid].metrics[m] = {}
+            trioMap[tid].metrics[m][role] = row[m]
+        }
+    }
+
+    // Compute worst-case status per metric across the trio
+    sampleQcTrios = Object.values(trioMap).map(trio => {
+        const statuses = {}
+        const worstOverall = {label: 'pass', rank: 0}
+        const statusRank = {pass: 0, warn: 1, fail: 2, critical: 3, unknown: -1}
+
+        for (const m of metricCols) {
+            const vals = trio.metrics[m] || {}
+            let worstLabel = 'pass'
+            let worstRank = 0
+            for (const [role, val] of Object.entries(vals)) {
+                const label = classifyQcValue(m, val)
+                const rank = statusRank[label] !== undefined ? statusRank[label] : -1
+                if (rank > worstRank) {
+                    worstRank = rank
+                    worstLabel = label
+                }
+            }
+            statuses[m] = worstLabel
+            if ((statusRank[worstLabel] || 0) > worstOverall.rank) {
+                worstOverall.label = worstLabel
+                worstOverall.rank = statusRank[worstLabel] || 0
+            }
+        }
+        return {...trio, statuses, qc_status: worstOverall.label}
+    })
+
+    log.info(`Loaded ${sampleQcData.length} QC records (${sampleQcTrios.length} trios) from ${filePath}`)
+}
+
+// ---------------------------------------------------------------------------
 // Filtering helper
 // ---------------------------------------------------------------------------
+
+/**
+ * Build a lookup from trio_id → aggregated QC record for fast variant
+ * annotation.  Returns an empty map when no QC data is loaded.
+ */
+function getTrioQcMap() {
+    if (sampleQcTrios.length === 0) return new Map()
+    return new Map(sampleQcTrios.map(t => [t.trio_id, t]))
+}
+
 function applyFilters(query) {
     let filtered = [...variants]
 
@@ -261,7 +402,9 @@ app.get('/api/config', (_req, res) => {
         genome: GENOME,
         columns: headerColumns,
         totalVariants: variants.length,
-        dataDir: '/data'
+        dataDir: '/data',
+        hasSampleQc: sampleQcTrios.length > 0,
+        qcMetricThresholds: QC_METRIC_THRESHOLDS
     })
 })
 
@@ -273,12 +416,22 @@ app.get('/api/variants', (req, res) => {
     const start = (page - 1) * perPage
     const paged = filtered.slice(start, start + perPage)
 
+    // Annotate with QC warnings when QC data is available
+    const trioQc = getTrioQcMap()
+    const linkCol = ['trio_id', 'sample_id'].find(c => headerColumns.includes(c))
+    const annotated = paged.map(v => {
+        if (trioQc.size === 0 || !linkCol) return v
+        const qc = trioQc.get(v[linkCol])
+        if (!qc) return v
+        return {...v, _qc_status: qc.qc_status, _qc_statuses: qc.statuses}
+    })
+
     res.json({
         total: filtered.length,
         page,
         per_page: perPage,
         pages: Math.ceil(filtered.length / perPage),
-        data: paged
+        data: annotated
     })
 })
 
@@ -380,6 +533,30 @@ app.get('/api/filters', (_req, res) => {
     // Add curation status
     filters['curation_status'] = ['pending', 'pass', 'fail', 'uncertain']
     res.json({categorical: filters, numeric: numericColumns})
+})
+
+// Sample QC endpoint – returns trio-aggregated QC data with per-metric
+// status classifications and worst-case trio status.
+app.get('/api/sample-qc', (_req, res) => {
+    if (sampleQcTrios.length === 0) {
+        return res.json({
+            loaded: false,
+            message: 'No sample QC data loaded. Use --sample-qc <path> to load a QC file.',
+            trios: [],
+            metric_columns: [],
+            thresholds: QC_METRIC_THRESHOLDS
+        })
+    }
+
+    const metricCols = sampleQcColumns.filter(c => !['trio_id', 'role', 'sample_id'].includes(c))
+    res.json({
+        loaded: true,
+        total_trios: sampleQcTrios.length,
+        total_samples: sampleQcData.length,
+        metric_columns: metricCols,
+        thresholds: QC_METRIC_THRESHOLDS,
+        trios: sampleQcTrios
+    })
 })
 
 // Saved filter configuration
@@ -809,6 +986,57 @@ app.post('/api/export/xlsx', async (req, res) => {
             ssws.autoFilter = {from: 'A1', to: {row: 1, column: ssCols.length}}
         }
 
+        // --- Sample QC worksheet --------------------------------------------
+        if (sampleQcTrios.length > 0) {
+            const metricCols = sampleQcColumns.filter(c => !['trio_id', 'role', 'sample_id'].includes(c))
+            const roles = ['proband', 'mother', 'father']
+            const qcws = workbook.addWorksheet('Sample QC', {views: [{state: 'frozen', ySplit: 1}]})
+
+            // Build columns: Trio ID, QC Status, then role × metric combos
+            const qcColDefs = [
+                {header: 'Trio ID', key: 'trio_id', width: 14},
+                {header: 'QC Status', key: 'qc_status', width: 12}
+            ]
+            for (const role of roles) {
+                qcColDefs.push({header: `${role} Sample`, key: `${role}_sample_id`, width: 16})
+                for (const m of metricCols) {
+                    qcColDefs.push({header: `${role} ${m}`, key: `${role}_${m}`, width: 14})
+                }
+            }
+            qcws.columns = qcColDefs
+
+            const qcHeader = qcws.getRow(1)
+            qcHeader.eachCell(cell => {
+                cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin
+                cell.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true}
+            })
+            qcHeader.height = 30
+
+            const qcStatusColors = {
+                pass: 'FF27AE60', warn: 'FFF39C12', fail: 'FFE74C3C', critical: 'FFC0392B', unknown: 'FF95A5A6'
+            }
+
+            sampleQcTrios.forEach((trio, idx) => {
+                const rowData = {trio_id: trio.trio_id, qc_status: trio.qc_status}
+                for (const role of roles) {
+                    rowData[`${role}_sample_id`] = (trio.members[role] && trio.members[role].sample_id) || ''
+                    for (const m of metricCols) {
+                        rowData[`${role}_${m}`] = (trio.metrics[m] && trio.metrics[m][role]) != null ? trio.metrics[m][role] : ''
+                    }
+                }
+                const row = qcws.addRow(rowData)
+                row.eachCell((cell, colNumber) => {
+                    cell.border = borderThin
+                    if (idx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
+                })
+                // Color QC status cell
+                const statusCell = row.getCell(2)
+                const sColor = qcStatusColors[trio.qc_status] || qcStatusColors.unknown
+                statusCell.font = {bold: true, color: {argb: sColor}}
+            })
+            qcws.autoFilter = {from: 'A1', to: {row: 1, column: qcColDefs.length}}
+        }
+
         // --- Send workbook as download --------------------------------------
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         res.setHeader('Content-Disposition', 'attachment; filename="variants_export.xlsx"')
@@ -824,6 +1052,7 @@ app.post('/api/export/xlsx', async (req, res) => {
 // Start server (only when run directly, not when required for testing)
 // ---------------------------------------------------------------------------
 loadVariants()
+loadSampleQc(SAMPLE_QC_FILE)
 
 if (require.main === module) {
     app.listen(PORT, HOST, () => {
@@ -832,6 +1061,9 @@ if (require.main === module) {
         log.info(`Variants:   ${variants.length} loaded`)
         log.info(`Genome:     ${GENOME}`)
         log.info(`Data dir:   ${DATA_DIR}`)
+        if (sampleQcTrios.length > 0) {
+            log.info(`Sample QC:  ${sampleQcTrios.length} trios loaded`)
+        }
     })
 }
 
