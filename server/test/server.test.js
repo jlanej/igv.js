@@ -856,3 +856,77 @@ describe('UI: Collapsible filter groups', function () {
         expect(res.text).to.include('.toggle-icon')
     })
 })
+
+describe('UI: Collapsible sidebar', function () {
+    it('index.html includes sidebar collapse toggle button', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('id="btn-collapse-sidebar"')
+    })
+
+    it('app.js includes sidebar toggle functions', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('setupSidebarToggle')
+        expect(res.text).to.include('toggleSidebar')
+        expect(res.text).to.include('sidebar-collapsed')
+    })
+
+    it('styles.css includes sidebar collapse styles', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('#btn-collapse-sidebar')
+        expect(res.text).to.include('.sidebar-collapsed')
+    })
+
+    it('index.html documents sidebar toggle shortcut', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('Toggle sidebar')
+        expect(res.text).to.include('Ctrl+B')
+    })
+})
+
+describe('UI: Display mode controller', function () {
+    it('index.html includes display mode select', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('id="display-mode-select"')
+        expect(res.text).to.include('SQUISHED')
+        expect(res.text).to.include('EXPANDED')
+        expect(res.text).to.include('COLLAPSED')
+    })
+
+    it('app.js includes display mode control setup', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('setupDisplayModeControl')
+        expect(res.text).to.include('display-mode-select')
+    })
+
+    it('app.js applies selected display mode to new tracks', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include("const displayMode = sel ? sel.value : 'SQUISHED'")
+        expect(res.text).to.include('displayMode: displayMode')
+    })
+
+    it('styles.css includes display mode control styles', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('#igv-controls')
+        expect(res.text).to.include('.display-mode-label')
+    })
+})
+
+describe('UI: IGV scroll-into-view on variant selection', function () {
+    it('app.js scrolls IGV section into view on variant selection', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include("igvSection.scrollIntoView")
+        expect(res.text).to.include("block: 'nearest'")
+    })
+
+    it('app.js scrolls active row into view within table', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('activeRow.scrollIntoView')
+    })
+})
+
+describe('UI: Increased IGV viewer height', function () {
+    it('styles.css sets IGV min-height to 400px', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('min-height: 400px')
+    })
+})

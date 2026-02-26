@@ -20,6 +20,9 @@
     </header>
 
     <div id="app">
+        <!-- Sidebar collapse toggle -->
+        <button id="btn-collapse-sidebar" class="btn btn-sm" title="Toggle filter sidebar (Ctrl+B)">◀</button>
+
         <!-- Filter sidebar -->
         <aside id="filter-panel">
             <div class="filter-heading">
@@ -141,6 +144,14 @@
             <div id="igv-section">
                 <div id="igv-header">
                     <h2 id="igv-title">Select a variant to view alignments</h2>
+                    <div id="igv-controls">
+                        <label class="display-mode-label" for="display-mode-select">Display:</label>
+                        <select id="display-mode-select" class="btn btn-sm" title="Set track display mode for all alignment tracks">
+                            <option value="SQUISHED" selected>Squished</option>
+                            <option value="EXPANDED">Expanded</option>
+                            <option value="COLLAPSED">Collapsed</option>
+                        </select>
+                    </div>
                     <div id="igv-curation" style="display:none;">
                         <button class="btn curation-pass" data-status="pass">✓ Pass</button>
                         <button class="btn curation-fail" data-status="fail">✗ Fail</button>
@@ -168,6 +179,7 @@
         <div class="shortcut-row"><span>Fail &amp; advance</span> <kbd>F</kbd></div>
         <div class="shortcut-row"><span>Uncertain &amp; advance</span> <kbd>U</kbd></div>
         <div class="shortcut-row"><span>Toggle shortcuts</span> <kbd>?</kbd></div>
+        <div class="shortcut-row"><span>Toggle sidebar</span> <kbd>Ctrl+B</kbd></div>
     </div>
 
     <script src="app.js"></script>
