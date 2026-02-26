@@ -86,7 +86,7 @@ function variantKey(v) {
  * Compute mean and median for an array of numbers.
  */
 function computeStats(values) {
-    if (values.length === 0) return {mean: 0, median: 0}
+    if (values.length === 0) return {mean: 0, median: 0, sd: 0}
     const sum = values.reduce((a, b) => a + b, 0)
     const mean = Math.round((sum / values.length) * 100) / 100
     const sorted = [...values].sort((a, b) => a - b)
@@ -94,7 +94,9 @@ function computeStats(values) {
     const median = sorted.length % 2 === 0
         ? Math.round(((sorted[mid - 1] + sorted[mid]) / 2) * 100) / 100
         : sorted[mid]
-    return {mean, median}
+    const variance = values.reduce((acc, v) => acc + (v - mean) ** 2, 0) / values.length
+    const sd = Math.round(Math.sqrt(variance) * 100) / 100
+    return {mean, median, sd}
 }
 
 function loadVariants() {
@@ -750,7 +752,7 @@ app.use('/api/export/xlsx', express.json({limit: '50mb'}))
 
 app.post('/api/export/xlsx', async (req, res) => {
     try {
-        const {variantIds, screenshots} = req.body || {}
+        const {variantIds, screenshots, filters: clientFilters} = req.body || {}
 
         // Determine which variants to include
         let filtered
@@ -782,6 +784,12 @@ app.post('/api/export/xlsx', async (req, res) => {
             fail: 'FFE74C3C',
             uncertain: 'FFF39C12',
             pending: 'FF95A5A6'
+        }
+        const statusRowFills = {
+            pass: {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFD5F5E3'}},
+            fail: {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFFADBD8'}},
+            uncertain: {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFFDEBD0'}},
+            pending: null
         }
 
         // --- Main "Variants" worksheet --------------------------------------
@@ -844,18 +852,23 @@ app.post('/api/export/xlsx', async (req, res) => {
             const dataRow = ws.addRow(row)
             const excelRowNum = rowIdx + 2  // 1-based, row 1 is header
 
+            // Determine row fill based on curation status
+            const rowFill = statusRowFills[v.curation_status] || null
+
             // Style data cells
             dataRow.eachCell((cell, colNumber) => {
                 cell.border = borderThin
                 cell.alignment = {vertical: 'middle', wrapText: mainCols[colNumber - 1] === 'curation_note'}
 
-                // Alternate row shading
-                if (rowIdx % 2 === 1) {
+                // Color entire row by curation status; fall back to alternate shading
+                if (rowFill) {
+                    cell.fill = rowFill
+                } else if (rowIdx % 2 === 1) {
                     cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
                 }
             })
 
-            // Color the curation status cell
+            // Bold the curation status cell text
             const statusColIdx = mainCols.indexOf('curation_status') + 1
             if (statusColIdx > 0) {
                 const statusCell = dataRow.getCell(statusColIdx)
@@ -1026,6 +1039,9 @@ app.post('/api/export/xlsx', async (req, res) => {
                 cell.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true}
             })
             ssHeader.height = 36
+
+            // Collect per-sample row data for cohort stats
+            const sampleRows = []
             let ssIdx = 0
             for (const [sid, sampleVariants] of Object.entries(sampleMap)) {
                 const rowData = {sample: sid, total: sampleVariants.length}
@@ -1044,6 +1060,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                         }
                     }
                 }
+                sampleRows.push(rowData)
                 const row = ssws.addRow(rowData)
                 row.eachCell(cell => {
                     cell.border = borderThin
@@ -1052,6 +1069,33 @@ app.post('/api/export/xlsx', async (req, res) => {
                 ssIdx++
             }
             ssws.autoFilter = {from: 'A1', to: {row: 1, column: ssCols.length}}
+
+            // Cohort statistics rows (Mean / Median / Std Dev)
+            if (sampleRows.length > 0) {
+                // Blank separator row
+                ssws.addRow({})
+
+                const numericKeys = ['total', ...ssCols.slice(2).map(c => c.key)]
+                const statsFill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFEAF2F8'}}
+                const statsFont = {bold: true, size: 11}
+
+                for (const statLabel of ['Mean', 'Median', 'Std Dev']) {
+                    const statRow = {sample: statLabel}
+                    for (const key of numericKeys) {
+                        const values = sampleRows.map(r => r[key] || 0)
+                        const stats = computeStats(values)
+                        if (statLabel === 'Mean') statRow[key] = stats.mean
+                        else if (statLabel === 'Median') statRow[key] = stats.median
+                        else statRow[key] = stats.sd
+                    }
+                    const row = ssws.addRow(statRow)
+                    row.eachCell(cell => {
+                        cell.border = borderThin
+                        cell.fill = statsFill
+                        cell.font = statsFont
+                    })
+                }
+            }
         }
 
         // --- Sample QC worksheet --------------------------------------------
@@ -1103,6 +1147,31 @@ app.post('/api/export/xlsx', async (req, res) => {
                 statusCell.font = {bold: true, color: {argb: sColor}}
             })
             qcws.autoFilter = {from: 'A1', to: {row: 1, column: qcColDefs.length}}
+        }
+
+        // --- Applied Filters worksheet --------------------------------------
+        if (clientFilters && typeof clientFilters === 'object' && Object.keys(clientFilters).length > 0) {
+            const fws = workbook.addWorksheet('Applied Filters', {views: [{state: 'frozen', ySplit: 1}]})
+            fws.columns = [
+                {header: 'Filter', key: 'filter', width: 24},
+                {header: 'Value', key: 'value', width: 40}
+            ]
+            const fHeader = fws.getRow(1)
+            fHeader.eachCell(cell => {
+                cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin
+                cell.alignment = {vertical: 'middle', horizontal: 'center'}
+            })
+            fHeader.height = 24
+            let fIdx = 0
+            for (const [key, value] of Object.entries(clientFilters)) {
+                const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+                const row = fws.addRow({filter: label, value: String(value)})
+                row.eachCell(cell => {
+                    cell.border = borderThin
+                    if (fIdx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
+                })
+                fIdx++
+            }
         }
 
         // --- Send workbook as download --------------------------------------
