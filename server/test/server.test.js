@@ -529,11 +529,12 @@ describe('API /api/export/xlsx', function () {
 describe('XLSX Applied Filters sheet', function () {
     it('includes Applied Filters sheet when filters provided', async function () {
         this.timeout(10000)
+        const sentFilters = {impact: 'HIGH', frequency_max: '0.001'}
         const res = await request(app)
             .post('/api/export/xlsx')
             .send({
                 variantIds: [0, 1, 2],
-                filters: {impact: 'HIGH', frequency_max: '0.001'}
+                filters: sentFilters
             })
             .buffer(true)
             .parse((res, callback) => {
@@ -552,8 +553,8 @@ describe('XLSX Applied Filters sheet', function () {
         filtersSheet.getRow(1).eachCell(cell => fHeader.push(cell.value))
         expect(fHeader).to.include('Filter')
         expect(fHeader).to.include('Value')
-        // Should have 2 filter rows
-        expect(filtersSheet.rowCount).to.equal(3) // header + 2 data rows
+        // Should have one row per filter + header
+        expect(filtersSheet.rowCount).to.equal(Object.keys(sentFilters).length + 1)
         // Check filter values
         const filterValues = []
         for (let r = 2; r <= filtersSheet.rowCount; r++) {
