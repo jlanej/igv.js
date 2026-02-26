@@ -93,6 +93,15 @@ required; all others are treated as filterable annotations.
 | `mother_index`    | Path to mother index file                            |
 | `father_file`     | Path to father BAM/CRAM                              |
 | `father_index`    | Path to father index file                            |
+| `child_vcf`       | Path to child VCF file (.vcf.gz)                     |
+| `child_vcf_index` | Path to child VCF index file (.vcf.gz.tbi)           |
+| `mother_vcf`      | Path to mother VCF file (.vcf.gz)                    |
+| `mother_vcf_index`| Path to mother VCF index file (.vcf.gz.tbi)          |
+| `father_vcf`      | Path to father VCF file (.vcf.gz)                    |
+| `father_vcf_index`| Path to father VCF index file (.vcf.gz.tbi)          |
+| `child_vcf_id`    | Child sample ID in the VCF                           |
+| `mother_vcf_id`   | Mother sample ID in the VCF                          |
+| `father_vcf_id`   | Father sample ID in the VCF                          |
 
 Additional columns (e.g. `cadd_score`, `clinvar`, `gnomad_af`) are
 automatically displayed and made filterable.
@@ -106,6 +115,21 @@ Paths in the `*_file` and `*_index` columns can be:
 
 If index files are co-located with the alignment files and follow standard
 naming (`.bam.bai`, `.cram.crai`), the index columns can be omitted.
+
+### Per-Trio VCF Tracks
+
+Each trio can have its own VCF file specified via the `*_vcf`, `*_vcf_index`,
+and `*_vcf_id` columns.  When a variant row contains these columns, a VCF
+track is loaded in IGV alongside the alignment tracks.  The `*_vcf_id` columns
+identify which sample in the multi-sample VCF corresponds to each family
+member.
+
+When all three members share the same VCF file (common for multi-sample trio
+VCFs), the file is de-duplicated and loaded as a single track annotated with
+all sample roles.
+
+If no per-variant VCF columns are present, the global `--vcf` CLI flag is
+used as a fallback.
 
 ## Sample QC File (optional)
 

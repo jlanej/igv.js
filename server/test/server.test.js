@@ -1014,6 +1014,43 @@ describe('UI: VCF track support', function () {
         expect(res.text).to.include("type: 'variant'")
         expect(res.text).to.include("format: 'vcf'")
     })
+
+    it('app.js supports per-variant VCF columns', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('_vcf`')
+        expect(res.text).to.include('_vcf_index`')
+        expect(res.text).to.include('_vcf_id`')
+        expect(res.text).to.include('vcfMap')
+    })
+})
+
+describe('Per-trio VCF columns in variant data', function () {
+    it('config columns include VCF-related columns', async function () {
+        const res = await request(app).get('/api/config').expect(200)
+        const cols = res.body.columns
+        expect(cols).to.include('child_vcf')
+        expect(cols).to.include('mother_vcf')
+        expect(cols).to.include('father_vcf')
+        expect(cols).to.include('child_vcf_index')
+        expect(cols).to.include('mother_vcf_index')
+        expect(cols).to.include('father_vcf_index')
+        expect(cols).to.include('child_vcf_id')
+        expect(cols).to.include('mother_vcf_id')
+        expect(cols).to.include('father_vcf_id')
+    })
+
+    it('variants contain VCF file and sample ID data', async function () {
+        const res = await request(app).get('/api/variants').expect(200)
+        const v = res.body.data[0]
+        expect(v).to.have.property('child_vcf')
+        expect(v).to.have.property('mother_vcf')
+        expect(v).to.have.property('father_vcf')
+        expect(v).to.have.property('child_vcf_id')
+        expect(v).to.have.property('mother_vcf_id')
+        expect(v).to.have.property('father_vcf_id')
+        expect(v.child_vcf).to.match(/\.vcf\.gz$/)
+        expect(v.child_vcf_index).to.match(/\.vcf\.gz\.tbi$/)
+    })
 })
 
 describe('UI: Gene summary Samples column', function () {
