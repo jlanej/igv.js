@@ -127,6 +127,24 @@ class CramReader {
         return refId
     }
 
+    /**
+     * Attempt to get records for a range, retrying once on MD5 checksum errors which can be caused by transient
+     * issues with concurrent reference sequence fetching.
+     */
+    async #getRecordsWithRetry(chrIdx, bpStart, bpEnd) {
+        try {
+            return await this.indexedCramFile.getRecordsForRange(chrIdx, bpStart, bpEnd)
+        } catch (error) {
+            if (error.message && error.message.includes("MD5")) {
+                console.warn("CRAM MD5 checksum mismatch, retrying: " + error.message)
+                // Clear the feature cache to allow a fresh fetch on retry
+                this.cramFile.featureCache.clear()
+                return await this.indexedCramFile.getRecordsForRange(chrIdx, bpStart, bpEnd)
+            }
+            throw error
+        }
+    }
+
 
     async readAlignments(chr, bpStart, bpEnd) {
 
@@ -142,7 +160,7 @@ class CramReader {
         } else {
 
             try {
-                const records = await this.indexedCramFile.getRecordsForRange(chrIdx, bpStart, bpEnd)
+                const records = await this.#getRecordsWithRetry(chrIdx, bpStart, bpEnd)
 
                 for (let record of records) {
 
