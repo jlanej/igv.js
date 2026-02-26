@@ -1195,9 +1195,7 @@
         sel.addEventListener('change', () => {
             const mode = sel.value
             if (!igvBrowser) return
-            const tracks = igvBrowser.trackViews
-                ? igvBrowser.trackViews.map(tv => tv.track).filter(t => t && t.type === 'alignment')
-                : []
+            const tracks = (igvBrowser.trackViews?.map(tv => tv.track).filter(t => t?.type === 'alignment')) ?? []
             tracks.forEach(t => {
                 t.displayMode = mode
             })
