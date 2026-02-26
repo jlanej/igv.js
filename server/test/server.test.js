@@ -526,6 +526,230 @@ describe('API /api/export/xlsx', function () {
     })
 })
 
+describe('XLSX Applied Filters sheet', function () {
+    it('includes Applied Filters sheet when filters provided', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1, 2],
+                filters: {impact: 'HIGH', frequency_max: '0.001'}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const filtersSheet = workbook.getWorksheet('Applied Filters')
+        expect(filtersSheet).to.exist
+        const fHeader = []
+        filtersSheet.getRow(1).eachCell(cell => fHeader.push(cell.value))
+        expect(fHeader).to.include('Filter')
+        expect(fHeader).to.include('Value')
+        // Should have 2 filter rows
+        expect(filtersSheet.rowCount).to.equal(3) // header + 2 data rows
+        // Check filter values
+        const filterValues = []
+        for (let r = 2; r <= filtersSheet.rowCount; r++) {
+            filterValues.push(filtersSheet.getRow(r).getCell(1).value)
+        }
+        expect(filterValues).to.include('Impact')
+        expect(filterValues).to.include('Frequency Max')
+    })
+
+    it('omits Applied Filters sheet when no filters provided', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1]})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+        expect(workbook.getWorksheet('Applied Filters')).to.be.undefined
+    })
+})
+
+describe('XLSX full row coloring by curation status', function () {
+    after(function () {
+        if (fs.existsSync(curationFile)) fs.unlinkSync(curationFile)
+    })
+
+    it('colors entire row green for pass status', async function () {
+        this.timeout(10000)
+        // First curate variant 0 as pass
+        await request(app)
+            .put('/api/variants/0/curate')
+            .send({status: 'pass'})
+            .expect(200)
+
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0]})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const ws = workbook.getWorksheet('Variants')
+        const dataRow = ws.getRow(2) // first data row
+        // Check that a non-status cell has green fill (pass = FFD5F5E3)
+        const firstCell = dataRow.getCell(1)
+        expect(firstCell.fill).to.exist
+        expect(firstCell.fill.fgColor).to.exist
+        expect(firstCell.fill.fgColor.argb).to.equal('FFD5F5E3')
+    })
+
+    it('colors entire row red for fail status', async function () {
+        this.timeout(10000)
+        await request(app)
+            .put('/api/variants/1/curate')
+            .send({status: 'fail'})
+            .expect(200)
+
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [1]})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const ws = workbook.getWorksheet('Variants')
+        const dataRow = ws.getRow(2)
+        const firstCell = dataRow.getCell(1)
+        expect(firstCell.fill).to.exist
+        expect(firstCell.fill.fgColor).to.exist
+        expect(firstCell.fill.fgColor.argb).to.equal('FFFADBD8')
+    })
+
+    it('colors entire row orange for uncertain status', async function () {
+        this.timeout(10000)
+        await request(app)
+            .put('/api/variants/2/curate')
+            .send({status: 'uncertain'})
+            .expect(200)
+
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [2]})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const ws = workbook.getWorksheet('Variants')
+        const dataRow = ws.getRow(2)
+        const firstCell = dataRow.getCell(1)
+        expect(firstCell.fill).to.exist
+        expect(firstCell.fill.fgColor).to.exist
+        expect(firstCell.fill.fgColor.argb).to.equal('FFFDEBD0')
+    })
+})
+
+describe('XLSX Sample Summary cohort statistics', function () {
+    it('includes Mean, Median, and Std Dev rows in Sample Summary', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const sampleSummary = workbook.getWorksheet('Sample Summary')
+        expect(sampleSummary).to.exist
+
+        // Collect all values from the Sample column
+        const sampleLabels = []
+        sampleSummary.eachRow((row, rowNumber) => {
+            if (rowNumber > 1) {
+                const val = row.getCell(1).value
+                if (val) sampleLabels.push(val)
+            }
+        })
+        expect(sampleLabels).to.include('Mean')
+        expect(sampleLabels).to.include('Median')
+        expect(sampleLabels).to.include('Std Dev')
+    })
+
+    it('cohort stats rows have numeric values', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const sampleSummary = workbook.getWorksheet('Sample Summary')
+        // Find the Mean row (should be after sample data + blank row)
+        let meanRowNum = null
+        sampleSummary.eachRow((row, rowNumber) => {
+            if (row.getCell(1).value === 'Mean') meanRowNum = rowNumber
+        })
+        expect(meanRowNum).to.be.a('number')
+        // Total column (col 2) should be a number
+        const totalMean = sampleSummary.getRow(meanRowNum).getCell(2).value
+        expect(totalMean).to.be.a('number')
+    })
+})
+
+describe('API /api/sample-summary includes sd in cohort_summary', function () {
+    it('cohort_summary cells have sd field', async function () {
+        const res = await request(app).get('/api/sample-summary').expect(200)
+        const cs = res.body.cohort_summary
+        const firstGroup = Object.keys(cs)[0]
+        const firstThreshold = Object.keys(cs[firstGroup])[0]
+        expect(cs[firstGroup][firstThreshold]).to.have.property('sd')
+        expect(cs[firstGroup][firstThreshold].sd).to.be.a('number')
+    })
+})
+
 describe('Stable curation keys', function () {
     after(function () {
         if (fs.existsSync(curationFile)) fs.unlinkSync(curationFile)

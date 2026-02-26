@@ -1198,7 +1198,7 @@
             const xlsxRes = await fetch('/api/export/xlsx', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({variantIds, screenshots})
+                body: JSON.stringify({variantIds, screenshots, filters})
             })
 
             if (!xlsxRes.ok) {
