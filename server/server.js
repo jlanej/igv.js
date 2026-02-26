@@ -44,9 +44,7 @@ let headerColumns = []
 // Shared sample-summary configuration
 const SAMPLE_SUMMARY_THRESHOLDS = [
     {label: 'freq = 0', value: 0, type: 'eq'},
-    {label: 'freq < 0.0001', value: 0.0001, type: 'lt'},
-    {label: 'freq < 0.001', value: 0.001, type: 'lt'},
-    {label: 'freq < 0.01', value: 0.01, type: 'lt'}
+    {label: 'all', value: null, type: 'all'}
 ]
 const SAMPLE_SUMMARY_IMPACT_GROUPS = [
     {label: 'HIGH', impacts: ['HIGH']},
@@ -80,6 +78,21 @@ function variantKey(v) {
     if (v.trio_id) key += `:${v.trio_id}`
     else if (v.sample_id) key += `:${v.sample_id}`
     return key
+}
+
+/**
+ * Compute mean and median for an array of numbers.
+ */
+function computeStats(values) {
+    if (values.length === 0) return {mean: 0, median: 0}
+    const sum = values.reduce((a, b) => a + b, 0)
+    const mean = Math.round((sum / values.length) * 100) / 100
+    const sorted = [...values].sort((a, b) => a - b)
+    const mid = Math.floor(sorted.length / 2)
+    const median = sorted.length % 2 === 0
+        ? Math.round(((sorted[mid - 1] + sorted[mid]) / 2) * 100) / 100
+        : sorted[mid]
+    return {mean, median}
 }
 
 function loadVariants() {
@@ -646,7 +659,7 @@ app.get('/api/sample-summary', (req, res) => {
                 ? sampleVariants.filter(v => ig.impacts.includes(String(v[impactCol] || '').toUpperCase()))
                 : sampleVariants
             for (const t of thresholds) {
-                if (!freqCol) {
+                if (!freqCol || t.type === 'all') {
                     counts[ig.label][t.label] = impactFiltered.length
                 } else if (t.type === 'eq') {
                     counts[ig.label][t.label] = impactFiltered.filter(v => Number(v[freqCol]) === t.value).length
@@ -658,12 +671,23 @@ app.get('/api/sample-summary', (req, res) => {
         return {sample_id: sampleId, total: sampleVariants.length, counts}
     })
 
+    // Compute cohort-level aggregate statistics (mean/median) per cell
+    const cohort_summary = {}
+    for (const ig of impactGroups) {
+        cohort_summary[ig.label] = {}
+        for (const t of thresholds) {
+            const values = samples.map(s => (s.counts[ig.label] && s.counts[ig.label][t.label]) || 0)
+            cohort_summary[ig.label][t.label] = computeStats(values)
+        }
+    }
+
     res.json({
         total_samples: samples.length,
         total_variants: filtered.length,
         thresholds: thresholds.map(t => t.label),
         impact_groups: impactGroups.map(ig => ig.label),
-        samples
+        samples,
+        cohort_summary
     })
 })
 
@@ -967,7 +991,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                         : sampleVariants
                     for (const t of ssThresholds) {
                         const key = `${ig.label}__${t.label}`
-                        if (!freqCol) {
+                        if (!freqCol || t.type === 'all') {
                             rowData[key] = impactFiltered.length
                         } else if (t.type === 'eq') {
                             rowData[key] = impactFiltered.filter(v => Number(v[freqCol]) === t.value).length

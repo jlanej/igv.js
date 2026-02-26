@@ -645,6 +645,39 @@
         document.getElementById('sample-summary-info').textContent =
             `${data.total_samples || 0} samples with ${data.total_variants || 0} variants matching filters`
 
+        // --- Cohort summary table ---
+        const cohortHead = document.getElementById('cohort-summary-header')
+        const cohortBody = document.getElementById('cohort-summary-body')
+        const impactGroups = data.impact_groups || []
+        const thresholds = data.thresholds || []
+
+        if (data.cohort_summary && impactGroups.length > 0) {
+            let cHeaderHtml = '<th>Statistic</th>'
+            for (const ig of impactGroups) {
+                for (const t of thresholds) {
+                    cHeaderHtml += `<th>${escapeHtml(ig)}<br><small>${escapeHtml(t)}</small></th>`
+                }
+            }
+            cohortHead.innerHTML = cHeaderHtml
+
+            let cohortRows = ''
+            for (const stat of ['mean', 'median']) {
+                let cells = `<td><strong>${stat.charAt(0).toUpperCase() + stat.slice(1)}</strong></td>`
+                for (const ig of impactGroups) {
+                    for (const t of thresholds) {
+                        const val = (data.cohort_summary[ig] && data.cohort_summary[ig][t] && data.cohort_summary[ig][t][stat]) || 0
+                        cells += `<td>${val}</td>`
+                    }
+                }
+                cohortRows += `<tr>${cells}</tr>`
+            }
+            cohortBody.innerHTML = cohortRows
+        } else {
+            cohortHead.innerHTML = '<th>Statistic</th>'
+            cohortBody.innerHTML = '<tr><td>No cohort data available</td></tr>'
+        }
+
+        // --- Per-sample table ---
         const thead = document.getElementById('sample-summary-header')
         const tbody = document.getElementById('sample-summary-body')
 
@@ -655,8 +688,6 @@
         }
 
         // Build header: Sample | Total | impact_group × threshold combos
-        const impactGroups = data.impact_groups || []
-        const thresholds = data.thresholds || []
         let headerHtml = '<th>Sample</th><th>Total</th>'
         for (const ig of impactGroups) {
             for (const t of thresholds) {
