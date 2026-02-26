@@ -383,16 +383,14 @@
     function refreshNoteSuggestions() {
         const sel = document.getElementById('note-suggestions')
         if (!sel) return
-        // Use server-provided notes from all variants (not just current page)
-        const notes = allNotes.length ? allNotes : [...new Set(variants.map(v => v.curation_note).filter(n => n))].sort((a, b) => a.localeCompare(b))
         sel.innerHTML = '<option value="">Previous notes…</option>'
-        notes.forEach(n => {
+        allNotes.forEach(n => {
             const o = document.createElement('option')
             o.value = n
             o.textContent = n.length > 60 ? n.slice(0, 57) + '…' : n
             sel.appendChild(o)
         })
-        sel.style.display = notes.length ? '' : 'none'
+        sel.style.display = allNotes.length ? '' : 'none'
     }
 
     function setupNoteSuggestions() {
