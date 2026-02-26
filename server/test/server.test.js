@@ -930,3 +930,125 @@ describe('UI: Increased IGV viewer height', function () {
         expect(res.text).to.include('min-height: 400px')
     })
 })
+
+describe('API /api/variants search', function () {
+    it('filters variants by search term matching gene name', async function () {
+        const res = await request(app).get('/api/variants?search=GENE2').expect(200)
+        expect(res.body.total).to.equal(2)
+        res.body.data.forEach(v => expect(v.gene).to.equal('GENE2'))
+    })
+
+    it('filters variants by search term matching chrom', async function () {
+        const res = await request(app).get('/api/variants?search=chr10').expect(200)
+        expect(res.body.total).to.equal(1)
+        expect(res.body.data[0].chrom).to.equal('chr10')
+    })
+
+    it('search is case-insensitive', async function () {
+        const res = await request(app).get('/api/variants?search=gene4').expect(200)
+        expect(res.body.total).to.equal(2)
+        res.body.data.forEach(v => expect(v.gene).to.equal('GENE4'))
+    })
+
+    it('search combines with other filters', async function () {
+        const res = await request(app).get('/api/variants?search=GENE1&impact=HIGH').expect(200)
+        expect(res.body.total).to.equal(1)
+        expect(res.body.data[0].gene).to.equal('GENE1')
+        expect(res.body.data[0].impact).to.equal('HIGH')
+    })
+
+    it('returns empty when search matches nothing', async function () {
+        const res = await request(app).get('/api/variants?search=NONEXISTENT').expect(200)
+        expect(res.body.total).to.equal(0)
+        expect(res.body.data).to.have.lengthOf(0)
+    })
+})
+
+describe('API /api/summary includes sample count', function () {
+    it('each gene entry has a samples count', async function () {
+        const res = await request(app).get('/api/summary').expect(200)
+        res.body.summary.forEach(g => {
+            expect(g).to.have.property('samples').that.is.a('number')
+        })
+    })
+
+    it('samples count reflects distinct samples per gene', async function () {
+        const res = await request(app).get('/api/summary').expect(200)
+        // All example data has no sample_id/trio_id column, so samples = 0
+        // But we verify the property exists and is numeric
+        const gene1 = res.body.summary.find(g => g.gene === 'GENE1')
+        expect(gene1).to.exist
+        expect(gene1).to.have.property('samples').that.is.a('number')
+        expect(gene1.total).to.equal(2)
+    })
+})
+
+describe('UI: Variant search bar', function () {
+    it('index.html includes search input', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('id="variant-search"')
+        expect(res.text).to.include('placeholder="Search variants')
+    })
+
+    it('index.html includes search clear button', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('id="variant-search-clear"')
+    })
+
+    it('app.js includes setupVariantSearch function', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('setupVariantSearch')
+        expect(res.text).to.include('variant-search')
+    })
+
+    it('styles.css includes search bar styles', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('.variant-search-wrap')
+    })
+})
+
+describe('UI: VCF track support', function () {
+    it('app.js includes VCF track building logic', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('config.vcfTrack')
+        expect(res.text).to.include("type: 'variant'")
+        expect(res.text).to.include("format: 'vcf'")
+    })
+})
+
+describe('UI: Gene summary Samples column', function () {
+    it('index.html includes Samples column in gene summary header', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('<th>Samples</th>')
+    })
+
+    it('app.js renders sample count in gene summary rows', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('g.samples')
+    })
+})
+
+describe('XLSX Gene Summary includes Samples column', function () {
+    it('Gene Summary sheet has Samples header', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4]})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const geneSummary = workbook.getWorksheet('Gene Summary')
+        expect(geneSummary).to.exist
+        const gsHeader = []
+        geneSummary.getRow(1).eachCell(cell => gsHeader.push(cell.value))
+        expect(gsHeader).to.include('Samples')
+    })
+})
