@@ -548,6 +548,30 @@ app.put('/api/curate/gene', (req, res) => {
     res.json({updated: geneVariants.length, gene, data: geneVariants})
 })
 
+// Sample-level curation – flag all variants for a given sample/trio
+app.put('/api/curate/sample', (req, res) => {
+    const {sample, status, note} = req.body
+    if (!sample) return res.status(400).json({error: 'sample is required'})
+    const sampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
+    const allowedStatuses = ['pending', 'pass', 'fail', 'uncertain']
+    if (status && !allowedStatuses.includes(status)) {
+        return res.status(400).json({error: `Invalid status. Use: ${allowedStatuses.join(', ')}`})
+    }
+    // When no sample column exists, sample summary groups everything as 'all'
+    const sampleVariants = sampleCol
+        ? variants.filter(v => (v[sampleCol] || 'unknown') === sample)
+        : (sample === 'all' ? [...variants] : [])
+    if (sampleVariants.length === 0) {
+        return res.status(404).json({error: `No variants found for sample: ${sample}`})
+    }
+    for (const v of sampleVariants) {
+        if (status) v.curation_status = status
+        if (note !== undefined) v.curation_note = String(note)
+    }
+    saveCuration()
+    res.json({updated: sampleVariants.length, sample, data: sampleVariants})
+})
+
 // Update curation status (single variant)
 app.put('/api/variants/:id/curate', (req, res) => {
     const id = parseInt(req.params.id, 10)

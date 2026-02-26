@@ -832,9 +832,10 @@
             return
         }
 
-        // Build header: Sample | Unfiltered | Passing Filters | Curated | Pass | Fail | Uncertain | Pending | impact_group × threshold combos
+        // Build header: Sample | Unfiltered | Passing Filters | Curated | Pass | Fail | Uncertain | Pending | Flag Sample | impact_group × threshold combos
         let headerHtml = '<th>Sample</th><th>Unfiltered</th><th>Passing Filters</th>'
         headerHtml += '<th>Curated</th><th class="curation-pass">Pass</th><th class="curation-fail">Fail</th><th class="curation-uncertain">Uncertain</th><th class="curation-pending">Pending</th>'
+        headerHtml += '<th>Flag Sample</th>'
         for (const ig of impactGroups) {
             for (const t of thresholds) {
                 headerHtml += `<th>${escapeHtml(ig)}<br><small>${escapeHtml(t)}</small></th>`
@@ -861,6 +862,11 @@
             cells += `<td class="curation-fail">${cc.fail}${curated > 0 ? ' (' + pctFail + '%)' : ''}</td>`
             cells += `<td class="curation-uncertain">${cc.uncertain}${curated > 0 ? ' (' + pctUncertain + '%)' : ''}</td>`
             cells += `<td class="curation-pending">${cc.pending}${s.total > 0 ? ' (' + pctPending + '%)' : ''}</td>`
+            cells += `<td>`
+            cells += `<button class="sample-curate-btn curation-pass" data-sample="${escapeHtml(s.sample_id)}" data-status="pass" title="Flag all ${escapeHtml(s.sample_id)} variants as Pass">✓</button>`
+            cells += `<button class="sample-curate-btn curation-fail" data-sample="${escapeHtml(s.sample_id)}" data-status="fail" title="Flag all ${escapeHtml(s.sample_id)} variants as Fail">✗</button>`
+            cells += `<button class="sample-curate-btn curation-uncertain" data-sample="${escapeHtml(s.sample_id)}" data-status="uncertain" title="Flag all ${escapeHtml(s.sample_id)} variants as Uncertain">?</button>`
+            cells += `</td>`
             for (const ig of impactGroups) {
                 for (const t of thresholds) {
                     const count = (s.counts[ig] && s.counts[ig][t]) || 0
@@ -869,6 +875,35 @@
             }
             return `<tr>${cells}</tr>`
         }).join('')
+
+        // Sample curation buttons
+        tbody.querySelectorAll('.sample-curate-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const sample = btn.dataset.sample
+                const status = btn.dataset.status
+                await curateSample(sample, status)
+            })
+        })
+    }
+
+    async function curateSample(sample, status) {
+        try {
+            const res = await fetch('/api/curate/sample', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({sample, status})
+            })
+            const data = await res.json()
+            if (res.ok) {
+                showNotification(`Flagged ${data.updated} variants in sample ${sample} as ${status}`, 'success')
+                await loadSampleSummary()
+                await loadVariants()
+            } else {
+                showNotification(data.error || 'Failed to flag sample', 'warn')
+            }
+        } catch (err) {
+            showNotification('Failed to flag sample: ' + err.message, 'warn')
+        }
     }
 
     // -----------------------------------------------------------------------

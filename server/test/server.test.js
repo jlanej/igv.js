@@ -302,6 +302,57 @@ describe('API /api/curate/gene', function () {
     })
 })
 
+describe('API /api/curate/sample', function () {
+    after(function () {
+        if (fs.existsSync(curationFile)) fs.unlinkSync(curationFile)
+    })
+
+    it('curates all variants for a sample', async function () {
+        const res = await request(app)
+            .put('/api/curate/sample')
+            .send({sample: 'all', status: 'fail'})
+            .expect(200)
+        expect(res.body).to.have.property('updated').that.is.a('number')
+        expect(res.body).to.have.property('sample', 'all')
+        expect(res.body.updated).to.be.greaterThan(0)
+        res.body.data.forEach(v => {
+            expect(v.curation_status).to.equal('fail')
+        })
+    })
+
+    it('requires sample parameter', async function () {
+        await request(app)
+            .put('/api/curate/sample')
+            .send({status: 'pass'})
+            .expect(400)
+    })
+
+    it('rejects invalid status', async function () {
+        await request(app)
+            .put('/api/curate/sample')
+            .send({sample: 'all', status: 'bad'})
+            .expect(400)
+    })
+
+    it('returns 404 for unknown sample', async function () {
+        await request(app)
+            .put('/api/curate/sample')
+            .send({sample: 'NONEXISTENT_SAMPLE', status: 'fail'})
+            .expect(404)
+    })
+
+    it('supports curation note for sample', async function () {
+        const res = await request(app)
+            .put('/api/curate/sample')
+            .send({sample: 'all', status: 'fail', note: 'Low quality sample'})
+            .expect(200)
+        expect(res.body.updated).to.be.greaterThan(0)
+        res.body.data.forEach(v => {
+            expect(v.curation_note).to.equal('Low quality sample')
+        })
+    })
+})
+
 describe('API /api/filters', function () {
     it('returns filter options for columns', async function () {
         const res = await request(app).get('/api/filters').expect(200)
@@ -1061,6 +1112,14 @@ describe('UI: Sample Summary tab', function () {
         expect(res.text).to.include('Passing Filters')
         expect(res.text).to.include('Curated')
         expect(res.text).to.include('Unfiltered')
+    })
+
+    it('app.js renders sample curation buttons in sample summary', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('sample-curate-btn')
+        expect(res.text).to.include('curateSample')
+        expect(res.text).to.include('Flag Sample')
+        expect(res.text).to.include('/api/curate/sample')
     })
 })
 
