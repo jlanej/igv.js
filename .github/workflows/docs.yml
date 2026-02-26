@@ -1,0 +1,57 @@
+name: Generate Docs
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'server/**'
+      - 'docs/**'
+  pull_request:
+    paths:
+      - 'server/**'
+      - 'docs/**'
+
+jobs:
+  generate-docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci || npm install
+
+      - name: Install Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Run server tests
+        working-directory: server
+        run: npm test
+
+      - name: Generate screenshots
+        run: node scripts/generate-screenshots.cjs
+
+      - name: Check for changes
+        id: changes
+        run: |
+          git diff --quiet docs/screenshots/ && echo "changed=false" >> "$GITHUB_OUTPUT" || echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit updated docs
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/screenshots/
+          git commit -m "docs: auto-update screenshots [skip ci]"
+          git push
