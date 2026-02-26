@@ -374,6 +374,21 @@
         return html
     }
 
+    function refreshNoteSuggestions() {
+        const sel = document.getElementById('note-suggestions')
+        if (!sel) return
+        const notes = [...new Set(variants.map(v => v.curation_note).filter(n => n))]
+        notes.sort((a, b) => a.localeCompare(b))
+        sel.innerHTML = '<option value="">Previous notes…</option>'
+        notes.forEach(n => {
+            const o = document.createElement('option')
+            o.value = n
+            o.textContent = n.length > 60 ? n.slice(0, 57) + '…' : n
+            sel.appendChild(o)
+        })
+        sel.style.display = notes.length ? '' : 'none'
+    }
+
     async function selectVariant(id) {
         activeVariantId = id
         const v = variants.find(x => x.id === id)
@@ -389,6 +404,19 @@
         document.getElementById('igv-title').innerHTML = buildIgvTitle(v)
         document.getElementById('igv-curation').style.display = 'flex'
         document.getElementById('curation-note').value = v.curation_note || ''
+
+        // Populate note suggestions from previously used notes
+        refreshNoteSuggestions()
+        const noteSel = document.getElementById('note-suggestions')
+        if (noteSel) {
+            noteSel.value = ''
+            noteSel.onchange = () => {
+                if (noteSel.value) {
+                    document.getElementById('curation-note').value = noteSel.value
+                    noteSel.value = ''
+                }
+            }
+        }
 
         // Set up single-variant curation buttons
         document.querySelectorAll('#igv-curation [data-status]').forEach(btn => {
@@ -650,6 +678,7 @@
 
         renderTable()
         updateStats()
+        refreshNoteSuggestions()
     }
 
     async function batchCurate(status) {

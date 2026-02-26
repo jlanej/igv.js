@@ -1135,3 +1135,29 @@ describe('UI: IGV title shows trio AD, GQ, and DKA/DKT metadata', function () {
         expect(v).to.have.property('child_DKA_DKT')
     })
 })
+
+describe('UI: Curation note suggestions dropdown', function () {
+    it('index.html includes note-suggestions select element', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('id="note-suggestions"')
+        expect(res.text).to.include('Previous notes')
+    })
+
+    it('app.js includes refreshNoteSuggestions function', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('refreshNoteSuggestions')
+        expect(res.text).to.include('note-suggestions')
+        expect(res.text).to.include('curation_note')
+    })
+
+    it('app.js populates textarea from dropdown selection', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('noteSel.onchange')
+        expect(res.text).to.include('noteSel.value')
+    })
+
+    it('styles.css includes note-suggestions styling', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('#note-suggestions')
+    })
+})
