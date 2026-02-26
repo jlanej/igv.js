@@ -403,6 +403,35 @@ describe('API /api/sample-summary', function () {
         const res = await request(app).get('/api/sample-summary?impact=HIGH').expect(200)
         expect(res.body.total_variants).to.equal(5)
     })
+
+    it('returns per-sample total_unfiltered count', async function () {
+        const res = await request(app).get('/api/sample-summary').expect(200)
+        const sample = res.body.samples[0]
+        expect(sample).to.have.property('total_unfiltered').that.is.a('number')
+        expect(sample.total_unfiltered).to.be.at.least(sample.total)
+    })
+
+    it('returns per-sample curation_counts breakdown', async function () {
+        const res = await request(app).get('/api/sample-summary').expect(200)
+        const sample = res.body.samples[0]
+        expect(sample).to.have.property('curation_counts').that.is.an('object')
+        expect(sample.curation_counts).to.have.property('pass').that.is.a('number')
+        expect(sample.curation_counts).to.have.property('fail').that.is.a('number')
+        expect(sample.curation_counts).to.have.property('uncertain').that.is.a('number')
+        expect(sample.curation_counts).to.have.property('pending').that.is.a('number')
+        // Sum of curation counts should equal total
+        const cc = sample.curation_counts
+        expect(cc.pass + cc.fail + cc.uncertain + cc.pending).to.equal(sample.total)
+    })
+
+    it('curation_counts reflect actual curation status', async function () {
+        // All variants should start as pending (before any curation test)
+        const res = await request(app).get('/api/sample-summary').expect(200)
+        const sample = res.body.samples[0]
+        const cc = sample.curation_counts
+        // Sum of statuses must equal total regardless of previous test state
+        expect(cc.pass + cc.fail + cc.uncertain + cc.pending).to.equal(sample.total)
+    })
 })
 
 describe('API /api/export', function () {
@@ -569,7 +598,11 @@ describe('API /api/export/xlsx', function () {
         const ssHeader = []
         sampleSummary.getRow(1).eachCell(cell => ssHeader.push(cell.value))
         expect(ssHeader).to.include('Sample')
-        expect(ssHeader).to.include('Total')
+        expect(ssHeader).to.include('Passing Filters')
+        expect(ssHeader).to.include('Unfiltered')
+        expect(ssHeader).to.include('Curated')
+        expect(ssHeader).to.include('Pass')
+        expect(ssHeader).to.include('Fail')
         // Should have at least one data row
         expect(sampleSummary.rowCount).to.be.at.least(2)
     })
@@ -783,9 +816,9 @@ describe('XLSX Sample Summary cohort statistics', function () {
             if (row.getCell(1).value === 'Mean') meanRowNum = rowNumber
         })
         expect(meanRowNum).to.be.a('number')
-        // Total column (col 2) should be a number
-        const totalMean = sampleSummary.getRow(meanRowNum).getCell(2).value
-        expect(totalMean).to.be.a('number')
+        // Unfiltered column (col 2) should be a number
+        const unfilteredMean = sampleSummary.getRow(meanRowNum).getCell(2).value
+        expect(unfilteredMean).to.be.a('number')
     })
 })
 
@@ -1019,6 +1052,15 @@ describe('UI: Sample Summary tab', function () {
         expect(res.text).to.include('sample-summary')
         expect(res.text).to.include('cohort-summary-header')
         expect(res.text).to.include('cohort_summary')
+    })
+
+    it('app.js renders curation breakdown columns in sample summary', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('curation_counts')
+        expect(res.text).to.include('total_unfiltered')
+        expect(res.text).to.include('Passing Filters')
+        expect(res.text).to.include('Curated')
+        expect(res.text).to.include('Unfiltered')
     })
 })
 

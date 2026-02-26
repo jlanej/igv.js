@@ -697,7 +697,15 @@ app.get('/api/sample-summary', (req, res) => {
     const thresholds = SAMPLE_SUMMARY_THRESHOLDS
     const impactGroups = SAMPLE_SUMMARY_IMPACT_GROUPS
 
-    // Group variants by sample
+    // Group ALL variants by sample (unfiltered) for total_unfiltered counts
+    const allSampleMap = {}
+    for (const v of variants) {
+        const sampleId = sampleCol ? (v[sampleCol] || 'unknown') : 'all'
+        if (!allSampleMap[sampleId]) allSampleMap[sampleId] = 0
+        allSampleMap[sampleId]++
+    }
+
+    // Group filtered variants by sample
     const sampleMap = {}
     for (const v of filtered) {
         const sampleId = sampleCol ? (v[sampleCol] || 'unknown') : 'all'
@@ -722,7 +730,23 @@ app.get('/api/sample-summary', (req, res) => {
                 }
             }
         }
-        return {sample_id: sampleId, total: sampleVariants.length, counts}
+
+        // Per-sample curation breakdown
+        let pass = 0, fail = 0, uncertain = 0, pending = 0
+        for (const v of sampleVariants) {
+            if (v.curation_status === 'pass') pass++
+            else if (v.curation_status === 'fail') fail++
+            else if (v.curation_status === 'uncertain') uncertain++
+            else pending++
+        }
+
+        return {
+            sample_id: sampleId,
+            total: sampleVariants.length,
+            total_unfiltered: allSampleMap[sampleId] || 0,
+            curation_counts: {pass, fail, uncertain, pending},
+            counts
+        }
     })
 
     // Compute cohort-level aggregate statistics (mean/median) per cell
@@ -1038,9 +1062,24 @@ app.post('/api/export/xlsx', async (req, res) => {
                 if (!sampleMap[sid]) sampleMap[sid] = []
                 sampleMap[sid].push(v)
             }
+            // Count all (unfiltered) variants per sample
+            const allSampleCounts = {}
+            for (const v of variants) {
+                const sid = sampleCol ? (v[sampleCol] || 'unknown') : 'all'
+                allSampleCounts[sid] = (allSampleCounts[sid] || 0) + 1
+            }
             const ssws = workbook.addWorksheet('Sample Summary', {views: [{state: 'frozen', ySplit: 1}]})
-            // Build columns: Sample, Total, then impact_group × threshold combos
-            const ssCols = [{header: 'Sample', key: 'sample', width: 16}, {header: 'Total', key: 'total', width: 10}]
+            // Build columns: Sample, Unfiltered, Passing Filters, Curated, Pass, Fail, Uncertain, Pending, then impact_group × threshold combos
+            const ssCols = [
+                {header: 'Sample', key: 'sample', width: 16},
+                {header: 'Unfiltered', key: 'total_unfiltered', width: 12},
+                {header: 'Passing Filters', key: 'total', width: 16},
+                {header: 'Curated', key: 'curated', width: 10},
+                {header: 'Pass', key: 'cur_pass', width: 10},
+                {header: 'Fail', key: 'cur_fail', width: 10},
+                {header: 'Uncertain', key: 'cur_uncertain', width: 12},
+                {header: 'Pending', key: 'cur_pending', width: 10}
+            ]
             for (const ig of ssImpactGroups) {
                 for (const t of ssThresholds) {
                     const key = `${ig.label}__${t.label}`
@@ -1059,7 +1098,24 @@ app.post('/api/export/xlsx', async (req, res) => {
             const sampleRows = []
             let ssIdx = 0
             for (const [sid, sampleVariants] of Object.entries(sampleMap)) {
-                const rowData = {sample: sid, total: sampleVariants.length}
+                // Curation breakdown
+                let cPass = 0, cFail = 0, cUncertain = 0, cPending = 0
+                for (const v of sampleVariants) {
+                    if (v.curation_status === 'pass') cPass++
+                    else if (v.curation_status === 'fail') cFail++
+                    else if (v.curation_status === 'uncertain') cUncertain++
+                    else cPending++
+                }
+                const rowData = {
+                    sample: sid,
+                    total_unfiltered: allSampleCounts[sid] || 0,
+                    total: sampleVariants.length,
+                    curated: cPass + cFail + cUncertain,
+                    cur_pass: cPass,
+                    cur_fail: cFail,
+                    cur_uncertain: cUncertain,
+                    cur_pending: cPending
+                }
                 for (const ig of ssImpactGroups) {
                     const impactFiltered = impactCol
                         ? sampleVariants.filter(v => ig.impacts.includes(String(v[impactCol] || '').toUpperCase()))
@@ -1090,7 +1146,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                 // Blank separator row
                 ssws.addRow({})
 
-                const numericKeys = ['total', ...ssCols.slice(2).map(c => c.key)]
+                const numericKeys = ssCols.slice(1).map(c => c.key)
                 const statsFill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFEAF2F8'}}
                 const statsFont = {bold: true, size: 11}
 

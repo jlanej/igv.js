@@ -832,8 +832,9 @@
             return
         }
 
-        // Build header: Sample | Total | impact_group × threshold combos
-        let headerHtml = '<th>Sample</th><th>Total</th>'
+        // Build header: Sample | Unfiltered | Passing Filters | Curated | Pass | Fail | Uncertain | Pending | impact_group × threshold combos
+        let headerHtml = '<th>Sample</th><th>Unfiltered</th><th>Passing Filters</th>'
+        headerHtml += '<th>Curated</th><th class="curation-pass">Pass</th><th class="curation-fail">Fail</th><th class="curation-uncertain">Uncertain</th><th class="curation-pending">Pending</th>'
         for (const ig of impactGroups) {
             for (const t of thresholds) {
                 headerHtml += `<th>${escapeHtml(ig)}<br><small>${escapeHtml(t)}</small></th>`
@@ -843,7 +844,23 @@
 
         // Build body rows
         tbody.innerHTML = data.samples.map(s => {
-            let cells = `<td>${escapeHtml(s.sample_id)}</td><td>${s.total}</td>`
+            const cc = s.curation_counts || {pass: 0, fail: 0, uncertain: 0, pending: 0}
+            const curated = cc.pass + cc.fail + cc.uncertain
+            const pctFilter = s.total_unfiltered > 0 ? Math.round(s.total / s.total_unfiltered * 100) : 0
+            const pctCurated = s.total > 0 ? Math.round(curated / s.total * 100) : 0
+            const pctPass = curated > 0 ? Math.round(cc.pass / curated * 100) : 0
+            const pctFail = curated > 0 ? Math.round(cc.fail / curated * 100) : 0
+            const pctUncertain = curated > 0 ? Math.round(cc.uncertain / curated * 100) : 0
+            const pctPending = s.total > 0 ? Math.round(cc.pending / s.total * 100) : 0
+
+            let cells = `<td>${escapeHtml(s.sample_id)}</td>`
+            cells += `<td>${s.total_unfiltered}</td>`
+            cells += `<td>${s.total} (${pctFilter}%)</td>`
+            cells += `<td>${curated} (${pctCurated}%)</td>`
+            cells += `<td class="curation-pass">${cc.pass}${curated > 0 ? ' (' + pctPass + '%)' : ''}</td>`
+            cells += `<td class="curation-fail">${cc.fail}${curated > 0 ? ' (' + pctFail + '%)' : ''}</td>`
+            cells += `<td class="curation-uncertain">${cc.uncertain}${curated > 0 ? ' (' + pctUncertain + '%)' : ''}</td>`
+            cells += `<td class="curation-pending">${cc.pending}${s.total > 0 ? ' (' + pctPending + '%)' : ''}</td>`
             for (const ig of impactGroups) {
                 for (const t of thresholds) {
                     const count = (s.counts[ig] && s.counts[ig][t]) || 0
