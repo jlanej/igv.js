@@ -325,6 +325,16 @@ tr.active-variant { background: #b8daff; }
 }
 
 #igv-header h2 { font-size: 14px; }
+#igv-header .igv-locus { font-weight: 600; }
+#igv-header .igv-gene { color: var(--text-muted); margin-right: 4px; }
+#igv-header .igv-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--hover-bg, #f0f0f0);
+    padding: 1px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+}
 
 #igv-curation { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 #igv-curation .btn { font-size: 12px; padding: 4px 10px; }

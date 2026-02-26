@@ -341,6 +341,39 @@
     // -----------------------------------------------------------------------
     // Variant selection & IGV
     // -----------------------------------------------------------------------
+
+    function esc(str) {
+        const d = document.createElement('div')
+        d.textContent = str
+        return d.innerHTML
+    }
+
+    function buildIgvTitle(v) {
+        let html = `<span class="igv-locus">${esc(v.chrom + ':' + v.pos)} ${esc(v.ref)}→${esc(v.alt)}</span>`
+        html += ` <span class="igv-gene">${esc(v.gene || 'unknown gene')}</span>`
+
+        // Allelic depths (AD) for trio members
+        const adParts = []
+        if (v.child_AD != null && v.child_AD !== '') adParts.push('C:' + esc(String(v.child_AD)))
+        if (v.mother_AD != null && v.mother_AD !== '') adParts.push('M:' + esc(String(v.mother_AD)))
+        if (v.father_AD != null && v.father_AD !== '') adParts.push('F:' + esc(String(v.father_AD)))
+        if (adParts.length) html += ` <span class="igv-meta" title="Allelic Depth">AD ${adParts.join(' ')}</span>`
+
+        // Genotype quality (GQ) for trio members
+        const gqParts = []
+        if (v.child_GQ != null && v.child_GQ !== '') gqParts.push('C:' + esc(String(v.child_GQ)))
+        if (v.mother_GQ != null && v.mother_GQ !== '') gqParts.push('M:' + esc(String(v.mother_GQ)))
+        if (v.father_GQ != null && v.father_GQ !== '') gqParts.push('F:' + esc(String(v.father_GQ)))
+        if (gqParts.length) html += ` <span class="igv-meta" title="Genotype Quality">GQ ${gqParts.join(' ')}</span>`
+
+        // Child DKA/DKT metric
+        if (v.child_DKA_DKT != null && v.child_DKA_DKT !== '') {
+            html += ` <span class="igv-meta" title="Child DKA/DKT">DKA/DKT ${esc(String(v.child_DKA_DKT))}</span>`
+        }
+
+        return html
+    }
+
     async function selectVariant(id) {
         activeVariantId = id
         const v = variants.find(x => x.id === id)
@@ -353,8 +386,7 @@
         if (activeRow) activeRow.scrollIntoView({block: 'nearest', behavior: 'smooth'})
 
         // Update IGV header
-        document.getElementById('igv-title').textContent =
-            `${v.chrom}:${v.pos} ${v.ref}→${v.alt} (${v.gene || 'unknown gene'})`
+        document.getElementById('igv-title').innerHTML = buildIgvTitle(v)
         document.getElementById('igv-curation').style.display = 'flex'
         document.getElementById('curation-note').value = v.curation_note || ''
 
