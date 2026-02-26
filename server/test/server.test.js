@@ -1090,3 +1090,75 @@ describe('XLSX Gene Summary includes Samples column', function () {
         expect(gsHeader).to.include('Samples')
     })
 })
+
+describe('UI: IGV title shows trio AD, GQ, and DKA/DKT metadata', function () {
+    it('app.js contains buildIgvTitle helper that renders AD badges', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('buildIgvTitle')
+        expect(res.text).to.include('child_AD')
+        expect(res.text).to.include('mother_AD')
+        expect(res.text).to.include('father_AD')
+        expect(res.text).to.include('igv-meta')
+        expect(res.text).to.include('Allelic Depth')
+    })
+
+    it('app.js renders GQ badges for trio members', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('child_GQ')
+        expect(res.text).to.include('mother_GQ')
+        expect(res.text).to.include('father_GQ')
+        expect(res.text).to.include('Genotype Quality')
+    })
+
+    it('app.js renders child DKA/DKT metric', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('child_DKA_DKT')
+        expect(res.text).to.include('DKA/DKT')
+    })
+
+    it('styles.css contains igv-meta badge styling', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('.igv-meta')
+        expect(res.text).to.include('.igv-locus')
+        expect(res.text).to.include('.igv-gene')
+    })
+
+    it('variant data includes AD, GQ, and DKA_DKT columns', async function () {
+        const res = await request(app).get('/api/variants').expect(200)
+        const v = res.body.data[0]
+        expect(v).to.have.property('child_AD')
+        expect(v).to.have.property('mother_AD')
+        expect(v).to.have.property('father_AD')
+        expect(v).to.have.property('child_GQ')
+        expect(v).to.have.property('mother_GQ')
+        expect(v).to.have.property('father_GQ')
+        expect(v).to.have.property('child_DKA_DKT')
+    })
+})
+
+describe('UI: Curation note suggestions dropdown', function () {
+    it('index.html includes note-suggestions select element', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('id="note-suggestions"')
+        expect(res.text).to.include('Previous notes')
+    })
+
+    it('app.js includes refreshNoteSuggestions function', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('refreshNoteSuggestions')
+        expect(res.text).to.include('note-suggestions')
+        expect(res.text).to.include('curation_note')
+    })
+
+    it('app.js populates textarea from dropdown selection', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('setupNoteSuggestions')
+        expect(res.text).to.include("sel.value")
+        expect(res.text).to.include("curation-note")
+    })
+
+    it('styles.css includes note-suggestions styling', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('#note-suggestions')
+    })
+})
