@@ -45,7 +45,7 @@ class CachedSequence {
 
     #trimCache(interval) {
         // Filter out redundant (subsumed) cached intervals
-        this.#cachedIntervals = this.#cachedIntervals.filter(i => i !== interval && !interval.containsRange(i))
+        this.#cachedIntervals = this.#cachedIntervals.filter(i => !interval.containsRange(i))
         if (this.#cachedIntervals.length >= this.#maxIntervals) {
             this.#cachedIntervals.shift()
         }

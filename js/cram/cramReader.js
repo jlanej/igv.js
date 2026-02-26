@@ -135,7 +135,7 @@ class CramReader {
         try {
             return await this.indexedCramFile.getRecordsForRange(chrIdx, bpStart, bpEnd)
         } catch (error) {
-            if (error.message && error.message.indexOf("MD5") >= 0) {
+            if (error.message && error.message.includes("MD5")) {
                 console.warn("CRAM MD5 checksum mismatch, retrying: " + error.message)
                 // Clear the feature cache to allow a fresh fetch on retry
                 this.cramFile.featureCache.clear()
