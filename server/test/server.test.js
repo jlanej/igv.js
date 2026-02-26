@@ -1041,6 +1041,7 @@ describe('Per-trio VCF columns in variant data', function () {
 
     it('variants contain VCF file and sample ID data', async function () {
         const res = await request(app).get('/api/variants').expect(200)
+        expect(res.body.data).to.be.an('array').with.length.greaterThan(0)
         const v = res.body.data[0]
         expect(v).to.have.property('child_vcf')
         expect(v).to.have.property('mother_vcf')
