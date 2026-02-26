@@ -471,12 +471,27 @@ app.get('/api/variants', (req, res) => {
         return {...v, _qc_status: qc.qc_status, _qc_statuses: qc.statuses}
     })
 
+    // Curation counts across ALL variants (not just filtered/paged)
+    let pass = 0, fail = 0, uncertain = 0, pending = 0
+    variants.forEach(v => {
+        if (v.curation_status === 'pass') pass++
+        else if (v.curation_status === 'fail') fail++
+        else if (v.curation_status === 'uncertain') uncertain++
+        else pending++
+    })
+
+    // Unique non-empty notes across ALL variants
+    const allNotes = [...new Set(variants.map(v => v.curation_note).filter(n => n))]
+    allNotes.sort((a, b) => a.localeCompare(b))
+
     res.json({
         total: filtered.length,
         page,
         per_page: perPage,
         pages: Math.ceil(filtered.length / perPage),
-        data: annotated
+        data: annotated,
+        curation_counts: {pass, fail, uncertain, pending},
+        all_notes: allNotes
     })
 })
 

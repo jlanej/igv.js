@@ -25,6 +25,8 @@
     let activeVariantId = null
     let igvBrowser = null
     let filterOptions = {}
+    let curationCounts = {pass: 0, fail: 0, uncertain: 0, pending: 0}
+    let allNotes = []
 
     // -----------------------------------------------------------------------
     // Init
@@ -250,9 +252,12 @@
         totalFiltered = data.total
         totalPages = data.pages
         currentPage = data.page
+        curationCounts = data.curation_counts || {pass: 0, fail: 0, uncertain: 0, pending: 0}
+        allNotes = data.all_notes || []
 
         renderTable()
         updateStats()
+        refreshNoteSuggestions()
         updatePagination()
     }
 
@@ -378,16 +383,14 @@
     function refreshNoteSuggestions() {
         const sel = document.getElementById('note-suggestions')
         if (!sel) return
-        const notes = [...new Set(variants.map(v => v.curation_note).filter(n => n))]
-        notes.sort((a, b) => a.localeCompare(b))
         sel.innerHTML = '<option value="">Previous notes…</option>'
-        notes.forEach(n => {
+        allNotes.forEach(n => {
             const o = document.createElement('option')
             o.value = n
             o.textContent = n.length > 60 ? n.slice(0, 57) + '…' : n
             sel.appendChild(o)
         })
-        sel.style.display = notes.length ? '' : 'none'
+        sel.style.display = allNotes.length ? '' : 'none'
     }
 
     function setupNoteSuggestions() {
@@ -938,17 +941,11 @@
     // -----------------------------------------------------------------------
     function updateStats() {
         document.getElementById('stat-filtered').textContent = totalFiltered
-        let pass = 0, fail = 0, uncertain = 0, pending = 0
-        variants.forEach(v => {
-            if (v.curation_status === 'pass') pass++
-            else if (v.curation_status === 'fail') fail++
-            else if (v.curation_status === 'uncertain') uncertain++
-            else pending++
-        })
-        document.getElementById('stat-pass').textContent = pass
-        document.getElementById('stat-fail').textContent = fail
-        document.getElementById('stat-uncertain').textContent = uncertain
-        document.getElementById('stat-pending').textContent = pending
+        // Use server-provided counts across ALL variants (not just current page)
+        document.getElementById('stat-pass').textContent = curationCounts.pass
+        document.getElementById('stat-fail').textContent = curationCounts.fail
+        document.getElementById('stat-uncertain').textContent = curationCounts.uncertain
+        document.getElementById('stat-pending').textContent = curationCounts.pending
     }
 
     // -----------------------------------------------------------------------
