@@ -1110,13 +1110,13 @@ describe('Static files', function () {
         expect(res.text).to.include('IGV')
     })
 
-    it('index.html includes HTML export button', async function () {
+    it('includes HTML export button', async function () {
         const res = await request(app).get('/').expect(200)
         expect(res.text).to.include('btn-export-html')
         expect(res.text).to.include('Export HTML')
     })
 
-    it('app.js includes exportHtml function', async function () {
+    it('serves app.js with exportHtml function', async function () {
         const res = await request(app).get('/app.js').expect(200)
         expect(res.text).to.include('exportHtml')
         expect(res.text).to.include('/api/export/html')
