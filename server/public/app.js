@@ -1233,36 +1233,41 @@
      * canvases in the IGV container onto a single off-screen canvas.
      */
     async function captureIgvScreenshot() {
-        const igvDiv = document.getElementById('igv-div')
-        if (!igvDiv) return null
+        if (!igvBrowser || typeof igvBrowser.toSVG !== 'function') return null
 
-        const canvases = igvDiv.querySelectorAll('canvas')
-        if (canvases.length === 0) return null
+        try {
+            const svgString = igvBrowser.toSVG()
+            if (!svgString) return null
 
-        // Determine bounding box of all canvases relative to igvDiv
-        const divRect = igvDiv.getBoundingClientRect()
-        const totalWidth = Math.ceil(divRect.width)
-        const totalHeight = Math.ceil(divRect.height)
+            // Convert SVG to PNG via an offscreen Image + Canvas
+            const svgBlob = new Blob([svgString], {type: 'image/svg+xml'})
+            const svgUrl = URL.createObjectURL(svgBlob)
 
-        const offscreen = document.createElement('canvas')
-        offscreen.width = totalWidth
-        offscreen.height = totalHeight
-        const ctx = offscreen.getContext('2d')
-        ctx.fillStyle = '#ffffff'
-        ctx.fillRect(0, 0, totalWidth, totalHeight)
-
-        for (const c of canvases) {
-            const r = c.getBoundingClientRect()
-            const x = r.left - divRect.left
-            const y = r.top - divRect.top
-            try {
-                ctx.drawImage(c, x, y)
-            } catch (e) {
-                console.warn('Skipped canvas due to CORS/tainting:', e)
-            }
+            return new Promise(resolve => {
+                const img = new Image()
+                img.onload = () => {
+                    const dims = igvBrowser.columnContainer.getBoundingClientRect()
+                    const dpr = window.devicePixelRatio || 1
+                    const canvas = document.createElement('canvas')
+                    canvas.width = dims.width * dpr
+                    canvas.height = dims.height * dpr
+                    const ctx = canvas.getContext('2d')
+                    ctx.scale(dpr, dpr)
+                    ctx.drawImage(img, 0, 0)
+                    URL.revokeObjectURL(svgUrl)
+                    resolve(canvas.toDataURL('image/png'))
+                }
+                img.onerror = (e) => {
+                    console.warn('Screenshot SVG-to-PNG conversion failed:', e)
+                    URL.revokeObjectURL(svgUrl)
+                    resolve(null)
+                }
+                img.src = svgUrl
+            })
+        } catch (e) {
+            console.warn('Screenshot capture failed:', e)
+            return null
         }
-
-        return offscreen.toDataURL('image/png')
     }
 
     // -----------------------------------------------------------------------
