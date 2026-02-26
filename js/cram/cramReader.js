@@ -139,6 +139,10 @@ class CramReader {
                 console.warn("CRAM MD5 checksum mismatch, retrying: " + error.message)
                 // Clear the feature cache to allow a fresh fetch on retry
                 this.cramFile.featureCache.clear()
+                // Clear the reference sequence cache to ensure a fresh sequence fetch
+                if (typeof this.genome.sequence?.clearCache === 'function') {
+                    this.genome.sequence.clearCache()
+                }
                 return await this.indexedCramFile.getRecordsForRange(chrIdx, bpStart, bpEnd)
             }
             throw error

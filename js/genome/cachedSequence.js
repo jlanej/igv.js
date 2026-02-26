@@ -75,6 +75,14 @@ class CachedSequence {
     }
 
     /**
+     * Clear all cached sequence intervals and inflight queries.
+     */
+    clearCache() {
+        this.#cachedIntervals = []
+        this.#inflightQueries.clear()
+    }
+
+    /**
      * Query for a sequence.  Returns a promise that is resolved when the asynchronous call to read sequence returns.
      *
      * @param chr

@@ -149,4 +149,39 @@ suite("testCachedSequenceUnit", function () {
         const seq = interval.getSequence(100, 200)
         assert.equal(seq.length, 100)
     })
+
+    test("clearCache - clears cached intervals", async function () {
+        const reader = new MockSequenceReader()
+        const cached = new CachedSequence(reader)
+
+        // Preload cache
+        await cached.getSequence("chr1", 100, 200)
+        assert.equal(reader.callCount, 1)
+
+        // Verify cache hit
+        await cached.getSequence("chr1", 100, 200)
+        assert.equal(reader.callCount, 1)
+
+        // Clear cache
+        cached.clearCache()
+
+        // Should trigger a new fetch after cache clear
+        await cached.getSequence("chr1", 100, 200)
+        assert.equal(reader.callCount, 2)
+    })
+
+    test("clearCache - subsequent fetches return correct data", async function () {
+        const reader = new MockSequenceReader()
+        const cached = new CachedSequence(reader)
+
+        // Populate cache
+        const seq1 = await cached.getSequence("chr1", 100, 200)
+        assert.equal(seq1.length, 100)
+
+        // Clear and refetch
+        cached.clearCache()
+        const seq2 = await cached.getSequence("chr1", 100, 200)
+        assert.equal(seq2.length, 100)
+        assert.equal(seq2, seq1)
+    })
 })
