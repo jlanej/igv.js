@@ -71,6 +71,10 @@
             <div id="tab-variants" class="tab-content active">
                 <div class="table-controls">
                     <label><input type="checkbox" id="select-all"> Select all on page</label>
+                    <div class="variant-search-wrap">
+                        <input type="text" id="variant-search" placeholder="Search variants…" aria-label="Search variants">
+                        <button id="variant-search-clear" class="btn btn-sm" title="Clear search">✕</button>
+                    </div>
                     <span id="page-info"></span>
                     <div class="pagination">
                         <button id="btn-prev" class="btn btn-sm" disabled>← Prev</button>
@@ -94,6 +98,7 @@
                             <tr>
                                 <th>Gene</th>
                                 <th>Total</th>
+                                <th>Samples</th>
                                 <th>Pass</th>
                                 <th>Fail</th>
                                 <th>Uncertain</th>

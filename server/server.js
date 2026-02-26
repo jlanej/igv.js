@@ -32,6 +32,8 @@ const DATA_DIR = getArg('data-dir', getArg('data_dir', path.join(__dirname, 'exa
 const CURATION_FILE = getArg('curation-file', VARIANTS_FILE.replace(/\.tsv$/, '.curation.json'))
 const FILTERS_FILE = getArg('filters-file', VARIANTS_FILE.replace(/\.tsv$/, '.filters.json'))
 const SAMPLE_QC_FILE = getArg('sample-qc', null)
+const VCF_FILE = getArg('vcf', null)
+const VCF_SAMPLES = getArg('vcf-samples', null)  // e.g. "proband:NA12878,mother:NA12891,father:NA12892"
 const GENOME = getArg('genome', 'hg38')
 const HOST = getArg('host', '127.0.0.1')
 
@@ -332,8 +334,18 @@ function getTrioQcMap() {
 function applyFilters(query) {
     let filtered = [...variants]
 
+    // Free-text search across all columns
+    if (query.search) {
+        const term = query.search.trim().toLowerCase()
+        if (term) {
+            filtered = filtered.filter(v =>
+                headerColumns.some(col => String(v[col] || '').toLowerCase().includes(term))
+            )
+        }
+    }
+
     for (const [key, val] of Object.entries(query)) {
-        if (key === 'page' || key === 'per_page' || key === 'sort' || key === 'order') continue
+        if (key === 'page' || key === 'per_page' || key === 'sort' || key === 'order' || key === 'search') continue
         if (!val) continue
 
         // Range filters: field_min / field_max
@@ -411,14 +423,32 @@ app.use('/data', express.static(DATA_DIR, {
 
 // Configuration endpoint
 app.get('/api/config', (_req, res) => {
-    res.json({
+    const cfg = {
         genome: GENOME,
         columns: headerColumns,
         totalVariants: variants.length,
         dataDir: '/data',
         hasSampleQc: sampleQcTrios.length > 0,
         qcMetricThresholds: QC_METRIC_THRESHOLDS
-    })
+    }
+
+    // VCF track configuration
+    if (VCF_FILE) {
+        const vcfUrl = VCF_FILE.startsWith('http') ? VCF_FILE : `/data/${VCF_FILE}`
+        cfg.vcfTrack = {url: vcfUrl}
+
+        // Parse sample roles: "proband:NA12878,mother:NA12891,father:NA12892"
+        if (VCF_SAMPLES) {
+            const samples = {}
+            VCF_SAMPLES.split(',').forEach(pair => {
+                const [role, name] = pair.split(':').map(s => s.trim())
+                if (role && name) samples[role] = name
+            })
+            cfg.vcfTrack.samples = samples
+        }
+    }
+
+    res.json(cfg)
 })
 
 // List / filter variants
@@ -608,15 +638,18 @@ app.get('/api/summary', (req, res) => {
         return res.json({summary: [], message: 'No gene column found in data'})
     }
 
+    const sampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
+
     const geneMap = {}
     for (const v of filtered) {
         const gene = v[geneCol]
         if (!gene) continue
         if (!geneMap[gene]) {
-            geneMap[gene] = {gene, total: 0, pass: 0, fail: 0, uncertain: 0, pending: 0, variants: []}
+            geneMap[gene] = {gene, total: 0, pass: 0, fail: 0, uncertain: 0, pending: 0, _samples: new Set(), variants: []}
         }
         geneMap[gene].total++
         geneMap[gene][v.curation_status || 'pending']++
+        if (sampleCol && v[sampleCol]) geneMap[gene]._samples.add(v[sampleCol])
         geneMap[gene].variants.push({
             id: v.id, chrom: v.chrom, pos: v.pos, ref: v.ref, alt: v.alt,
             impact: v.impact || '', curation_status: v.curation_status
@@ -624,6 +657,10 @@ app.get('/api/summary', (req, res) => {
     }
 
     const summary = Object.values(geneMap)
+        .map(g => {
+            const {_samples, ...rest} = g
+            return {...rest, samples: _samples.size}
+        })
         .sort((a, b) => b.total - a.total)
 
     res.json({
@@ -916,21 +953,28 @@ app.post('/api/export/xlsx', async (req, res) => {
 
         // --- Gene Summary worksheet -----------------------------------------
         const geneCol = headerColumns.includes('gene') ? 'gene' : null
+        const xlsSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
         if (geneCol) {
             const geneMap = {}
             for (const v of filtered) {
                 const gene = v[geneCol]
                 if (!gene) continue
-                if (!geneMap[gene]) geneMap[gene] = {gene, total: 0, pass: 0, fail: 0, uncertain: 0, pending: 0}
+                if (!geneMap[gene]) geneMap[gene] = {gene, total: 0, samples: 0, pass: 0, fail: 0, uncertain: 0, pending: 0, _samples: new Set()}
                 geneMap[gene].total++
                 geneMap[gene][v.curation_status || 'pending']++
+                if (xlsSampleCol && v[xlsSampleCol]) geneMap[gene]._samples.add(v[xlsSampleCol])
             }
-            const geneSummary = Object.values(geneMap).sort((a, b) => b.total - a.total)
+            const geneSummary = Object.values(geneMap).map(g => {
+                g.samples = g._samples.size
+                delete g._samples
+                return g
+            }).sort((a, b) => b.total - a.total)
             if (geneSummary.length > 0) {
                 const gws = workbook.addWorksheet('Gene Summary', {views: [{state: 'frozen', ySplit: 1}]})
                 gws.columns = [
                     {header: 'Gene', key: 'gene', width: 16},
                     {header: 'Total', key: 'total', width: 10},
+                    {header: 'Samples', key: 'samples', width: 10},
                     {header: 'Pass', key: 'pass', width: 10},
                     {header: 'Fail', key: 'fail', width: 10},
                     {header: 'Uncertain', key: 'uncertain', width: 12},
@@ -949,7 +993,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                         if (idx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
                     })
                 })
-                gws.autoFilter = {from: 'A1', to: {row: 1, column: 6}}
+                gws.autoFilter = {from: 'A1', to: {row: 1, column: 7}}
             }
         }
 

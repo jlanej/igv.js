@@ -55,6 +55,7 @@
             setupShortcutsPanel()
             setupSidebarToggle()
             setupDisplayModeControl()
+            setupVariantSearch()
 
             setupTableResize()
             await loadSavedFilters()
@@ -233,6 +234,12 @@
         if (sortField) {
             params.set('sort', sortField)
             params.set('order', sortOrder)
+        }
+
+        // Include search term if present
+        const searchInput = document.getElementById('variant-search')
+        if (searchInput && searchInput.value.trim()) {
+            params.set('search', searchInput.value.trim())
         }
 
         const res = await fetch(`/api/variants?${params}`)
@@ -451,6 +458,27 @@
         const tracks = []
         const sel = document.getElementById('display-mode-select')
         const displayMode = sel ? sel.value : 'SQUISHED'
+
+        // Prepend VCF track if configured
+        if (config.vcfTrack) {
+            const vcfTrack = {
+                type: 'variant',
+                format: 'vcf',
+                name: 'Trio VCF',
+                url: config.vcfTrack.url,
+                displayMode: 'EXPANDED'
+            }
+            if (config.vcfTrack.samples) {
+                vcfTrack.visibilityWindow = -1
+                // Build name with relationship info
+                const roles = Object.entries(config.vcfTrack.samples)
+                    .map(([role, name]) => `${role}: ${name}`)
+                    .join(', ')
+                vcfTrack.name = `Trio VCF (${roles})`
+            }
+            tracks.push(vcfTrack)
+        }
+
         const members = [
             {label: 'child', prefix: 'child'},
             {label: 'mother', prefix: 'mother'},
@@ -585,13 +613,14 @@
 
         const tbody = document.getElementById('summary-body')
         if (!data.summary || data.summary.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8">No gene data available</td></tr>'
+            tbody.innerHTML = '<tr><td colspan="9">No gene data available</td></tr>'
             return
         }
 
         tbody.innerHTML = data.summary.map(g => `<tr>
             <td><span class="gene-link" data-gene="${escapeHtml(g.gene)}">${escapeHtml(g.gene)}</span></td>
             <td>${g.total}</td>
+            <td>${g.samples != null ? g.samples : ''}</td>
             <td class="curation-pass">${g.pass}</td>
             <td class="curation-fail">${g.fail}</td>
             <td class="curation-uncertain">${g.uncertain}</td>
@@ -1201,6 +1230,30 @@
             })
             if (igvBrowser.updateViews) igvBrowser.updateViews()
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // Variant search bar
+    // -----------------------------------------------------------------------
+    let searchDebounce = null
+    function setupVariantSearch() {
+        const input = document.getElementById('variant-search')
+        if (!input) return
+        input.addEventListener('input', () => {
+            clearTimeout(searchDebounce)
+            searchDebounce = setTimeout(() => {
+                currentPage = 1
+                loadVariants()
+            }, 300)
+        })
+        const clearBtn = document.getElementById('variant-search-clear')
+        if (clearBtn) {
+            clearBtn.addEventListener('click', () => {
+                input.value = ''
+                currentPage = 1
+                loadVariants()
+            })
+        }
     }
 
     // -----------------------------------------------------------------------
