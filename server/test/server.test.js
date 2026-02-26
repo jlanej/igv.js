@@ -116,6 +116,55 @@ describe('API /api/variants', function () {
     })
 })
 
+describe('API /api/variants curation_counts and all_notes', function () {
+    after(function () {
+        if (fs.existsSync(curationFile)) fs.unlinkSync(curationFile)
+    })
+
+    it('returns curation_counts with all variants at startup', async function () {
+        const res = await request(app).get('/api/variants').expect(200)
+        expect(res.body).to.have.property('curation_counts')
+        const counts = res.body.curation_counts
+        expect(counts).to.have.property('pass').that.is.a('number')
+        expect(counts).to.have.property('fail').that.is.a('number')
+        expect(counts).to.have.property('uncertain').that.is.a('number')
+        expect(counts).to.have.property('pending').that.is.a('number')
+        expect(counts.pass + counts.fail + counts.uncertain + counts.pending).to.equal(10)
+    })
+
+    it('returns all_notes as an array', async function () {
+        const res = await request(app).get('/api/variants').expect(200)
+        expect(res.body).to.have.property('all_notes').that.is.an('array')
+    })
+
+    it('curation_counts reflect curated variants across all pages', async function () {
+        // Curate two variants
+        await request(app).put('/api/variants/0/curate').send({status: 'pass', note: 'Good variant'}).expect(200)
+        await request(app).put('/api/variants/5/curate').send({status: 'fail', note: 'Bad variant'}).expect(200)
+        // Fetch only page 1 with 3 per page
+        const res = await request(app).get('/api/variants?per_page=3&page=1').expect(200)
+        const counts = res.body.curation_counts
+        expect(counts.pass).to.be.at.least(1)
+        expect(counts.fail).to.be.at.least(1)
+        // Counts should span all 10 variants, not just the 3 on page 1
+        expect(counts.pass + counts.fail + counts.uncertain + counts.pending).to.equal(10)
+    })
+
+    it('all_notes includes notes from curated variants across all pages', async function () {
+        const res = await request(app).get('/api/variants?per_page=3&page=1').expect(200)
+        expect(res.body.all_notes).to.include('Good variant')
+        expect(res.body.all_notes).to.include('Bad variant')
+    })
+
+    it('all_notes are sorted alphabetically', async function () {
+        const res = await request(app).get('/api/variants').expect(200)
+        const notes = res.body.all_notes
+        for (let i = 1; i < notes.length; i++) {
+            expect(notes[i].localeCompare(notes[i - 1])).to.be.at.least(0)
+        }
+    })
+})
+
 describe('API /api/variants/:id', function () {
     it('returns a single variant by id', async function () {
         const res = await request(app).get('/api/variants/0').expect(200)
@@ -1385,5 +1434,29 @@ describe('UI: Curation note suggestions dropdown', function () {
     it('styles.css includes note-suggestions styling', async function () {
         const res = await request(app).get('/styles.css').expect(200)
         expect(res.text).to.include('#note-suggestions')
+    })
+})
+
+describe('UI: Previous notes and curation counts from server', function () {
+    it('app.js uses server-provided curation counts in updateStats', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('curationCounts.pass')
+        expect(res.text).to.include('curationCounts.fail')
+        expect(res.text).to.include('curationCounts.uncertain')
+        expect(res.text).to.include('curationCounts.pending')
+    })
+
+    it('app.js uses server-provided allNotes in refreshNoteSuggestions', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('allNotes')
+        expect(res.text).to.include('data.all_notes')
+    })
+
+    it('app.js calls refreshNoteSuggestions in loadVariants', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        // Verify refreshNoteSuggestions is called inside loadVariants (after data load)
+        const loadVariantsMatch = res.text.match(/async function loadVariants\(\)[\s\S]*?(?=\n    async function|\n    function)/)
+        expect(loadVariantsMatch).to.not.be.null
+        expect(loadVariantsMatch[0]).to.include('refreshNoteSuggestions()')
     })
 })
