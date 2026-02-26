@@ -1253,8 +1253,9 @@
             })
 
             if (!xlsxRes.ok) {
-                const err = await xlsxRes.json()
-                throw new Error(err.error || 'Export failed')
+                let msg = 'Export failed'
+                try { const err = await xlsxRes.json(); msg = err.error || msg } catch (_) {}
+                throw new Error(msg)
             }
 
             const blob = await xlsxRes.blob()
@@ -1350,8 +1351,9 @@
             })
 
             if (!htmlRes.ok) {
-                const err = await htmlRes.json()
-                throw new Error(err.error || 'Export failed')
+                let msg = 'Export failed'
+                try { const err = await htmlRes.json(); msg = err.error || msg } catch (_) {}
+                throw new Error(msg)
             }
 
             const blob = await htmlRes.blob()

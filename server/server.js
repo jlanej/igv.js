@@ -401,7 +401,7 @@ function applyFilters(query) {
 // Express app
 // ---------------------------------------------------------------------------
 const app = express()
-app.use(express.json())
+app.use(express.json({limit: '50mb'}))
 app.use(log.requestLogger)
 
 // Serve static UI files
@@ -887,7 +887,7 @@ app.post('/api/export/xlsx', async (req, res) => {
 
         // Build safe sheet-name lookup for screenshot sheets
         const sheetNames = new Map()
-        const MAX_SHEET_NAME = 31  // Excel worksheet name limit
+        let screenshotIdx = 0
 
         // Data rows
         filtered.forEach((v, rowIdx) => {
@@ -896,19 +896,12 @@ app.post('/api/export/xlsx', async (req, res) => {
                 row[col] = v[col] ?? ''
             }
 
-            // Create screenshot sheet name (max 31 chars for Excel)
+            // Create screenshot sheet name using short numeric index
             if (hasScreenshots && screenshots[String(v.id)]) {
-                const maxBase = MAX_SHEET_NAME - 4  // room for '_NN' suffix
-                const label = `${v.chrom}_${v.pos}`.replace(/[:\\/?*\[\]]/g, '_').substring(0, maxBase)
-                let sheetName = label
-                // Ensure unique name
-                let suffix = 2
-                while (sheetNames.has(sheetName)) {
-                    sheetName = `${label.substring(0, maxBase - String(suffix).length - 1)}_${suffix}`
-                    suffix++
-                }
+                screenshotIdx++
+                const sheetName = String(screenshotIdx)
                 sheetNames.set(sheetName, v.id)
-                row['Screenshot'] = sheetName  // placeholder, will add hyperlink below
+                row['Screenshot'] = sheetName
             } else if (hasScreenshots) {
                 row['Screenshot'] = ''
             }
