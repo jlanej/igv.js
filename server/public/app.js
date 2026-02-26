@@ -53,6 +53,8 @@
             setupPagination()
             setupKeyboardShortcuts()
             setupShortcutsPanel()
+            setupSidebarToggle()
+            setupDisplayModeControl()
 
             setupTableResize()
             await loadSavedFilters()
@@ -339,6 +341,10 @@
 
         renderTable()
 
+        // Scroll the active row into view within the table (no full-page jump)
+        const activeRow = document.querySelector('#table-body tr.active-variant')
+        if (activeRow) activeRow.scrollIntoView({block: 'nearest', behavior: 'smooth'})
+
         // Update IGV header
         document.getElementById('igv-title').textContent =
             `${v.chrom}:${v.pos} ${v.ref}→${v.alt} (${v.gene || 'unknown gene'})`
@@ -354,6 +360,10 @@
         }
 
         await showInIgv(v)
+
+        // Keep the IGV section visible after loading tracks
+        const igvSection = document.getElementById('igv-section')
+        if (igvSection) igvSection.scrollIntoView({block: 'nearest', behavior: 'smooth'})
     }
 
     async function showInIgv(variant) {
@@ -439,6 +449,8 @@
 
     function buildTracks(variant) {
         const tracks = []
+        const sel = document.getElementById('display-mode-select')
+        const displayMode = sel ? sel.value : 'SQUISHED'
         const members = [
             {label: 'child', prefix: 'child'},
             {label: 'mother', prefix: 'mother'},
@@ -457,7 +469,7 @@
                 name: `${m.label} (${variant[`${m.prefix}_gt`] || ''})`.trim(),
                 url: url,
                 height: 200,
-                displayMode: 'SQUISHED',
+                displayMode: displayMode,
                 colorBy: 'strand',
                 sort: {
                     chr: variant.chrom,
@@ -491,7 +503,7 @@
                         name: name,
                         url: url,
                         height: 200,
-                        displayMode: 'SQUISHED',
+                        displayMode: displayMode,
                         colorBy: 'strand'
                     })
                 }
@@ -903,6 +915,13 @@
 
     function setupKeyboardShortcuts() {
         document.addEventListener('keydown', (e) => {
+            // Ctrl+B toggles sidebar regardless of focus
+            if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+                e.preventDefault()
+                toggleSidebar()
+                return
+            }
+
             // Ignore shortcuts when typing in inputs or textareas
             const tag = (e.target.tagName || '').toLowerCase()
             if (tag === 'input' || tag === 'textarea' || tag === 'select') return
@@ -1142,6 +1161,48 @@
         el.textContent = msg
         el.style.opacity = '1'
         setTimeout(() => { el.style.opacity = '0' }, 2500)
+    }
+
+    // -----------------------------------------------------------------------
+    // Collapsible sidebar
+    // -----------------------------------------------------------------------
+    function setupSidebarToggle() {
+        const btn = document.getElementById('btn-collapse-sidebar')
+        if (btn) btn.addEventListener('click', toggleSidebar)
+
+        // Restore persisted state
+        if (localStorage.getItem('sidebarCollapsed') === 'true') {
+            document.getElementById('app').classList.add('sidebar-collapsed')
+            if (btn) btn.textContent = '▶'
+        }
+    }
+
+    function toggleSidebar() {
+        const app = document.getElementById('app')
+        app.classList.toggle('sidebar-collapsed')
+        const collapsed = app.classList.contains('sidebar-collapsed')
+        const btn = document.getElementById('btn-collapse-sidebar')
+        if (btn) btn.textContent = collapsed ? '▶' : '◀'
+        localStorage.setItem('sidebarCollapsed', collapsed)
+    }
+
+    // -----------------------------------------------------------------------
+    // Display mode control for all tracks
+    // -----------------------------------------------------------------------
+    function setupDisplayModeControl() {
+        const sel = document.getElementById('display-mode-select')
+        if (!sel) return
+        sel.addEventListener('change', () => {
+            const mode = sel.value
+            if (!igvBrowser) return
+            const tracks = igvBrowser.trackViews
+                ? igvBrowser.trackViews.map(tv => tv.track).filter(t => t && t.type === 'alignment')
+                : []
+            tracks.forEach(t => {
+                t.displayMode = mode
+            })
+            if (igvBrowser.updateViews) igvBrowser.updateViews()
+        })
     }
 
     // -----------------------------------------------------------------------

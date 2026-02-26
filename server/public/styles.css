@@ -251,6 +251,36 @@ tr.active-variant { background: #b8daff; }
 .badge-uncertain { background: #fef9e7; color: var(--uncertain); }
 .badge-pending { background: #f2f3f4; color: var(--pending); }
 
+/* Sidebar collapse toggle */
+#btn-collapse-sidebar {
+    position: absolute;
+    left: var(--sidebar-width);
+    top: 60px;
+    z-index: 50;
+    width: 20px;
+    height: 40px;
+    padding: 0;
+    border-radius: 0 4px 4px 0;
+    border-left: none;
+    background: var(--card);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    transition: left 0.2s ease;
+}
+#btn-collapse-sidebar:hover { background: var(--hover); }
+
+#app.sidebar-collapsed #filter-panel {
+    width: 0;
+    min-width: 0;
+    padding: 0;
+    overflow: hidden;
+    border-right: none;
+}
+#app.sidebar-collapsed #btn-collapse-sidebar { left: 0; }
+
 /* IGV section */
 #igv-section {
     margin-top: 16px;
@@ -276,7 +306,11 @@ tr.active-variant { background: #b8daff; }
 #igv-curation .btn { font-size: 12px; padding: 4px 10px; }
 #curation-note { resize: vertical; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; min-width: 200px; }
 
-#igv-div { min-height: 200px; }
+#igv-div { min-height: 400px; }
+
+/* Display mode controls */
+#igv-controls { display: flex; align-items: center; gap: 6px; }
+.display-mode-label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
 
 /* Resize handle between table and IGV */
 #table-resize-handle {
