@@ -4,13 +4,13 @@
  * Generate documentation screenshots from the running variant review server.
  *
  * Usage:
- *   node scripts/generate-screenshots.js
+ *   node scripts/generate-screenshots.cjs
  *
  * Requires: playwright (npx playwright install chromium)
  * Starts the server on a random port, captures 8 screenshots, then exits.
  */
 
-const { execSync, spawn } = require('child_process')
+const { spawn } = require('child_process')
 const path = require('path')
 const http = require('http')
 
