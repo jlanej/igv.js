@@ -457,6 +457,8 @@
                 name: `${m.label} (${variant[`${m.prefix}_gt`] || ''})`.trim(),
                 url: url,
                 height: 200,
+                displayMode: 'SQUISHED',
+                colorBy: 'strand',
                 sort: {
                     chr: variant.chrom,
                     position: parseInt(variant.pos, 10),
@@ -488,7 +490,9 @@
                         type: 'alignment',
                         name: name,
                         url: url,
-                        height: 200
+                        height: 200,
+                        displayMode: 'SQUISHED',
+                        colorBy: 'strand'
                     })
                 }
             }
