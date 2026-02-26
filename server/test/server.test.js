@@ -310,6 +310,7 @@ describe('API /api/sample-summary', function () {
         expect(res.body).to.have.property('thresholds').that.is.an('array')
         expect(res.body).to.have.property('impact_groups').that.is.an('array')
         expect(res.body).to.have.property('samples').that.is.an('array')
+        expect(res.body).to.have.property('cohort_summary').that.is.an('object')
         expect(res.body.total_samples).to.be.greaterThan(0)
     })
 
@@ -320,7 +321,7 @@ describe('API /api/sample-summary', function () {
 
     it('returns correct frequency thresholds', async function () {
         const res = await request(app).get('/api/sample-summary').expect(200)
-        expect(res.body.thresholds).to.deep.equal(['freq = 0', 'freq < 0.0001', 'freq < 0.001', 'freq < 0.01'])
+        expect(res.body.thresholds).to.deep.equal(['freq = 0', 'all'])
     })
 
     it('returns per-sample counts by impact and frequency', async function () {
@@ -334,7 +335,19 @@ describe('API /api/sample-summary', function () {
         expect(sample.counts).to.have.property('HIGH||MODERATE||LOW')
         // Each impact group should have counts for each threshold
         expect(sample.counts['HIGH']).to.have.property('freq = 0')
-        expect(sample.counts['HIGH']).to.have.property('freq < 0.0001')
+        expect(sample.counts['HIGH']).to.have.property('all')
+    })
+
+    it('returns cohort summary with mean and median', async function () {
+        const res = await request(app).get('/api/sample-summary').expect(200)
+        const cs = res.body.cohort_summary
+        expect(cs).to.have.property('HIGH')
+        expect(cs['HIGH']).to.have.property('freq = 0')
+        expect(cs['HIGH']['freq = 0']).to.have.property('mean').that.is.a('number')
+        expect(cs['HIGH']['freq = 0']).to.have.property('median').that.is.a('number')
+        expect(cs['HIGH']).to.have.property('all')
+        expect(cs['HIGH']['all']).to.have.property('mean').that.is.a('number')
+        expect(cs['HIGH']['all']).to.have.property('median').that.is.a('number')
     })
 
     it('respects filters in sample summary', async function () {
@@ -718,10 +731,20 @@ describe('UI: Sample Summary tab', function () {
         expect(res.text).to.include('id="sample-summary-body"')
     })
 
+    it('index.html includes cohort summary elements', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('id="cohort-summary-header"')
+        expect(res.text).to.include('id="cohort-summary-body"')
+        expect(res.text).to.include('Cohort Summary')
+        expect(res.text).to.include('Per-Sample Counts')
+    })
+
     it('app.js includes loadSampleSummary function', async function () {
         const res = await request(app).get('/app.js').expect(200)
         expect(res.text).to.include('loadSampleSummary')
         expect(res.text).to.include('sample-summary')
+        expect(res.text).to.include('cohort-summary-header')
+        expect(res.text).to.include('cohort_summary')
     })
 })
 
