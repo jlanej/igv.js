@@ -1152,8 +1152,9 @@ describe('UI: Curation note suggestions dropdown', function () {
 
     it('app.js populates textarea from dropdown selection', async function () {
         const res = await request(app).get('/app.js').expect(200)
-        expect(res.text).to.include('noteSel.onchange')
-        expect(res.text).to.include('noteSel.value')
+        expect(res.text).to.include('setupNoteSuggestions')
+        expect(res.text).to.include("sel.value")
+        expect(res.text).to.include("curation-note")
     })
 
     it('styles.css includes note-suggestions styling', async function () {

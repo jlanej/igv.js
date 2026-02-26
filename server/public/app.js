@@ -56,6 +56,7 @@
             setupSidebarToggle()
             setupDisplayModeControl()
             setupVariantSearch()
+            setupNoteSuggestions()
 
             setupTableResize()
             await loadSavedFilters()
@@ -389,6 +390,17 @@
         sel.style.display = notes.length ? '' : 'none'
     }
 
+    function setupNoteSuggestions() {
+        const sel = document.getElementById('note-suggestions')
+        if (!sel) return
+        sel.addEventListener('change', () => {
+            if (sel.value) {
+                document.getElementById('curation-note').value = sel.value
+                sel.value = ''
+            }
+        })
+    }
+
     async function selectVariant(id) {
         activeVariantId = id
         const v = variants.find(x => x.id === id)
@@ -407,16 +419,6 @@
 
         // Populate note suggestions from previously used notes
         refreshNoteSuggestions()
-        const noteSel = document.getElementById('note-suggestions')
-        if (noteSel) {
-            noteSel.value = ''
-            noteSel.onchange = () => {
-                if (noteSel.value) {
-                    document.getElementById('curation-note').value = noteSel.value
-                    noteSel.value = ''
-                }
-            }
-        }
 
         // Set up single-variant curation buttons
         document.querySelectorAll('#igv-curation [data-status]').forEach(btn => {
