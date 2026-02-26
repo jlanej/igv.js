@@ -1561,3 +1561,41 @@ describe('UI: Previous notes and curation counts from server', function () {
         expect(loadVariantsMatch[0]).to.include('refreshNoteSuggestions()')
     })
 })
+
+// ── Documentation validation ─────────────────────────────────────────────────
+describe('Documentation', function () {
+    const docsDir = path.join(__dirname, '..', '..', 'docs')
+    const screenshotsDir = path.join(docsDir, 'screenshots')
+
+    const expectedScreenshots = [
+        '01-overview.png',
+        '02-variant-table.png',
+        '03-filter-panel.png',
+        '04-igv-viewer.png',
+        '05-gene-summary.png',
+        '06-sample-summary.png',
+        '07-keyboard-shortcuts.png',
+        '08-curation-workflow.png',
+    ]
+
+    it('docs/index.html exists', function () {
+        expect(fs.existsSync(path.join(docsDir, 'index.html'))).to.be.true
+    })
+
+    expectedScreenshots.forEach(name => {
+        it(`screenshot ${name} exists`, function () {
+            const filePath = path.join(screenshotsDir, name)
+            expect(fs.existsSync(filePath), `${name} missing`).to.be.true
+            const stat = fs.statSync(filePath)
+            expect(stat.size).to.be.greaterThan(0)
+        })
+    })
+
+    it('docs/index.html references all screenshots', function () {
+        const html = fs.readFileSync(path.join(docsDir, 'index.html'), 'utf8')
+        expectedScreenshots.forEach(name => {
+            expect(html).to.include(`screenshots/${name}`,
+                `docs/index.html does not reference ${name}`)
+        })
+    })
+})
