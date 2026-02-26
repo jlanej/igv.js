@@ -459,8 +459,47 @@
         const sel = document.getElementById('display-mode-select')
         const displayMode = sel ? sel.value : 'SQUISHED'
 
-        // Prepend VCF track if configured
-        if (config.vcfTrack) {
+        // Build per-variant VCF tracks from column data, or fall back to global config
+        const vcfMembers = [
+            {label: 'child', prefix: 'child'},
+            {label: 'mother', prefix: 'mother'},
+            {label: 'father', prefix: 'father'}
+        ]
+        const vcfMap = new Map() // url -> {indexURL, roles: [{label, sampleId}]}
+        for (const m of vcfMembers) {
+            const vcfFile = variant[`${m.prefix}_vcf`]
+            if (!vcfFile) continue
+            const url = vcfFile.startsWith('http') ? vcfFile : `/data/${vcfFile}`
+            if (!vcfMap.has(url)) {
+                const idx = variant[`${m.prefix}_vcf_index`]
+                const indexURL = idx ? (idx.startsWith('http') ? idx : `/data/${idx}`) : undefined
+                vcfMap.set(url, {indexURL, roles: []})
+            }
+            const sampleId = variant[`${m.prefix}_vcf_id`]
+            if (sampleId) {
+                vcfMap.get(url).roles.push({label: m.label, sampleId})
+            }
+        }
+
+        if (vcfMap.size > 0) {
+            for (const [url, {indexURL, roles}] of vcfMap) {
+                const vcfTrack = {
+                    type: 'variant',
+                    format: 'vcf',
+                    url: url,
+                    displayMode: 'EXPANDED',
+                    visibilityWindow: -1
+                }
+                if (indexURL) vcfTrack.indexURL = indexURL
+                if (roles.length > 0) {
+                    vcfTrack.name = `Trio VCF (${roles.map(r => `${r.label}: ${r.sampleId}`).join(', ')})`
+                } else {
+                    vcfTrack.name = 'Trio VCF'
+                }
+                tracks.push(vcfTrack)
+            }
+        } else if (config.vcfTrack) {
+            // Fall back to global VCF track from --vcf CLI flag
             const vcfTrack = {
                 type: 'variant',
                 format: 'vcf',
@@ -470,7 +509,6 @@
             }
             if (config.vcfTrack.samples) {
                 vcfTrack.visibilityWindow = -1
-                // Build name with relationship info
                 const roles = Object.entries(config.vcfTrack.samples)
                     .map(([role, name]) => `${role}: ${name}`)
                     .join(', ')
