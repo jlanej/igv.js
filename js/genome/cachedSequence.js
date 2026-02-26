@@ -7,7 +7,7 @@ import SequenceInterval from "./sequenceInterval.js"
 class CachedSequence {
 
     static #minQuerySize = 1e5
-    #currentQuery
+    #inflightQueries = new Map()
     #cachedIntervals = []
     #maxIntervals = 10   // TODO - this should be >= the number of viewports for multi-locus view
 
@@ -45,8 +45,8 @@ class CachedSequence {
 
     #trimCache(interval) {
         // Filter out redundant (subsumed) cached intervals
-        this.#cachedIntervals = this.#cachedIntervals.filter(i => !interval.contains(i))
-        if (this.#cachedIntervals.length === this.#maxIntervals) {
+        this.#cachedIntervals = this.#cachedIntervals.filter(i => i !== interval && !interval.containsRange(i))
+        if (this.#cachedIntervals.length >= this.#maxIntervals) {
             this.#cachedIntervals.shift()
         }
 
@@ -92,18 +92,26 @@ class CachedSequence {
             qstart = Math.max(0, center - CachedSequence.#minQuerySize/2)
             qend = qstart + CachedSequence.#minQuerySize
         }
-        const interval = new SequenceInterval(chr, qstart, qend)
 
-        if (this.#currentQuery && this.#currentQuery[0].contains(chr, start, end)) {
-            return this.#currentQuery[1]
-        } else {
-            const queryPromise = new Promise(async (resolve, reject) => {
-                interval.features = await this.sequenceReader.readSequence(chr, qstart, qend)
-                resolve(interval)
-            })
-            this.#currentQuery = [interval, queryPromise]
-            return queryPromise
+        // Check for an in-flight query that covers this request
+        for (const [, entry] of this.#inflightQueries) {
+            if (entry.interval.contains(chr, start, end)) {
+                return entry.promise
+            }
         }
+
+        const interval = new SequenceInterval(chr, qstart, qend)
+        const key = `${chr}:${qstart}-${qend}`
+        const queryPromise = this.sequenceReader.readSequence(chr, qstart, qend).then(features => {
+            interval.features = features
+            this.#inflightQueries.delete(key)
+            return interval
+        }, error => {
+            this.#inflightQueries.delete(key)
+            throw error
+        })
+        this.#inflightQueries.set(key, {interval, promise: queryPromise})
+        return queryPromise
     }
 
 
