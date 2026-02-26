@@ -873,6 +873,198 @@ describe('XLSX Sample Summary cohort statistics', function () {
     })
 })
 
+describe('XLSX screenshot image embedding', function () {
+    it('embeds a valid PNG image in the screenshot worksheet', async function () {
+        this.timeout(10000)
+        const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0],
+                screenshots: {'0': tinyPng}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        // Find the screenshot worksheet (not Variants, Gene Summary, or Sample Summary)
+        const screenshotSheet = workbook.worksheets.find(s =>
+            !['Variants', 'Gene Summary', 'Sample Summary'].includes(s.name)
+        )
+        expect(screenshotSheet).to.exist
+
+        // Verify that the sheet has an embedded image
+        const images = screenshotSheet.getImages()
+        expect(images).to.be.an('array').with.length.greaterThan(0)
+
+        // Verify image placement (should start at row 5, col 0)
+        const img = images[0]
+        expect(img.range.tl.row).to.equal(5)
+        expect(img.range.tl.col).to.equal(0)
+
+        // Verify the workbook has media with valid PNG data
+        expect(workbook.model.media).to.be.an('array').with.length.greaterThan(0)
+        const media = workbook.model.media[0]
+        expect(media.type).to.equal('image')
+        expect(media.extension).to.equal('png')
+        expect(media.buffer).to.be.an.instanceOf(Buffer)
+        // Check PNG magic bytes
+        const pngHeader = Buffer.from([0x89, 0x50, 0x4E, 0x47])
+        expect(media.buffer.slice(0, 4).equals(pngHeader)).to.be.true
+    })
+})
+
+describe('API /api/export/html', function () {
+    const binaryParse = (res, callback) => {
+        const chunks = []
+        res.on('data', chunk => chunks.push(chunk))
+        res.on('end', () => callback(null, Buffer.concat(chunks)))
+    }
+
+    it('returns a ZIP file with HTML report', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/html')
+            .send({variantIds: [0, 1]})
+            .buffer(true)
+            .parse(binaryParse)
+            .expect(200)
+            .expect('Content-Type', /zip/)
+        expect(res.body.length).to.be.greaterThan(0)
+        // ZIP magic bytes
+        expect(res.body[0]).to.equal(0x50) // P
+        expect(res.body[1]).to.equal(0x4B) // K
+    })
+
+    it('returns 400 when no variants match', async function () {
+        const res = await request(app)
+            .post('/api/export/html')
+            .send({variantIds: [9999]})
+            .expect(400)
+        expect(res.body).to.have.property('error')
+    })
+
+    it('contains an index.html with interactive table', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/html')
+            .send({variantIds: [0, 1, 2]})
+            .buffer(true)
+            .parse(binaryParse)
+            .expect(200)
+
+        // Parse the ZIP
+        const JSZip = require('jszip')
+        const zip = await JSZip.loadAsync(res.body)
+
+        const htmlFile = zip.file('variants_report/index.html')
+        expect(htmlFile).to.exist
+        const html = await htmlFile.async('string')
+
+        // Verify interactive features
+        expect(html).to.include('variantTable')
+        expect(html).to.include('searchBox')
+        expect(html).to.include('statusFilter')
+        expect(html).to.include('pagination')
+        expect(html).to.include('Variant Review Report')
+    })
+
+    it('includes screenshots in ZIP when provided', async function () {
+        this.timeout(10000)
+        const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+        const res = await request(app)
+            .post('/api/export/html')
+            .send({
+                variantIds: [0, 1],
+                screenshots: {'0': tinyPng}
+            })
+            .buffer(true)
+            .parse(binaryParse)
+            .expect(200)
+
+        const JSZip = require('jszip')
+        const zip = await JSZip.loadAsync(res.body)
+
+        // Should have a screenshots directory with a PNG
+        const screenshotFiles = Object.keys(zip.files).filter(f =>
+            f.startsWith('variants_report/screenshots/') && f.endsWith('.png')
+        )
+        expect(screenshotFiles).to.have.length(1)
+
+        // Verify the PNG is valid
+        const pngData = await zip.file(screenshotFiles[0]).async('nodebuffer')
+        const pngHeader = Buffer.from([0x89, 0x50, 0x4E, 0x47])
+        expect(pngData.slice(0, 4).equals(pngHeader)).to.be.true
+
+        // HTML should reference the screenshot
+        const html = await zip.file('variants_report/index.html').async('string')
+        expect(html).to.include('screenshot_0_chr1_12345.png')
+        expect(html).to.include('screenshotModal')
+        expect(html).to.include('gallery')
+    })
+
+    it('includes gene summary tab when gene column exists', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/html')
+            .send({variantIds: [0, 1, 2]})
+            .buffer(true)
+            .parse(binaryParse)
+            .expect(200)
+
+        const JSZip = require('jszip')
+        const zip = await JSZip.loadAsync(res.body)
+        const html = await zip.file('variants_report/index.html').async('string')
+        expect(html).to.include('Gene Summary')
+        expect(html).to.include('geneGrid')
+    })
+
+    it('includes applied filters in HTML', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/html')
+            .send({
+                variantIds: [0, 1],
+                filters: {impact: 'HIGH', frequency_max: '0.001'}
+            })
+            .buffer(true)
+            .parse(binaryParse)
+            .expect(200)
+
+        const JSZip = require('jszip')
+        const zip = await JSZip.loadAsync(res.body)
+        const html = await zip.file('variants_report/index.html').async('string')
+        expect(html).to.include('Applied Filters')
+        expect(html).to.include('Impact')
+    })
+
+    it('includes curation stats in HTML', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/html')
+            .send({})
+            .buffer(true)
+            .parse(binaryParse)
+            .expect(200)
+
+        const JSZip = require('jszip')
+        const zip = await JSZip.loadAsync(res.body)
+        const html = await zip.file('variants_report/index.html').async('string')
+        // Should have stat cards
+        expect(html).to.include('stat-card')
+        expect(html).to.include('Pass')
+        expect(html).to.include('Fail')
+        expect(html).to.include('Pending')
+    })
+})
+
 describe('API /api/sample-summary includes sd in cohort_summary', function () {
     it('cohort_summary cells have sd field', async function () {
         const res = await request(app).get('/api/sample-summary').expect(200)
@@ -916,6 +1108,18 @@ describe('Static files', function () {
     it('serves the UI index.html', async function () {
         const res = await request(app).get('/').expect(200)
         expect(res.text).to.include('IGV')
+    })
+
+    it('index.html includes HTML export button', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('btn-export-html')
+        expect(res.text).to.include('Export HTML')
+    })
+
+    it('app.js includes exportHtml function', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('exportHtml')
+        expect(res.text).to.include('/api/export/html')
     })
 
     it('serves app.js', async function () {

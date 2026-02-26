@@ -1160,6 +1160,8 @@
 
         document.getElementById('btn-export-xlsx').addEventListener('click', () => exportXlsx())
 
+        document.getElementById('btn-export-html').addEventListener('click', () => exportHtml())
+
         document.getElementById('btn-apply-filters').addEventListener('click', () => {
             currentPage = 1
             loadVariants()
@@ -1271,6 +1273,103 @@
         } catch (err) {
             console.error('XLSX export error:', err)
             showNotification('XLSX export failed: ' + err.message, 'warn')
+        } finally {
+            btn.disabled = false
+            setTimeout(() => { progressDiv.style.display = 'none' }, 2000)
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // HTML Export with IGV screenshots
+    // -----------------------------------------------------------------------
+    async function exportHtml() {
+        const progressDiv = document.getElementById('xlsx-progress')
+        const progressFill = document.getElementById('xlsx-progress-fill')
+        const progressText = document.getElementById('xlsx-progress-text')
+        const btn = document.getElementById('btn-export-html')
+
+        // Fetch all filtered variants across pages
+        const filters = getActiveFilters()
+        let allVariants = []
+        let page = 1
+        while (true) {
+            const params = new URLSearchParams({...filters, per_page: 200, page})
+            const res = await fetch(`/api/variants?${params}`)
+            const data = await res.json()
+            allVariants = allVariants.concat(data.data)
+            if (page >= data.pages) break
+            page++
+        }
+
+        if (allVariants.length === 0) {
+            showNotification('No variants to export', 'warn')
+            return
+        }
+
+        btn.disabled = true
+        progressDiv.style.display = 'block'
+        progressText.textContent = 'Preparing screenshots…'
+        progressFill.style.width = '0%'
+
+        const screenshots = {}
+        const variantIds = allVariants.map(v => v.id)
+
+        // Capture IGV screenshots if the browser is available
+        if (igvBrowser) {
+            for (let i = 0; i < allVariants.length; i++) {
+                const v = allVariants[i]
+                const pct = Math.round(((i + 1) / allVariants.length) * 80)
+                progressText.textContent = `Screenshot ${i + 1}/${allVariants.length}: ${v.chrom}:${v.pos}`
+                progressFill.style.width = `${pct}%`
+
+                try {
+                    const pos = parseInt(v.pos, 10)
+                    const flank = 100
+                    const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
+                    await igvBrowser.search(locus)
+                    await new Promise(resolve => setTimeout(resolve, 1500))
+                    const imgData = await captureIgvScreenshot()
+                    if (imgData) {
+                        screenshots[String(v.id)] = imgData
+                    }
+                } catch (err) {
+                    console.warn(`Screenshot failed for variant ${v.id}:`, err)
+                }
+            }
+        }
+
+        // Send to server for HTML generation
+        progressText.textContent = 'Generating HTML report…'
+        progressFill.style.width = '90%'
+
+        try {
+            const htmlRes = await fetch('/api/export/html', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({variantIds, screenshots, filters})
+            })
+
+            if (!htmlRes.ok) {
+                const err = await htmlRes.json()
+                throw new Error(err.error || 'Export failed')
+            }
+
+            const blob = await htmlRes.blob()
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = 'variants_export.zip'
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            URL.revokeObjectURL(url)
+
+            progressText.textContent = 'Done!'
+            progressFill.style.width = '100%'
+            showNotification(`Exported ${allVariants.length} variants to HTML`, 'success')
+        } catch (err) {
+            console.error('HTML export error:', err)
+            showNotification('HTML export failed: ' + err.message, 'warn')
         } finally {
             btn.disabled = false
             setTimeout(() => { progressDiv.style.display = 'none' }, 2000)
