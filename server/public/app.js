@@ -1227,9 +1227,8 @@
                     const flank = 100
                     const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
                     await igvBrowser.search(locus)
-                    // Wait until every viewport has finished loading and the
-                    // browser has completed its paint cycle
-                    await waitForIgvRender(igvBrowser)
+                    // Allow time for tracks to render
+                    await new Promise(resolve => setTimeout(resolve, 1500))
 
                     // Capture the IGV div as a canvas image
                     const imgData = await captureIgvScreenshot()
@@ -1329,7 +1328,7 @@
                     const flank = 100
                     const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
                     await igvBrowser.search(locus)
-                    await waitForIgvRender(igvBrowser)
+                    await new Promise(resolve => setTimeout(resolve, 1500))
                     const imgData = await captureIgvScreenshot()
                     if (imgData) {
                         screenshots[String(v.id)] = imgData
@@ -1380,56 +1379,6 @@
     }
 
     /**
-     * Wait until all IGV track viewports have finished loading data and the
-     * browser has completed at least one paint cycle.  Falls back to a fixed
-     * delay after {@code timeout} ms so exports never stall indefinitely.
-     * @param {Object} browser - The IGV browser instance
-     * @param {number} [timeout=15000] - Maximum milliseconds to wait
-     * @returns {Promise<void>}
-     */
-    async function waitForIgvRender(browser, timeout = 15000) {
-        const start = Date.now()
-
-        const anyViewportLoading = () => {
-            for (const tv of (browser.trackViews || [])) {
-                for (const vp of (tv.viewports || [])) {
-                    if (vp.loading) return true
-                }
-            }
-            return false
-        }
-
-        // Yield to the browser so it can compute layout for freshly-created
-        // viewport DOM elements.  Without this, clientWidth may still be 0
-        // and viewport.isVisible() returns false, causing updateViews() to
-        // skip viewports entirely.
-        await new Promise(r => requestAnimationFrame(r))
-
-        // Stabilisation loop: force a data-load + repaint cycle, then poll
-        // until no viewport reports an in-progress load.  Repeat up to
-        // MAX_CYCLES times because a completed updateViews() may reveal
-        // viewports that now need loading (e.g. after a layout change).
-        const MAX_CYCLES = 3
-        for (let cycle = 0; cycle < MAX_CYCLES && Date.now() - start < timeout; cycle++) {
-            await browser.updateViews()
-
-            let hadLoading = false
-            while (Date.now() - start < timeout && anyViewportLoading()) {
-                hadLoading = true
-                await new Promise(r => setTimeout(r, 100))
-            }
-            // If nothing was loading after updateViews(), the view is stable.
-            if (!hadLoading) break
-        }
-
-        // Double-requestAnimationFrame ensures the browser has flushed its
-        // rendering pipeline before the caller captures the SVG.
-        await new Promise(resolve =>
-            requestAnimationFrame(() => requestAnimationFrame(resolve))
-        )
-    }
-
-    /**
      * Capture the IGV viewer as a PNG data URL by compositing all child
      * canvases in the IGV container onto a single off-screen canvas.
      */
@@ -1448,7 +1397,7 @@
                 const img = new Image()
                 img.onload = () => {
                     const dims = igvBrowser.columnContainer.getBoundingClientRect()
-                    const dpr = (window.devicePixelRatio || 1) * 2
+                    const dpr = window.devicePixelRatio || 1
                     const canvas = document.createElement('canvas')
                     canvas.width = dims.width * dpr
                     canvas.height = dims.height * dpr

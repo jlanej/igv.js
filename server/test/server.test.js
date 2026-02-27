@@ -1323,24 +1323,6 @@ describe('UI: Track load validation', function () {
     })
 })
 
-describe('UI: IGV screenshot render timing', function () {
-    it('waitForIgvRender yields to browser layout before updateViews', async function () {
-        const res = await request(app).get('/app.js').expect(200)
-        // Must yield via requestAnimationFrame before calling updateViews()
-        // to let newly-created viewports receive their computed layout.
-        expect(res.text).to.include('waitForIgvRender')
-        expect(res.text).to.include('requestAnimationFrame')
-        expect(res.text).to.include('updateViews')
-    })
-
-    it('waitForIgvRender uses a stabilisation loop', async function () {
-        const res = await request(app).get('/app.js').expect(200)
-        // Must loop: updateViews → poll loading, repeating until stable.
-        expect(res.text).to.include('MAX_CYCLES')
-        expect(res.text).to.include('anyViewportLoading')
-    })
-})
-
 describe('API /api/filter-config', function () {
     const filtersFile = path.join(__dirname, '..', 'example_data', 'variants.filters.json')
 
