@@ -1383,6 +1383,9 @@
      * Wait until all IGV track viewports have finished loading data and the
      * browser has completed at least one paint cycle.  Falls back to a fixed
      * delay after {@code timeout} ms so exports never stall indefinitely.
+     * @param {Object} browser - The IGV browser instance
+     * @param {number} [timeout=15000] - Maximum milliseconds to wait
+     * @returns {Promise<void>}
      */
     async function waitForIgvRender(browser, timeout = 15000) {
         const start = Date.now()
