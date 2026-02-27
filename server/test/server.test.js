@@ -1923,7 +1923,7 @@ describe('UI: Pixel-based IGV screenshot readiness guard', function () {
         const loadFnStart = res.text.indexOf('async function waitForIgvLoad')
         const pixelCallPos = res.text.indexOf('waitForIgvPixels', loadFnStart)
         expect(pixelCallPos).to.be.greaterThan(loadFnStart)
-        const returnsPixelGuard = res.text.indexOf('return pixelReady', loadFnStart)
+        const returnsPixelGuard = res.text.indexOf('return pixelsReady', loadFnStart)
         expect(returnsPixelGuard).to.be.greaterThan(loadFnStart)
     })
 

@@ -1377,6 +1377,10 @@
         }
     }
 
+    /**
+     * Sample a canvas (bounded to 400x200 from the center) and report whether
+     * at least `minNonZeroPixels` alpha-channel pixels are non-zero.
+     */
     function canvasHasPixels(canvas, minNonZeroPixels) {
         if (!canvas || canvas.width === 0 || canvas.height === 0) return false
         const ctx = canvas.getContext('2d')
@@ -1399,17 +1403,92 @@
         return false
     }
 
+    /**
+     * Determine if a viewport is visible, preferring its isVisible() method and
+     * falling back to a clientWidth check when unavailable.
+     */
+    function viewportIsVisible(vp) {
+        if (typeof vp.isVisible === 'function') return vp.isVisible()
+        if (vp.viewportElement) return vp.viewportElement.clientWidth > 0
+        return false
+    }
+
+    /**
+     * Return all visible viewports from the provided browser's trackViews.
+     */
     function getVisibleViewports(browser) {
         if (!browser || !browser.trackViews) return []
         const viewports = []
         for (const tv of browser.trackViews) {
             if (!tv.viewports) continue
             for (const vp of tv.viewports) {
-                const visible = typeof vp.isVisible === 'function' ? vp.isVisible() : (vp.viewportElement ? vp.viewportElement.clientWidth > 0 : true)
-                if (visible) viewports.push(vp)
+                if (viewportIsVisible(vp)) viewports.push(vp)
             }
         }
         return viewports
+    }
+
+    /**
+     * Verify that a viewport's featureCache covers the current range. TrackViewport
+     * caches use the multi-argument form, while the generic FeatureCache uses an
+     * object-based signature.
+     */
+    function featureCacheHasRange(vp, referenceFrame, end, windowFunction) {
+        if (!referenceFrame) return false
+        if (end === undefined) return false
+        if (!vp.featureCache) return false
+        if (typeof vp.featureCache.containsRange !== 'function') return false
+        try {
+            const usesObjectRange = Object.prototype.hasOwnProperty.call(vp.featureCache, 'range') && vp.featureCache.containsRange.length <= 1
+            if (usesObjectRange) {
+                return vp.featureCache.containsRange({chr: referenceFrame.chr, start: referenceFrame.start, end: end})
+            }
+            return vp.featureCache.containsRange(referenceFrame.chr, referenceFrame.start, end, referenceFrame.bpPerPixel, windowFunction)
+        } catch (err) {
+            console.warn('featureCacheHasRange: featureCache.containsRange threw', err)
+            return false
+        }
+    }
+
+    /**
+     * Retrieve a viewport's canvas, falling back to querying the viewportElement.
+     */
+    function getViewportCanvas(vp) {
+        if (!vp) return null
+        if (vp.canvas) return vp.canvas
+        if (vp.viewportElement) {
+            const found = vp.viewportElement.querySelector('canvas')
+            if (found) return found
+        }
+        return null
+    }
+
+    /**
+     * Derive the viewport width using available helpers, falling back to canvas width.
+     */
+    function getViewportWidth(vp, canvas) {
+        if (!vp) return 0
+        if (typeof vp.getWidth === 'function') return vp.getWidth()
+        if (vp.viewportElement) return vp.viewportElement.clientWidth
+        return canvas ? canvas.width : 0
+    }
+
+    /**
+     * Calculate the genomic end coordinate for the current viewport width.
+     */
+    function calculateViewportEnd(rf, width) {
+        if (!rf) return undefined
+        if (typeof rf.calculateEnd === 'function') return rf.calculateEnd(width)
+        if (rf.bpPerPixel) return rf.start + rf.bpPerPixel * width
+        return undefined
+    }
+
+    /**
+     * Retrieve the window function associated with a viewport's track, if any.
+     */
+    function getViewportWindowFunction(vp) {
+        if (!vp || !vp.trackView || !vp.trackView.track) return undefined
+        return vp.trackView.track.windowFunction
     }
 
     /**
@@ -1424,7 +1503,8 @@
         const canvases = []
 
         for (const vp of getVisibleViewports(browser)) {
-            if (vp.canvas) canvases.push(vp.canvas)
+            const canvas = getViewportCanvas(vp)
+            if (canvas) canvases.push(canvas)
         }
 
         if (canvases.length === 0) {
@@ -1437,6 +1517,28 @@
 
         for (const canvas of canvases) {
             if (!canvasHasPixels(canvas, minNonZeroPixels)) return false
+        }
+        return true
+    }
+
+    /**
+     * Verify that visible viewports have canvases and populated feature caches
+     * for the current locus. Pixel readiness is enforced separately.
+     */
+    function areViewportsReady(browser) {
+        const viewports = getVisibleViewports(browser)
+        if (viewports.length === 0) return false
+
+        for (const vp of viewports) {
+            const canvas = getViewportCanvas(vp)
+            if (!canvas) return false
+
+            const referenceFrame = vp.referenceFrame
+            const width = getViewportWidth(vp, canvas)
+            const end = calculateViewportEnd(referenceFrame, width)
+            const windowFunction = getViewportWindowFunction(vp)
+
+            if (!featureCacheHasRange(vp, referenceFrame, end, windowFunction)) return false
         }
         return true
     }
@@ -1461,46 +1563,20 @@
      * non-blank pixels. Returns false if readiness cannot be reached in time.
      */
     async function waitForIgvLoad(browser, maxWaitMs = 30000) {
+        if (!browser) {
+            console.warn('waitForIgvLoad: browser is not available')
+            return false
+        }
         // Give the search operation time to start network requests
         await new Promise(resolve => setTimeout(resolve, 200))
 
         const start = Date.now()
-        const viewportsReady = () => {
-            const viewports = getVisibleViewports(browser)
-            if (viewports.length === 0) return false
-
-            for (const vp of viewports) {
-                const canvas = vp.canvas || (vp.viewportElement ? vp.viewportElement.querySelector('canvas') : null)
-                if (!canvas) return false
-
-                const rf = vp.referenceFrame
-                if (!rf || !vp.featureCache || typeof vp.featureCache.containsRange !== 'function') return false
-
-                const width = typeof vp.getWidth === 'function' ? vp.getWidth() : (vp.viewportElement ? vp.viewportElement.clientWidth : canvas.width)
-                const end = typeof rf.calculateEnd === 'function' ? rf.calculateEnd(width) : rf.start + (rf.bpPerPixel || 0) * width
-                const windowFunction = vp.trackView && vp.trackView.track ? vp.trackView.track.windowFunction : undefined
-
-                let containsRange = false
-                try {
-                    containsRange = vp.featureCache.containsRange.length === 1 ?
-                        vp.featureCache.containsRange({chr: rf.chr, start: rf.start, end}) :
-                        vp.featureCache.containsRange(rf.chr, rf.start, end, rf.bpPerPixel, windowFunction)
-                } catch (_) {
-                    containsRange = false
-                }
-                if (!containsRange) return false
-
-                if (!canvasHasPixels(canvas, 10)) return false
-            }
-            return true
-        }
-
         while (Date.now() - start < maxWaitMs) {
-            if (viewportsReady()) {
+            if (areViewportsReady(browser)) {
                 const remaining = Math.max(0, maxWaitMs - (Date.now() - start))
                 const maxPixelRetries = Math.min(5, Math.max(1, Math.floor(remaining / 300)))
-                const pixelReady = await waitForIgvPixels(browser, {maxRetries: maxPixelRetries, retryDelayMs: 300})
-                return pixelReady
+                const pixelsReady = await waitForIgvPixels(browser, {maxRetries: maxPixelRetries, retryDelayMs: 300})
+                return pixelsReady
             }
             await new Promise(resolve => setTimeout(resolve, 250))
         }
