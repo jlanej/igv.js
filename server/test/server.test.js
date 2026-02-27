@@ -1006,6 +1006,47 @@ describe('XLSX screenshot image embedding', function () {
         expect(labels).to.include('Quality:')
         expect(labels).to.include('Status:')
     })
+
+    it('includes trio AD, GQ, and child DKA/DKT in screenshot tabs', async function () {
+        this.timeout(10000)
+        const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0],
+                screenshots: {'0': tinyPng}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const screenshotSheet = workbook.getWorksheet('1')
+        expect(screenshotSheet).to.exist
+
+        // Collect all label/value pairs from the screenshot tab
+        const labels = []
+        const values = []
+        screenshotSheet.eachRow(row => {
+            const label = row.getCell(1).value
+            const val = row.getCell(2).value
+            if (label) labels.push(label)
+            if (val != null) values.push(String(val))
+        })
+
+        // Trio AD should appear
+        expect(labels).to.include('AD:')
+        // Trio GQ should appear
+        expect(labels).to.include('GQ:')
+        // DKA/DKT should appear
+        expect(labels).to.include('DKA/DKT:')
+    })
 })
 
 describe('API /api/export/html', function () {

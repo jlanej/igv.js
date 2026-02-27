@@ -1227,10 +1227,9 @@
                     const flank = 100
                     const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
                     await igvBrowser.search(locus)
-                    // Ensure all track views are fully loaded and painted
-                    await igvBrowser.updateViews()
-                    // Allow time for final DOM/canvas settle
-                    await new Promise(resolve => setTimeout(resolve, 500))
+                    // Wait until every viewport has finished loading and the
+                    // browser has completed its paint cycle
+                    await waitForIgvRender(igvBrowser)
 
                     // Capture the IGV div as a canvas image
                     const imgData = await captureIgvScreenshot()
@@ -1330,8 +1329,7 @@
                     const flank = 100
                     const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
                     await igvBrowser.search(locus)
-                    await igvBrowser.updateViews()
-                    await new Promise(resolve => setTimeout(resolve, 500))
+                    await waitForIgvRender(igvBrowser)
                     const imgData = await captureIgvScreenshot()
                     if (imgData) {
                         screenshots[String(v.id)] = imgData
@@ -1379,6 +1377,34 @@
             btn.disabled = false
             setTimeout(() => { progressDiv.style.display = 'none' }, 2000)
         }
+    }
+
+    /**
+     * Wait until all IGV track viewports have finished loading data and the
+     * browser has completed at least one paint cycle.  Falls back to a fixed
+     * delay after {@code timeout} ms so exports never stall indefinitely.
+     */
+    async function waitForIgvRender(browser, timeout = 15000) {
+        const start = Date.now()
+        // Poll until every viewport reports loading === false
+        while (Date.now() - start < timeout) {
+            let anyLoading = false
+            for (const tv of (browser.trackViews || [])) {
+                for (const vp of (tv.viewports || [])) {
+                    if (vp.loading) { anyLoading = true; break }
+                }
+                if (anyLoading) break
+            }
+            if (!anyLoading) break
+            await new Promise(r => setTimeout(r, 100))
+        }
+        // Force a final data + paint pass
+        await browser.updateViews()
+        // Double-requestAnimationFrame ensures the browser has
+        // flushed its rendering pipeline before we capture
+        await new Promise(resolve =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve))
+        )
     }
 
     /**
