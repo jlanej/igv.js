@@ -1335,7 +1335,7 @@ app.post('/api/export/xlsx', async (req, res) => {
 
                     sws.addImage(imageId, {
                         tl: {col: 0, row: imgStartRow - 1},
-                        ext: {width: 1800, height: 800}
+                        ext: {width: 900, height: 400}
                     })
                 } catch (imgErr) {
                     sws.getCell(`A${imgStartRow}`).value = '(Screenshot could not be embedded)'
