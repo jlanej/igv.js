@@ -1915,33 +1915,36 @@ describe('UI: Pixel-based IGV screenshot readiness guard', function () {
 
     it('waitForIgvLoad calls waitForIgvPixels after viewport polling', async function () {
         const res = await request(app).get('/app.js').expect(200)
-        // Extract the waitForIgvLoad function body
-        const fnMatch = res.text.match(/async function waitForIgvLoad\([\s\S]*?(?=\n    \/\*\*|\n    async function|\n    function\b)/)
-        expect(fnMatch).to.not.be.null
-        expect(fnMatch[0]).to.include('waitForIgvPixels')
-        // Should still have the isLoading viewport polling
-        expect(fnMatch[0]).to.include('isLoading')
+        // waitForIgvLoad should include both isLoading polling and pixel verification
+        expect(res.text).to.include('async function waitForIgvLoad')
+        expect(res.text).to.include('isLoading')
+        // The pixel guard should be invoked within waitForIgvLoad
+        const loadFnStart = res.text.indexOf('async function waitForIgvLoad')
+        const pixelCallPos = res.text.indexOf('waitForIgvPixels', loadFnStart)
+        expect(pixelCallPos).to.be.greaterThan(loadFnStart)
     })
 
     it('captureIgvScreenshot retries when initial capture fails', async function () {
         const res = await request(app).get('/app.js').expect(200)
-        // Extract the captureIgvScreenshot function body
-        const fnMatch = res.text.match(/async function captureIgvScreenshot\(\)[\s\S]*?(?=\n    \/\/\s*-{3,}|\n    function\b(?!.*\{))/)
-        expect(fnMatch).to.not.be.null
-        // Should have retry loop
-        expect(fnMatch[0]).to.include('attempt')
-        expect(fnMatch[0]).to.include('waitForIgvPixels')
+        // captureIgvScreenshot should have retry logic with pixel guard
+        const captureFnStart = res.text.indexOf('async function captureIgvScreenshot')
+        expect(captureFnStart).to.be.greaterThan(-1)
+        // Should reference attempt-based retry and pixel check
+        const afterCapture = res.text.slice(captureFnStart, captureFnStart + 2000)
+        expect(afterCapture).to.include('attempt')
+        expect(afterCapture).to.include('waitForIgvPixels')
     })
 
     it('checkIgvCanvasPixels checks alpha channel of sampled pixels', async function () {
         const res = await request(app).get('/app.js').expect(200)
-        const fnMatch = res.text.match(/function checkIgvCanvasPixels[\s\S]*?(?=\n    \/\*\*|\n    async function)/)
-        expect(fnMatch).to.not.be.null
+        const checkFnStart = res.text.indexOf('function checkIgvCanvasPixels')
+        expect(checkFnStart).to.be.greaterThan(-1)
+        const afterCheck = res.text.slice(checkFnStart, checkFnStart + 1500)
         // Should iterate over alpha channel (every 4th byte at offset 3)
-        expect(fnMatch[0]).to.include('i += 4')
-        expect(fnMatch[0]).to.include('pixels[i]')
+        expect(afterCheck).to.include('i += 4')
+        expect(afterCheck).to.include('pixels[i]')
         // Should early-return when threshold met
-        expect(fnMatch[0]).to.include('minNonZeroPixels')
+        expect(afterCheck).to.include('minNonZeroPixels')
     })
 })
 

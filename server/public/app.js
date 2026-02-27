@@ -1401,7 +1401,7 @@
         const ctx = target.getContext('2d')
         if (!ctx) return false
 
-        // Sample a bounded region from the centre of the canvas
+        // Sample a bounded region from the center of the canvas
         const sampleW = Math.min(target.width, 400)
         const sampleH = Math.min(target.height, 200)
         const sx = Math.max(0, Math.floor((target.width - sampleW) / 2))
@@ -1461,7 +1461,9 @@
                 // Final buffer to ensure canvas paints are flushed
                 await new Promise(resolve => setTimeout(resolve, 250))
 
-                // Pixel-based readiness check: verify canvas has actual content
+                // Pixel-based readiness check: verify canvas has actual content.
+                // Divide remaining budget by 300ms (the retry delay) to fit retries
+                // within the overall timeout, capped at 5 attempts.
                 const remaining = Math.max(0, maxWaitMs - (Date.now() - start))
                 const maxPixelRetries = Math.min(5, Math.max(1, Math.floor(remaining / 300)))
                 await waitForIgvPixels(browser, {maxRetries: maxPixelRetries, retryDelayMs: 300})
