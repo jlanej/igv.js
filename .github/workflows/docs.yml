@@ -28,9 +28,12 @@ jobs:
         with:
           node-version: '20.x'
 
+      - name: Install root dependencies and build igv.js dist
+        run: npm install
+
       - name: Install server dependencies
         working-directory: server
-        run: npm ci || npm install
+        run: npm install
 
       - name: Install Playwright
         run: npx playwright install --with-deps chromium
