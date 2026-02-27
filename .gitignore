@@ -18,3 +18,6 @@ igv.js.iml
 /server/*.filters.json
 /server/example_data/*.curation.json
 /server/example_data/*.filters.json
+/server/test/.tmp_giab
+/server/test/data/giab/*.curation.json
+/server/test/data/giab/*.filters.json
