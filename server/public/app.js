@@ -1227,8 +1227,8 @@
                     const flank = 100
                     const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
                     await igvBrowser.search(locus)
-                    // Allow time for tracks to render
-                    await new Promise(resolve => setTimeout(resolve, 1500))
+                    // Wait for all viewports to finish loading data
+                    await waitForIgvLoad()
 
                     // Capture the IGV div as a canvas image
                     const imgData = await captureIgvScreenshot()
@@ -1328,7 +1328,7 @@
                     const flank = 100
                     const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
                     await igvBrowser.search(locus)
-                    await new Promise(resolve => setTimeout(resolve, 1500))
+                    await waitForIgvLoad()
                     const imgData = await captureIgvScreenshot()
                     if (imgData) {
                         screenshots[String(v.id)] = imgData
@@ -1376,6 +1376,40 @@
             btn.disabled = false
             setTimeout(() => { progressDiv.style.display = 'none' }, 2000)
         }
+    }
+
+    /**
+     * Wait for all IGV viewports to finish loading data after a locus
+     * change.  Newly-created viewport DOM elements may not yet have browser
+     * layout (clientWidth === 0), so updateViews() will skip them on the
+     * first pass.  We yield to the layout engine, re-trigger updateViews(),
+     * then poll viewport.isLoading() until every viewport is idle.
+     */
+    async function waitForIgvLoad(maxWaitMs = 15000) {
+        if (!igvBrowser) return
+
+        // 1. Yield to the browser so new viewport elements get layout
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+
+        // 2. Re-trigger data loading now that viewports have clientWidth > 0
+        if (typeof igvBrowser.updateViews === 'function') {
+            await igvBrowser.updateViews()
+        }
+
+        // 3. Poll until no viewport reports isLoading()
+        const deadline = Date.now() + maxWaitMs
+        while (Date.now() < deadline) {
+            const stillLoading = igvBrowser.trackViews.some(tv =>
+                tv.viewports && tv.viewports.some(vp =>
+                    typeof vp.isLoading === 'function' && vp.isLoading()
+                )
+            )
+            if (!stillLoading) break
+            await new Promise(r => setTimeout(r, 100))
+        }
+
+        // 4. One final rAF pair so the browser can paint the loaded data
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
     }
 
     /**
