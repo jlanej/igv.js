@@ -1900,9 +1900,9 @@ describe('UI: Pixel-based IGV screenshot readiness guard', function () {
         const res = await request(app).get('/app.js').expect(200)
         expect(res.text).to.include('function checkIgvCanvasPixels')
         expect(res.text).to.include('getImageData')
-        // Should sample a bounded 400x200 region
-        expect(res.text).to.include('Math.min(target.width, 400)')
-        expect(res.text).to.include('Math.min(target.height, 200)')
+        // Should sample a bounded 400x200 region on each visible canvas
+        expect(res.text).to.include('Math.min(canvas.width, 400)')
+        expect(res.text).to.include('Math.min(canvas.height, 200)')
     })
 
     it('app.js includes waitForIgvPixels function with retry logic', async function () {
@@ -1913,15 +1913,18 @@ describe('UI: Pixel-based IGV screenshot readiness guard', function () {
         expect(res.text).to.include('checkIgvCanvasPixels')
     })
 
-    it('waitForIgvLoad calls waitForIgvPixels after viewport polling', async function () {
+    it('waitForIgvLoad enforces viewport caches and pixels', async function () {
         const res = await request(app).get('/app.js').expect(200)
-        // waitForIgvLoad should include both isLoading polling and pixel verification
+        // waitForIgvLoad should include viewport feature cache & pixel verification
         expect(res.text).to.include('async function waitForIgvLoad')
-        expect(res.text).to.include('isLoading')
-        // The pixel guard should be invoked within waitForIgvLoad
+        expect(res.text).to.include('featureCache.containsRange')
+        expect(res.text).to.include('canvasHasPixels')
+        // The pixel guard should be invoked within waitForIgvLoad and its result enforced
         const loadFnStart = res.text.indexOf('async function waitForIgvLoad')
         const pixelCallPos = res.text.indexOf('waitForIgvPixels', loadFnStart)
         expect(pixelCallPos).to.be.greaterThan(loadFnStart)
+        const returnsPixelGuard = res.text.indexOf('return pixelReady', loadFnStart)
+        expect(returnsPixelGuard).to.be.greaterThan(loadFnStart)
     })
 
     it('captureIgvScreenshot retries when initial capture fails', async function () {
@@ -1935,11 +1938,11 @@ describe('UI: Pixel-based IGV screenshot readiness guard', function () {
         expect(afterCapture).to.include('waitForIgvPixels')
     })
 
-    it('checkIgvCanvasPixels checks alpha channel of sampled pixels', async function () {
+    it('canvasHasPixels checks alpha channel of sampled pixels', async function () {
         const res = await request(app).get('/app.js').expect(200)
-        const checkFnStart = res.text.indexOf('function checkIgvCanvasPixels')
-        expect(checkFnStart).to.be.greaterThan(-1)
-        const afterCheck = res.text.slice(checkFnStart, checkFnStart + 1500)
+        const helperStart = res.text.indexOf('function canvasHasPixels')
+        expect(helperStart).to.be.greaterThan(-1)
+        const afterCheck = res.text.slice(helperStart, helperStart + 1500)
         // Should iterate over alpha channel (every 4th byte at offset 3)
         expect(afterCheck).to.include('i += 4')
         expect(afterCheck).to.include('pixels[i]')

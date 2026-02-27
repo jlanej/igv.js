@@ -1377,35 +1377,16 @@
         }
     }
 
-    /**
-     * Sample the largest IGV canvas and return true if enough non-transparent
-     * pixels are present, indicating the canvas has been painted.
-     * Keeps sampling bounded to at most a 400×200 window to avoid heavy
-     * canvas reads.
-     */
-    function checkIgvCanvasPixels(minNonZeroPixels = 10) {
-        const container = document.getElementById('igv-div')
-        if (!container) return false
-        const canvases = container.querySelectorAll('canvas')
-        if (canvases.length === 0) return false
-
-        // Find the largest canvas by area
-        let target = null
-        let maxArea = 0
-        for (const c of canvases) {
-            const area = c.width * c.height
-            if (area > maxArea) { maxArea = area; target = c }
-        }
-        if (!target || target.width === 0 || target.height === 0) return false
-
-        const ctx = target.getContext('2d')
+    function canvasHasPixels(canvas, minNonZeroPixels) {
+        if (!canvas || canvas.width === 0 || canvas.height === 0) return false
+        const ctx = canvas.getContext('2d')
         if (!ctx) return false
 
         // Sample a bounded region from the center of the canvas
-        const sampleW = Math.min(target.width, 400)
-        const sampleH = Math.min(target.height, 200)
-        const sx = Math.max(0, Math.floor((target.width - sampleW) / 2))
-        const sy = Math.max(0, Math.floor((target.height - sampleH) / 2))
+        const sampleW = Math.min(canvas.width, 400)
+        const sampleH = Math.min(canvas.height, 200)
+        const sx = Math.max(0, Math.floor((canvas.width - sampleW) / 2))
+        const sy = Math.max(0, Math.floor((canvas.height - sampleH) / 2))
 
         const imageData = ctx.getImageData(sx, sy, sampleW, sampleH)
         const pixels = imageData.data
@@ -1418,6 +1399,48 @@
         return false
     }
 
+    function getVisibleViewports(browser) {
+        if (!browser || !browser.trackViews) return []
+        const viewports = []
+        for (const tv of browser.trackViews) {
+            if (!tv.viewports) continue
+            for (const vp of tv.viewports) {
+                const visible = typeof vp.isVisible === 'function' ? vp.isVisible() : (vp.viewportElement ? vp.viewportElement.clientWidth > 0 : true)
+                if (visible) viewports.push(vp)
+            }
+        }
+        return viewports
+    }
+
+    /**
+     * Sample every visible IGV canvas and return true only if all have enough
+     * non-transparent pixels. This covers pileup and coverage canvases
+     * independently while keeping sampling bounded to a 400×200 window.
+     */
+    function checkIgvCanvasPixels(minNonZeroPixels = 10, browser) {
+        const container = document.getElementById('igv-div')
+        if (!container) return false
+
+        const canvases = []
+
+        for (const vp of getVisibleViewports(browser)) {
+            if (vp.canvas) canvases.push(vp.canvas)
+        }
+
+        if (canvases.length === 0) {
+            for (const c of container.querySelectorAll('canvas')) {
+                canvases.push(c)
+            }
+        }
+
+        if (canvases.length === 0) return false
+
+        for (const canvas of canvases) {
+            if (!canvasHasPixels(canvas, minNonZeroPixels)) return false
+        }
+        return true
+    }
+
     /**
      * Wait until at least one IGV canvas has meaningful pixel data.
      * Retries up to `maxRetries` times with `retryDelayMs` between attempts.
@@ -1425,7 +1448,7 @@
      */
     async function waitForIgvPixels(browser, {maxRetries = 5, retryDelayMs = 300, minPixels = 10} = {}) {
         for (let attempt = 0; attempt < maxRetries; attempt++) {
-            if (checkIgvCanvasPixels(minPixels)) return true
+            if (checkIgvCanvasPixels(minPixels, browser)) return true
             await new Promise(resolve => setTimeout(resolve, retryDelayMs))
         }
         console.warn('waitForIgvPixels: canvas still appears blank after ' + maxRetries + ' retries')
@@ -1433,42 +1456,51 @@
     }
 
     /**
-     * Wait for all IGV viewports to finish loading by polling their isLoading() state,
-     * then verify that canvases contain actual pixel data via waitForIgvPixels.
-     * Returns true if all viewports settled and pixels are present, false if the timeout was reached.
+     * Wait for IGV readiness based on observable signals: each visible viewport
+     * must have a canvas, its feature cache populated for the current locus, and
+     * non-blank pixels. Returns false if readiness cannot be reached in time.
      */
     async function waitForIgvLoad(browser, maxWaitMs = 30000) {
         // Give the search operation time to start network requests
         await new Promise(resolve => setTimeout(resolve, 200))
 
         const start = Date.now()
-        while (Date.now() - start < maxWaitMs) {
-            let anyLoading = false
-            if (browser.trackViews) {
-                for (const tv of browser.trackViews) {
-                    if (tv.viewports) {
-                        for (const vp of tv.viewports) {
-                            if (typeof vp.isLoading === 'function' && vp.isLoading()) {
-                                anyLoading = true
-                                break
-                            }
-                        }
-                    }
-                    if (anyLoading) break
-                }
-            }
-            if (!anyLoading) {
-                // Final buffer to ensure canvas paints are flushed
-                await new Promise(resolve => setTimeout(resolve, 250))
+        const viewportsReady = () => {
+            const viewports = getVisibleViewports(browser)
+            if (viewports.length === 0) return false
 
-                // Pixel-based readiness check: verify canvas has actual content.
-                // Divide remaining budget by 300ms (the retry delay) to fit retries
-                // within the overall timeout, capped at 5 attempts.
+            for (const vp of viewports) {
+                const canvas = vp.canvas || (vp.viewportElement ? vp.viewportElement.querySelector('canvas') : null)
+                if (!canvas) return false
+
+                const rf = vp.referenceFrame
+                if (!rf || !vp.featureCache || typeof vp.featureCache.containsRange !== 'function') return false
+
+                const width = typeof vp.getWidth === 'function' ? vp.getWidth() : (vp.viewportElement ? vp.viewportElement.clientWidth : canvas.width)
+                const end = typeof rf.calculateEnd === 'function' ? rf.calculateEnd(width) : rf.start + (rf.bpPerPixel || 0) * width
+                const windowFunction = vp.trackView && vp.trackView.track ? vp.trackView.track.windowFunction : undefined
+
+                let containsRange = false
+                try {
+                    containsRange = vp.featureCache.containsRange.length === 1 ?
+                        vp.featureCache.containsRange({chr: rf.chr, start: rf.start, end}) :
+                        vp.featureCache.containsRange(rf.chr, rf.start, end, rf.bpPerPixel, windowFunction)
+                } catch (_) {
+                    containsRange = false
+                }
+                if (!containsRange) return false
+
+                if (!canvasHasPixels(canvas, 10)) return false
+            }
+            return true
+        }
+
+        while (Date.now() - start < maxWaitMs) {
+            if (viewportsReady()) {
                 const remaining = Math.max(0, maxWaitMs - (Date.now() - start))
                 const maxPixelRetries = Math.min(5, Math.max(1, Math.floor(remaining / 300)))
-                await waitForIgvPixels(browser, {maxRetries: maxPixelRetries, retryDelayMs: 300})
-
-                return true
+                const pixelReady = await waitForIgvPixels(browser, {maxRetries: maxPixelRetries, retryDelayMs: 300})
+                return pixelReady
             }
             await new Promise(resolve => setTimeout(resolve, 250))
         }
