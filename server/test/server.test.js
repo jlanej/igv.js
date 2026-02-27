@@ -1642,11 +1642,15 @@ describe('UI: IGV scroll-into-view on variant selection', function () {
 })
 
 describe('UI: IGV screenshot readiness guard', function () {
-    it('app.js defines waitForIgvLoad that polls viewport loading state', async function () {
+    it('app.js defines waitForIgvLoad that checks viewport layout and featureCache', async function () {
         const res = await request(app).get('/app.js').expect(200)
         expect(res.text).to.include('async function waitForIgvLoad')
         expect(res.text).to.include('updateViews')
         expect(res.text).to.include('isLoading')
+        // Must verify featureCache is populated (what toSVG reads from)
+        expect(res.text).to.include('featureCache')
+        // Must poll for viewport layout readiness (clientWidth > 0)
+        expect(res.text).to.include('clientWidth')
     })
 
     it('XLSX export uses waitForIgvLoad instead of fixed timeout', async function () {

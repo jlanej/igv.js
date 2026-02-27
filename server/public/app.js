@@ -1380,35 +1380,60 @@
 
     /**
      * Wait for all IGV viewports to finish loading data after a locus
-     * change.  Newly-created viewport DOM elements may not yet have browser
-     * layout (clientWidth === 0), so updateViews() will skip them on the
-     * first pass.  We yield to the layout engine, re-trigger updateViews(),
-     * then poll viewport.isLoading() until every viewport is idle.
+     * change.  Modelled on the built-in igv.js "Save as PNG" flow:
+     *   1. Ensure viewports have browser layout (clientWidth > 0)
+     *   2. Call updateViews() so every viewport loads features into its
+     *      featureCache – the same cache that toSVG() reads from
+     *   3. Verify featureCaches are populated; retry if not
+     *   4. Yield for a final paint
      */
     async function waitForIgvLoad(maxWaitMs = 15000) {
         if (!igvBrowser) return
 
-        // 1. Yield to the browser so new viewport elements get layout
-        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
-
-        // 2. Re-trigger data loading now that viewports have clientWidth > 0
-        if (typeof igvBrowser.updateViews === 'function') {
-            await igvBrowser.updateViews()
-        }
-
-        // 3. Poll until no viewport reports isLoading()
         const deadline = Date.now() + maxWaitMs
+
+        // 1. Wait until every viewport element has layout (clientWidth > 0).
+        //    After search() creates new viewport DOM elements they need at
+        //    least one layout pass before isVisible() returns true.
         while (Date.now() < deadline) {
-            const stillLoading = igvBrowser.trackViews.some(tv =>
-                tv.viewports && tv.viewports.some(vp =>
-                    typeof vp.isLoading === 'function' && vp.isLoading()
+            await new Promise(r => requestAnimationFrame(r))
+            const allLaidOut = igvBrowser.trackViews.every(tv =>
+                !tv.viewports || tv.viewports.every(vp =>
+                    !vp.viewportElement || vp.viewportElement.clientWidth > 0
                 )
             )
-            if (!stillLoading) break
-            await new Promise(r => setTimeout(r, 100))
+            if (allLaidOut) break
         }
 
-        // 4. One final rAF pair so the browser can paint the loaded data
+        // 2. Load features and verify caches are populated.
+        //    updateViews() internally awaits loadFeatures() on every visible
+        //    viewport, but a race with layout or a transient network hiccup
+        //    can leave featureCaches empty.  We retry a few times so that
+        //    toSVG() – which reads directly from featureCache – will have
+        //    data to render, just like the built-in "Save as PNG" button.
+        const maxRetries = 3
+        for (let attempt = 0; attempt < maxRetries && Date.now() < deadline; attempt++) {
+            if (typeof igvBrowser.updateViews === 'function') {
+                await igvBrowser.updateViews()
+            }
+
+            // Check every data-bearing viewport: not still isLoading() and
+            // featureCache is populated (what toSVG → renderSVGContext reads).
+            const allReady = igvBrowser.trackViews.every(tv => {
+                if (!tv.viewports) return true
+                return tv.viewports.every(vp => {
+                    if (typeof vp.isLoading !== 'function') return true
+                    if (vp.isLoading()) return false
+                    if (!vp.viewportElement || vp.viewportElement.clientWidth === 0) return true
+                    return !!vp.featureCache
+                })
+            })
+
+            if (allReady) break
+            await new Promise(r => setTimeout(r, 250))
+        }
+
+        // 3. One final rAF pair so the browser can paint the loaded data
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
     }
 
