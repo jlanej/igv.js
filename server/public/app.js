@@ -1389,22 +1389,41 @@
      */
     async function waitForIgvRender(browser, timeout = 15000) {
         const start = Date.now()
-        // Poll until every viewport reports loading === false
-        while (Date.now() - start < timeout) {
-            let anyLoading = false
+
+        const anyViewportLoading = () => {
             for (const tv of (browser.trackViews || [])) {
                 for (const vp of (tv.viewports || [])) {
-                    if (vp.loading) { anyLoading = true; break }
+                    if (vp.loading) return true
                 }
-                if (anyLoading) break
             }
-            if (!anyLoading) break
-            await new Promise(r => setTimeout(r, 100))
+            return false
         }
-        // Force a final data + paint pass
-        await browser.updateViews()
-        // Double-requestAnimationFrame ensures the browser has
-        // flushed its rendering pipeline before we capture
+
+        // Yield to the browser so it can compute layout for freshly-created
+        // viewport DOM elements.  Without this, clientWidth may still be 0
+        // and viewport.isVisible() returns false, causing updateViews() to
+        // skip viewports entirely.
+        await new Promise(r => requestAnimationFrame(r))
+
+        // Stabilisation loop: force a data-load + repaint cycle, then poll
+        // until no viewport reports an in-progress load.  Repeat up to
+        // MAX_CYCLES times because a completed updateViews() may reveal
+        // viewports that now need loading (e.g. after a layout change).
+        const MAX_CYCLES = 3
+        for (let cycle = 0; cycle < MAX_CYCLES && Date.now() - start < timeout; cycle++) {
+            await browser.updateViews()
+
+            let hadLoading = false
+            while (Date.now() - start < timeout && anyViewportLoading()) {
+                hadLoading = true
+                await new Promise(r => setTimeout(r, 100))
+            }
+            // If nothing was loading after updateViews(), the view is stable.
+            if (!hadLoading) break
+        }
+
+        // Double-requestAnimationFrame ensures the browser has flushed its
+        // rendering pipeline before the caller captures the SVG.
         await new Promise(resolve =>
             requestAnimationFrame(() => requestAnimationFrame(resolve))
         )
