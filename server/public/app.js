@@ -1377,23 +1377,24 @@
         // A tiny PNG (blank/header-only) is typically < 1 KB base64.
         // Real alignment screenshots are much larger.
         const minBase64Len = 1000
+        let lastImg = null
 
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             await igvBrowser.search(locus)
             await waitForIgvLoad()
-            const imgData = await captureIgvScreenshot()
-            if (imgData) {
-                const b64 = imgData.split(',')[1] || ''
-                if (b64.length >= minBase64Len) return imgData
+            lastImg = await captureIgvScreenshot()
+            if (lastImg) {
+                const b64 = lastImg.split(',')[1] || ''
+                if (b64.length >= minBase64Len) return lastImg
                 console.warn(`Screenshot attempt ${attempt + 1} for ${variant.chrom}:${variant.pos} too small (${b64.length} chars), retrying…`)
             }
             // Short delay before retry to allow for any pending I/O
-            await new Promise(r => setTimeout(r, 500))
+            if (attempt < maxAttempts - 1) {
+                await new Promise(r => setTimeout(r, 500))
+            }
         }
         // Return whatever we got on the last attempt even if small
-        await igvBrowser.search(locus)
-        await waitForIgvLoad()
-        return captureIgvScreenshot()
+        return lastImg
     }
 
     /**
