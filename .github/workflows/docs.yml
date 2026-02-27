@@ -28,6 +28,9 @@ jobs:
         with:
           node-version: '20.x'
 
+      - name: Install root dependencies and build igv.js dist
+        run: npm ci || npm install
+
       - name: Install server dependencies
         working-directory: server
         run: npm ci || npm install
