@@ -1222,16 +1222,7 @@
                 progressFill.style.width = `${pct}%`
 
                 try {
-                    // Navigate to variant
-                    const pos = parseInt(v.pos, 10)
-                    const flank = 100
-                    const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
-                    await igvBrowser.search(locus)
-                    // Wait for all viewports to finish loading data
-                    await waitForIgvLoad()
-
-                    // Capture the IGV div as a canvas image
-                    const imgData = await captureIgvScreenshot()
+                    const imgData = await navigateAndCapture(v)
                     if (imgData) {
                         screenshots[String(v.id)] = imgData
                     }
@@ -1324,12 +1315,7 @@
                 progressFill.style.width = `${pct}%`
 
                 try {
-                    const pos = parseInt(v.pos, 10)
-                    const flank = 100
-                    const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
-                    await igvBrowser.search(locus)
-                    await waitForIgvLoad()
-                    const imgData = await captureIgvScreenshot()
+                    const imgData = await navigateAndCapture(v)
                     if (imgData) {
                         screenshots[String(v.id)] = imgData
                     }
@@ -1379,15 +1365,51 @@
     }
 
     /**
+     * Navigate IGV to a variant locus and capture a screenshot, retrying
+     * up to 2 additional times when the captured image appears to be
+     * blank (base64 payload too small to contain meaningful reads).
+     */
+    async function navigateAndCapture(variant) {
+        const pos = parseInt(variant.pos, 10)
+        const flank = 100
+        const locus = `${variant.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
+        const maxAttempts = 3
+        // A tiny PNG (blank/header-only) is typically < 1 KB base64.
+        // Real alignment screenshots are much larger.
+        const minBase64Len = 1000
+        let lastImg = null
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            await igvBrowser.search(locus)
+            await waitForIgvLoad()
+            lastImg = await captureIgvScreenshot()
+            if (lastImg) {
+                const b64 = lastImg.split(',')[1] || ''
+                if (b64.length >= minBase64Len) return lastImg
+                console.warn(`Screenshot attempt ${attempt + 1} for ${variant.chrom}:${variant.pos} too small (${b64.length} chars), retrying…`)
+            }
+            // Short delay before retry to allow for any pending I/O
+            if (attempt < maxAttempts - 1) {
+                await new Promise(r => setTimeout(r, 500))
+            }
+        }
+        // Return whatever we got on the last attempt even if small
+        return lastImg
+    }
+
+    /**
      * Wait for all IGV viewports to finish loading data after a locus
      * change.  Modelled on the built-in igv.js "Save as PNG" flow:
      *   1. Ensure viewports have browser layout (clientWidth > 0)
-     *   2. Call updateViews() so every viewport loads features into its
+     *   2. Invalidate stale caches so updateViews() fetches fresh data
+     *   3. Call updateViews() so every viewport loads features into its
      *      featureCache – the same cache that toSVG() reads from
-     *   3. Verify featureCaches are populated; retry if not
-     *   4. Yield for a final paint
+     *   4. Verify featureCaches are populated with actual alignment data
+     *   5. Probe alignment data arrival (supplementary status) as a
+     *      canary to guarantee reads are fully materialised
+     *   6. Yield for a final paint
      */
-    async function waitForIgvLoad(maxWaitMs = 15000) {
+    async function waitForIgvLoad(maxWaitMs = 20000) {
         if (!igvBrowser) return
 
         const deadline = Date.now() + maxWaitMs
@@ -1405,35 +1427,96 @@
             if (allLaidOut) break
         }
 
-        // 2. Load features and verify caches are populated.
+        // 2. Invalidate stale feature caches so that the next
+        //    updateViews() fetches data for the *current* locus rather
+        //    than reusing a cache from a previous navigation.
+        for (const tv of igvBrowser.trackViews) {
+            if (!tv.viewports) continue
+            for (const vp of tv.viewports) {
+                if (typeof vp.clearCache === 'function') {
+                    vp.clearCache()
+                }
+            }
+        }
+
+        // 3. Load features and verify caches are populated.
         //    updateViews() internally awaits loadFeatures() on every visible
         //    viewport, but a race with layout or a transient network hiccup
-        //    can leave featureCaches empty.  We retry a few times so that
-        //    toSVG() – which reads directly from featureCache – will have
-        //    data to render, just like the built-in "Save as PNG" button.
-        const maxRetries = 3
+        //    can leave featureCaches empty.  We retry up to 5 times with
+        //    increasing back-off so that toSVG() – which reads directly
+        //    from featureCache – will have data to render, just like the
+        //    built-in "Save as PNG" button.
+        const maxRetries = 5
         for (let attempt = 0; attempt < maxRetries && Date.now() < deadline; attempt++) {
             if (typeof igvBrowser.updateViews === 'function') {
                 await igvBrowser.updateViews()
             }
 
-            // Check every data-bearing viewport: not still isLoading() and
-            // featureCache is populated (what toSVG → renderSVGContext reads).
+            // Check every data-bearing viewport:
+            //  - not still loading
+            //  - featureCache exists
+            //  - featureCache range overlaps the current viewport
+            //  - for alignment tracks the AlignmentContainer is packed
             const allReady = igvBrowser.trackViews.every(tv => {
                 if (!tv.viewports) return true
                 return tv.viewports.every(vp => {
                     if (typeof vp.isLoading !== 'function') return true
                     if (vp.isLoading()) return false
                     if (!vp.viewportElement || vp.viewportElement.clientWidth === 0) return true
-                    return !!vp.featureCache
+                    if (!vp.featureCache) return false
+
+                    // Verify the cached range covers the current view
+                    if (vp.referenceFrame && typeof vp.featureCache.overlapsRange === 'function') {
+                        const rf = vp.referenceFrame
+                        const viewEnd = rf.start + (vp.viewportElement.clientWidth * rf.bpPerPixel)
+                        if (!vp.featureCache.overlapsRange(rf.chr, rf.start, viewEnd)) {
+                            return false
+                        }
+                    }
+
+                    // For alignment tracks, verify the AlignmentContainer
+                    // has been packed (packedGroups).  toSVG reads
+                    // packedGroups to draw reads; if packing hasn't
+                    // occurred the screenshot will be blank.
+                    const features = vp.featureCache.features
+                    if (features && typeof features === 'object' && typeof features.hasAlignments !== 'undefined') {
+                        if (!features.packedGroups) return false
+                    }
+
+                    return true
                 })
             })
 
             if (allReady) break
-            await new Promise(r => setTimeout(r, 250))
+            // Back off a bit between retries (250 → 500 → 750 …)
+            await new Promise(r => setTimeout(r, 250 * (attempt + 1)))
         }
 
-        // 3. One final rAF pair so the browser can paint the loaded data
+        // 4. Data-arrival probe: touch packed alignment rows and read
+        //    the supplementary flag of the first alignment in each
+        //    group.  This forces any lazily-resolved data to
+        //    materialise before we capture the SVG.
+        try {
+            for (const tv of igvBrowser.trackViews) {
+                if (!tv.viewports) continue
+                for (const vp of tv.viewports) {
+                    const features = vp.featureCache && vp.featureCache.features
+                    if (!features || !features.packedGroups) continue
+                    for (const [, group] of features.packedGroups) {
+                        if (!group || !group.rows) continue
+                        for (const row of group.rows) {
+                            if (row.alignments && row.alignments.length > 0) {
+                                const a = row.alignments[0]
+                                if (typeof a.isSupplementary === 'function') a.isSupplementary()
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_) { /* best-effort probe */ }
+
+        // 5. One final rAF pair so the browser can paint the loaded data
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
     }
 

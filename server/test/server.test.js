@@ -1653,26 +1653,77 @@ describe('UI: IGV screenshot readiness guard', function () {
         expect(res.text).to.include('clientWidth')
     })
 
-    it('XLSX export uses waitForIgvLoad instead of fixed timeout', async function () {
+    it('XLSX export uses navigateAndCapture instead of fixed timeout', async function () {
         const res = await request(app).get('/app.js').expect(200)
-        // The XLSX export block should call waitForIgvLoad after search
+        // The XLSX export block should call navigateAndCapture (which
+        // internally calls waitForIgvLoad) after search
         const xlsxBlock = res.text.substring(
             res.text.indexOf('async function exportXlsx'),
             res.text.indexOf('Send to server for XLSX generation')
         )
-        expect(xlsxBlock).to.include('await waitForIgvLoad()')
+        expect(xlsxBlock).to.include('await navigateAndCapture(')
         expect(xlsxBlock).to.not.include('setTimeout(resolve, 1500)')
     })
 
-    it('HTML export uses waitForIgvLoad instead of fixed timeout', async function () {
+    it('HTML export uses navigateAndCapture instead of fixed timeout', async function () {
         const res = await request(app).get('/app.js').expect(200)
-        // The HTML export block should call waitForIgvLoad after search
+        // The HTML export block should call navigateAndCapture (which
+        // internally calls waitForIgvLoad) after search
         const htmlBlock = res.text.substring(
             res.text.indexOf('async function exportHtml'),
             res.text.indexOf('Send to server for HTML generation')
         )
-        expect(htmlBlock).to.include('await waitForIgvLoad()')
+        expect(htmlBlock).to.include('await navigateAndCapture(')
         expect(htmlBlock).to.not.include('setTimeout(resolve, 1500)')
+    })
+
+    it('waitForIgvLoad clears stale caches before reloading', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        const fnBody = res.text.substring(
+            res.text.indexOf('async function waitForIgvLoad'),
+            res.text.indexOf('async function captureIgvScreenshot')
+        )
+        // Must clear caches before calling updateViews to avoid stale data
+        expect(fnBody).to.include('clearCache')
+        // clearCache must come before updateViews
+        const clearPos = fnBody.indexOf('clearCache')
+        const updatePos = fnBody.indexOf('updateViews', clearPos)
+        expect(clearPos).to.be.greaterThan(-1)
+        expect(updatePos).to.be.greaterThan(clearPos)
+    })
+
+    it('waitForIgvLoad validates alignment data arrival via packedGroups', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        const fnBody = res.text.substring(
+            res.text.indexOf('async function waitForIgvLoad'),
+            res.text.indexOf('async function captureIgvScreenshot')
+        )
+        // Must check that AlignmentContainer has packed alignment groups
+        expect(fnBody).to.include('packedGroups')
+        // Must verify cached range overlaps current viewport
+        expect(fnBody).to.include('overlapsRange')
+    })
+
+    it('waitForIgvLoad probes supplementary status as data-arrival canary', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        const fnBody = res.text.substring(
+            res.text.indexOf('async function waitForIgvLoad'),
+            res.text.indexOf('async function captureIgvScreenshot')
+        )
+        // Must probe alignment data by touching supplementary flag
+        expect(fnBody).to.include('isSupplementary')
+    })
+
+    it('navigateAndCapture retries when screenshot is too small', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        const fnBody = res.text.substring(
+            res.text.indexOf('async function navigateAndCapture'),
+            res.text.indexOf('async function waitForIgvLoad')
+        )
+        // Must have retry logic based on base64 length
+        expect(fnBody).to.include('maxAttempts')
+        expect(fnBody).to.include('minBase64Len')
+        expect(fnBody).to.include('retrying')
     })
 })
 
