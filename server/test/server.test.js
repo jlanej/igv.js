@@ -1630,7 +1630,7 @@ describe('UI: IGV scroll-into-view on variant selection', function () {
         expect(res.text).to.include('activeRow.scrollIntoView')
     })
 
-    it('showInIgv navigates to locus before loading tracks to prevent double loading', async function () {
+    it('showInIgv navigates to locus before loading tracks', async function () {
         const res = await request(app).get('/app.js').expect(200)
         // search() should come before loadTrackList() to avoid two loading cycles
         const searchPos = res.text.indexOf('igvBrowser.search(locus)')
