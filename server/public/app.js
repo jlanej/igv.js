@@ -1434,11 +1434,12 @@
                 img.onload = () => {
                     const dims = igvBrowser.columnContainer.getBoundingClientRect()
                     const dpr = window.devicePixelRatio || 1
+                    const scale = dpr * 2  // 2x for high-res export screenshots
                     const canvas = document.createElement('canvas')
-                    canvas.width = dims.width * dpr
-                    canvas.height = dims.height * dpr
+                    canvas.width = dims.width * scale
+                    canvas.height = dims.height * scale
                     const ctx = canvas.getContext('2d')
-                    ctx.scale(dpr, dpr)
+                    ctx.scale(scale, scale)
                     ctx.drawImage(img, 0, 0)
                     URL.revokeObjectURL(svgUrl)
                     resolve(canvas.toDataURL('image/png'))

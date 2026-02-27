@@ -1340,7 +1340,7 @@ app.post('/api/export/xlsx', async (req, res) => {
 
                     sws.addImage(imageId, {
                         tl: {col: 0, row: imgStartRow - 1},
-                        ext: {width: 900, height: 400}
+                        ext: {width: 1800, height: 800}
                     })
                 } catch (imgErr) {
                     sws.getCell(`A${imgStartRow}`).value = '(Screenshot could not be embedded)'
@@ -1428,8 +1428,8 @@ app.post('/api/export/html', async (req, res) => {
             stats[v.curation_status || 'pending']++
         }
 
-        // Generate the HTML
-        const html = buildExportHtml(filtered, uniqueCols, screenshotFiles, geneSummary, filterEntries, stats, geneCol)
+        // Generate the HTML (pass raw screenshots for data URI embedding)
+        const html = buildExportHtml(filtered, uniqueCols, screenshotFiles, screenshots || {}, geneSummary, filterEntries, stats, geneCol)
 
         // Create ZIP archive
         res.setHeader('Content-Type', 'application/zip')
@@ -1471,13 +1471,16 @@ app.post('/api/export/html', async (req, res) => {
 
 /**
  * Build a self-contained, interactive HTML report for variant export.
+ * Screenshots are embedded as base64 data URIs so the HTML works without
+ * extracting image files from the ZIP.
  */
-function buildExportHtml(variants, columns, screenshotFiles, geneSummary, filterEntries, stats, geneCol) {
+function buildExportHtml(variants, columns, screenshotFiles, screenshots, geneSummary, filterEntries, stats, geneCol) {
     const totalVariants = variants.length
     const hasScreenshots = Object.keys(screenshotFiles).length > 0
     const escHtml = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-    // Build table rows JSON for client-side filtering
+    // Build table rows JSON for client-side filtering.
+    // Embed screenshot data URIs directly so the HTML is self-contained.
     const variantData = variants.map(v => {
         const row = {}
         for (const col of columns) {
@@ -1486,6 +1489,9 @@ function buildExportHtml(variants, columns, screenshotFiles, geneSummary, filter
         row._id = v.id
         row._hasScreenshot = !!screenshotFiles[String(v.id)]
         row._screenshotFile = screenshotFiles[String(v.id)] || ''
+        // Embed the data URI for self-contained HTML; fall back to
+        // relative path for the ZIP-extracted screenshots/ directory
+        row._screenshotDataUri = screenshots[String(v.id)] || ''
         return row
     })
 
@@ -1886,7 +1892,7 @@ function buildExportHtml(variants, columns, screenshotFiles, geneSummary, filter
     const v = screenshotVariants[currentModalIdx];
     if (!v) return;
     document.getElementById('modalTitle').textContent = (v.chrom || '') + ':' + (v.pos || '') + ' ' + (v.ref || '') + '→' + (v.alt || '');
-    document.getElementById('modalImg').src = 'screenshots/' + v._screenshotFile;
+    document.getElementById('modalImg').src = v._screenshotDataUri || ('screenshots/' + v._screenshotFile);
     const info = document.getElementById('modalInfo');
     info.innerHTML = '';
     ['gene', 'impact', 'inheritance', 'curation_status', 'curation_note'].forEach(key => {
@@ -1927,9 +1933,10 @@ function buildExportHtml(variants, columns, screenshotFiles, geneSummary, filter
     const grid = document.getElementById('galleryGrid');
     grid.innerHTML = '';
     items.forEach(v => {
+      const imgSrc = v._screenshotDataUri || ('screenshots/' + v._screenshotFile);
       const div = document.createElement('div');
       div.className = 'gallery-item';
-      div.innerHTML = '<img src="screenshots/' + esc(v._screenshotFile) + '" alt="Screenshot" loading="lazy">'
+      div.innerHTML = '<img src="' + esc(imgSrc) + '" alt="Screenshot" loading="lazy">'
         + '<div class="gallery-info"><h4>' + esc(v.chrom) + ':' + esc(v.pos) + ' ' + esc(v.ref) + '→' + esc(v.alt) + '</h4>'
         + '<p>' + esc(v.gene || '') + (v.curation_status ? ' · <span class="status-badge ' + (v.curation_status || 'pending') + '">' + esc(v.curation_status || 'pending') + '</span>' : '') + '</p></div>';
       div.addEventListener('click', () => openModal(v._id));
