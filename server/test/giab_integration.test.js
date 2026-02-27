@@ -381,13 +381,19 @@ describe('GIAB Trio Integration', function () {
     })
 
     // -----------------------------------------------------------------------
-    // IGV screenshot capture with real BAM data (requires S3 genome access)
+    // IGV screenshot capture with real BAM data
+    // Requires: 1) Playwright  2) built igv.js dist  3) S3 genome access
     // -----------------------------------------------------------------------
     describe('IGV screenshot with real trio alignments', function () {
+        const igvDistPath = path.join(__dirname, '..', '..', 'dist', 'igv.esm.min.js')
         let page
 
         before(async function () {
             if (!browser) this.skip()
+            if (!fs.existsSync(igvDistPath)) {
+                console.log('    ⚠  Skipping IGV screenshot tests – dist/igv.esm.min.js not built')
+                this.skip()
+            }
             page = await browser.newPage()
             await page.setViewportSize({width: 1400, height: 900})
             await interceptGenomeRequests(page)
