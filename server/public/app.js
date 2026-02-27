@@ -1222,13 +1222,8 @@
                 progressFill.style.width = `${pct}%`
 
                 try {
-                    // Navigate to variant
-                    const pos = parseInt(v.pos, 10)
-                    const flank = 100
-                    const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
-                    await igvBrowser.search(locus)
-                    // Allow time for tracks to render
-                    await new Promise(resolve => setTimeout(resolve, 1500))
+                    // Load variant-specific tracks and wait for data
+                    await loadVariantForScreenshot(v)
 
                     // Capture the IGV div as a canvas image
                     const imgData = await captureIgvScreenshot()
@@ -1324,11 +1319,9 @@
                 progressFill.style.width = `${pct}%`
 
                 try {
-                    const pos = parseInt(v.pos, 10)
-                    const flank = 100
-                    const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
-                    await igvBrowser.search(locus)
-                    await new Promise(resolve => setTimeout(resolve, 1500))
+                    // Load variant-specific tracks and wait for data
+                    await loadVariantForScreenshot(v)
+
                     const imgData = await captureIgvScreenshot()
                     if (imgData) {
                         screenshots[String(v.id)] = imgData
@@ -1379,9 +1372,36 @@
     }
 
     /**
-     * Capture the IGV viewer as a PNG data URL by compositing all child
-     * canvases in the IGV container onto a single off-screen canvas.
+     * Load a variant into IGV for screenshot capture.
+     * Mirrors showInIgv() — removes existing tracks, navigates to locus,
+     * loads variant-specific tracks, and waits for all track data to be
+     * fully loaded before returning.
+     *
+     * Previous attempts (PRs #35-42) only called search() without loading
+     * per-variant tracks, then tried complex polling/retry logic which
+     * broke screenshot capture entirely.  The real fix is loading the
+     * correct tracks for each variant — loadTrackList() internally awaits
+     * updateViews() which awaits loadFeatures() for every viewport, so
+     * featureCaches are populated when it returns.
      */
+    async function loadVariantForScreenshot(variant) {
+        const pos = parseInt(variant.pos, 10)
+        const flank = 100
+        const locus = `${variant.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
+        const tracks = buildTracks(variant)
+
+        igvBrowser.removeAllTracks()
+        await igvBrowser.search(locus)
+        await igvBrowser.loadTrackList(tracks)
+
+        // Yield two animation frames so the browser can
+        // finish layout and paint after track loading completes.
+        // toSVG() reads from featureCache (already populated above)
+        // but getBoundingClientRect() in renderSVGContext needs
+        // accurate layout.
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+    }
+
     async function captureIgvScreenshot() {
         if (!igvBrowser || typeof igvBrowser.toSVG !== 'function') return null
 
