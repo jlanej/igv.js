@@ -157,6 +157,15 @@
                             <option value="EXPANDED">Expanded</option>
                             <option value="COLLAPSED">Collapsed</option>
                         </select>
+                        <div id="igv-settings-wrap">
+                            <button id="btn-igv-settings" class="btn btn-sm" title="IGV settings">⚙</button>
+                            <div id="igv-settings-panel" class="settings-panel" style="display:none;">
+                                <label class="settings-item" title="Verify CRAM reference MD5 checksums (disable if you see spurious mismatch errors)">
+                                    <input type="checkbox" id="chk-cram-md5">
+                                    <span>CRAM MD5 checks</span>
+                                </label>
+                            </div>
+                        </div>
                     </div>
                     <div id="igv-curation" style="display:none;">
                         <button class="btn curation-pass" data-status="pass">✓ Pass</button>

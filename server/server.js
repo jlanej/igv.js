@@ -37,6 +37,10 @@ const VCF_FILE = getArg('vcf', null)
 const VCF_SAMPLES = getArg('vcf-samples', null)  // e.g. "proband:NA12878,mother:NA12891,father:NA12892"
 const GENOME = getArg('genome', 'hg38')
 const HOST = getArg('host', '127.0.0.1')
+// CRAM MD5 reference checks are disabled by default to avoid spurious
+// failures caused by concurrent reference-sequence cache races in igv.js
+// (see Known Issues in README).  Pass --check-md5 to re-enable.
+const ENABLE_CRAM_MD5_CHECK = args.includes('--check-md5')
 
 // ---------------------------------------------------------------------------
 // Data loading
@@ -432,7 +436,8 @@ app.get('/api/config', (_req, res) => {
         totalVariants: variants.length,
         dataDir: '/data',
         hasSampleQc: sampleQcTrios.length > 0,
-        qcMetricThresholds: QC_METRIC_THRESHOLDS
+        qcMetricThresholds: QC_METRIC_THRESHOLDS,
+        checkSequenceMD5: ENABLE_CRAM_MD5_CHECK
     }
 
     // VCF track configuration
@@ -1979,6 +1984,9 @@ if (require.main === module) {
         log.info(`Data dir:   ${DATA_DIR}`)
         if (sampleQcTrios.length > 0) {
             log.info(`Sample QC:  ${sampleQcTrios.length} trios loaded`)
+        }
+        if (ENABLE_CRAM_MD5_CHECK) {
+            log.info(`CRAM MD5:   reference checks enabled (--check-md5)`)
         }
     })
 }

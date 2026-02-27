@@ -207,6 +207,7 @@ colored dot + badge in the variant table's **QC** column.
 | `--host`           | `127.0.0.1`                        | Bind address (use `0.0.0.0` in containers) |
 | `--log-level`      | `info`                             | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--sample-qc`      | *(none)*                           | Path to sample QC TSV file (see below) |
+| `--check-md5`      | *(off)*                            | Re-enable CRAM MD5 reference checks (see Known Issues) |
 
 ## HPC Deployment
 
@@ -366,3 +367,106 @@ The server loads variant data from a TSV file into memory, serves a REST API
 for filtering and curation, and provides a static file server for the web UI
 and genomic data files.  igv.js is loaded from the parent repository's
 `dist/` directory.
+
+## Known Issues
+
+### CRAM MD5 Checksum Reference Mismatch (Spurious)
+
+**Symptom:** When clicking a variant, some trio members fail to load with
+errors like:
+
+```
+MD5 checksum reference mismatch for ref 11 pos 120153589..127388592.
+recorded MD5: f3d2a2e5c3202e1853d3b82e28e930e6,
+calculated MD5: 03c41a3ddc0b92e48d6b3630f069e830
+```
+
+Typically one trio member loads fine while the others error.  The error is
+**intermittent**: navigating to a different trio and coming back often clears
+it.  The failing files are consistent across attempts on the same initial
+load, but work on subsequent loads.
+
+**Note on "ref 11":** The number in `ref 11` is the **CRAM-internal
+reference sequence ID** (0-indexed position in the CRAM file's `@SQ` header),
+not the chromosome number.  In a standard hg38 CRAM with `@SQ` entries
+ordered chr1, chr2, …, chrN, `ref 11` corresponds to **chr12** (index 0 =
+chr1).  This is expected behavior, not a sign that the wrong chromosome is
+being loaded.
+
+**Likely cause – concurrent reference sequence fetching in igv.js:**
+
+CRAM files do not store reference bases; the CRAM decoder fetches reference
+sequence on the fly via a `seqFetch` callback and verifies it against an
+MD5 checksum embedded in each CRAM slice header.  In igv.js, all reference
+sequence requests flow through a shared `CachedSequence` singleton
+(`js/genome/cachedSequence.js`).
+
+When a trio is loaded, all three CRAM tracks decode **concurrently** (via
+`Promise.all` in `updateViews()`).  Each CRAM slice requests a large
+reference region (often 5–10 MB) from `CachedSequence.getSequence()`.
+
+The exact mechanism by which the wrong reference data is returned is not
+fully understood, but the circumstantial evidence points to a race:
+
+- The error only occurs on **first load** (cold cache), never on retry
+  (warm cache), which is consistent with concurrent cache population
+- Only some trio members fail — the first CRAM to decode tends to succeed,
+  while later ones (racing) fail
+- The `CachedSequence` class has a single `#currentQuery` dedup slot that
+  gets overwritten by concurrent requests, and `#trimCache()` can evict
+  intervals based on the current view between `await` resumption points
+
+**Prior fix attempts (reverted):**
+
+- **PR #22** modified `js/genome/cachedSequence.js` to replace
+  `#currentQuery` with an `#inflightQueries` Map and added
+  `#getRecordsWithRetry()` to `js/cram/cramReader.js` to catch and retry
+  MD5 errors.
+
+- **PR #26** extended the retry to also clear the `CachedSequence` cache
+  via a new `clearCache()` method.
+
+- Both were **reverted in PR #32** because the changes to igv.js core
+  caused other issues.  Modifying the upstream igv.js cache and CRAM
+  decoder is fragile — these internals are tightly coupled and any change
+  risks breaking other functionality.
+
+**Current workaround — MD5 checks disabled by default:**
+
+Instead of modifying igv.js internals, this server sets
+`checkSequenceMD5: false` on all CRAM tracks automatically.  This uses a
+**supported** config option in the igv.js CRAM reader (see
+`js/cram/cramReader.js` line 35) — no igv.js source is modified.
+
+The setting can be controlled in two ways:
+
+1. **Runtime toggle (⚙ gear icon):** Click the ⚙ button in the IGV header
+   bar (next to the Display mode selector) to open a settings panel.  The
+   "CRAM MD5 checks" checkbox toggles MD5 verification on or off.  The
+   choice is persisted in `localStorage` and takes effect on the next
+   variant click (tracks are rebuilt each time).
+
+2. **CLI flag:** Pass `--check-md5` on startup to default MD5 checks to on.
+   The runtime toggle still overrides this per-browser.
+
+```bash
+node server.js --variants variants.tsv --data-dir /data --check-md5
+```
+
+When disabled, the CRAM decoder skips the MD5 verification step entirely.
+The reads/alignments still load and display correctly — only the
+post-decode integrity check is suppressed.  This means genuine reference
+mismatches (e.g., CRAM encoded against a different genome build) would also
+be silently ignored.
+
+
+**Why it works on retry (without the flag):** On the second navigation to
+the same locus, the reference sequences are already cached in
+`#cachedIntervals` (the cache persists across track load/unload cycles since
+it lives on the genome singleton).  Cache hits bypass the concurrent fetch
+path, so no race occurs.
+
+**Manual workaround (without the flag):** Click a different variant, then
+click back.  The second load uses cached reference sequences and succeeds.
+
+

@@ -347,6 +347,34 @@ tr.active-variant { background: #b8daff; }
 #igv-controls { display: flex; align-items: center; gap: 6px; }
 .display-mode-label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
 
+/* Settings gear dropdown */
+#igv-settings-wrap { position: relative; }
+#btn-igv-settings { font-size: 14px; padding: 2px 6px; line-height: 1; cursor: pointer; }
+#igv-settings-panel {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 100;
+    margin-top: 4px;
+    background: var(--bg, #fff);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    padding: 8px 12px;
+    min-width: 180px;
+    white-space: nowrap;
+}
+.settings-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 0;
+    color: var(--text, #333);
+}
+.settings-item input[type="checkbox"] { margin: 0; }
+
 /* Resize handle between table and IGV */
 #table-resize-handle {
     height: 6px;

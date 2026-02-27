@@ -28,6 +28,12 @@
     let curationCounts = {pass: 0, fail: 0, uncertain: 0, pending: 0}
     let allNotes = []
 
+    // Runtime-adjustable IGV settings (initialized from server config +
+    // localStorage overrides).  See setupIgvSettings().
+    let igvSettings = {
+        checkSequenceMD5: false
+    }
+
     // -----------------------------------------------------------------------
     // Init
     // -----------------------------------------------------------------------
@@ -57,6 +63,7 @@
             setupShortcutsPanel()
             setupSidebarToggle()
             setupDisplayModeControl()
+            setupIgvSettings()
             setupVariantSearch()
             setupNoteSuggestions()
 
@@ -617,6 +624,15 @@
 
             const format = file.endsWith('.cram') ? 'cram' : file.endsWith('.bam') ? 'bam' : undefined
             if (format) track.format = format
+
+            // CRAM MD5 reference checks are disabled by default to avoid
+            // spurious mismatches caused by concurrent reference-sequence
+            // cache races in igv.js (see Known Issues in README).
+            // Controlled at runtime via the ⚙ settings panel or on the
+            // CLI with --check-md5.
+            if (format === 'cram') {
+                track.checkSequenceMD5 = !!igvSettings.checkSequenceMD5
+            }
 
             tracks.push(track)
         }
@@ -1506,6 +1522,46 @@
             })
             if (igvBrowser.updateViews) igvBrowser.updateViews()
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // IGV settings panel (gear icon dropdown)
+    // -----------------------------------------------------------------------
+    function setupIgvSettings() {
+        // Initialize from server config, then apply any localStorage override
+        igvSettings.checkSequenceMD5 = !!config.checkSequenceMD5
+        const stored = localStorage.getItem('igv.checkSequenceMD5')
+        if (stored !== null) {
+            igvSettings.checkSequenceMD5 = stored === 'true'
+        }
+
+        // Gear button toggles the panel
+        const btn = document.getElementById('btn-igv-settings')
+        const panel = document.getElementById('igv-settings-panel')
+        if (!btn || !panel) return
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation()
+            const open = panel.style.display !== 'none'
+            panel.style.display = open ? 'none' : 'block'
+        })
+
+        // Close panel when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!panel.contains(e.target) && e.target !== btn) {
+                panel.style.display = 'none'
+            }
+        })
+
+        // CRAM MD5 checkbox
+        const chk = document.getElementById('chk-cram-md5')
+        if (chk) {
+            chk.checked = igvSettings.checkSequenceMD5
+            chk.addEventListener('change', () => {
+                igvSettings.checkSequenceMD5 = chk.checked
+                localStorage.setItem('igv.checkSequenceMD5', chk.checked)
+            })
+        }
     }
 
     // -----------------------------------------------------------------------
