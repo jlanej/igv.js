@@ -1641,6 +1641,37 @@ describe('UI: IGV scroll-into-view on variant selection', function () {
     })
 })
 
+describe('UI: IGV screenshot readiness guard', function () {
+    it('app.js defines waitForIgvLoad that polls viewport loading state', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('async function waitForIgvLoad')
+        expect(res.text).to.include('updateViews')
+        expect(res.text).to.include('isLoading')
+    })
+
+    it('XLSX export uses waitForIgvLoad instead of fixed timeout', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        // The XLSX export block should call waitForIgvLoad after search
+        const xlsxBlock = res.text.substring(
+            res.text.indexOf('async function exportXlsx'),
+            res.text.indexOf('Send to server for XLSX generation')
+        )
+        expect(xlsxBlock).to.include('await waitForIgvLoad()')
+        expect(xlsxBlock).to.not.include('setTimeout(resolve, 1500)')
+    })
+
+    it('HTML export uses waitForIgvLoad instead of fixed timeout', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        // The HTML export block should call waitForIgvLoad after search
+        const htmlBlock = res.text.substring(
+            res.text.indexOf('async function exportHtml'),
+            res.text.indexOf('Send to server for HTML generation')
+        )
+        expect(htmlBlock).to.include('await waitForIgvLoad()')
+        expect(htmlBlock).to.not.include('setTimeout(resolve, 1500)')
+    })
+})
+
 describe('UI: Increased IGV viewer height', function () {
     it('styles.css sets IGV min-height to 400px', async function () {
         const res = await request(app).get('/styles.css').expect(200)
