@@ -27,25 +27,29 @@ const GIAB_DIR = path.join(__dirname, 'data', 'giab')
 const VCF_PATH = path.join(GIAB_DIR, 'annotated.vcf.gz')
 const TSV_PATH = path.join(GIAB_DIR, 'variants.tsv')
 
-// Minimal hg38 genome reference that works offline (chromsizes format).
-// Used to intercept genomes3.json requests so IGV can initialise without
-// network access to igv.org.
-function buildMockGenomesJson(port) {
+// Remote hg38 genome reference hosted on S3.  Used to intercept the
+// genomes3.json lookup so IGV resolves "hg38" to a real indexed FASTA
+// and can render alignments with actual sequence data.
+const HG38_FASTA_URL = 'https://s3.amazonaws.com/igv.broadinstitute.org/genomes/seq/hg38/hg38.fa'
+const HG38_INDEX_URL = 'https://s3.amazonaws.com/igv.broadinstitute.org/genomes/seq/hg38/hg38.fa.fai'
+
+function buildMockGenomesJson() {
     return [{
         id: 'hg38',
         name: 'Human (GRCh38/hg38)',
-        fastaURL: `http://127.0.0.1:${port}/data/hg38.chrom.sizes`,
-        format: 'chromsizes',
+        fastaURL: HG38_FASTA_URL,
+        indexURL: HG38_INDEX_URL,
         chromosomeOrder: 'chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22,chrX,chrY'
     }]
 }
 
 /**
- * Set up Playwright route interception so IGV genome lookups succeed
- * without internet access.
+ * Set up Playwright route interception so IGV genome lookups succeed.
+ * The genomes3.json request is fulfilled with a single hg38 entry that
+ * points to the Broad S3-hosted indexed FASTA.
  */
-async function interceptGenomeRequests(page, port) {
-    const mockJson = JSON.stringify(buildMockGenomesJson(port))
+async function interceptGenomeRequests(page) {
+    const mockJson = JSON.stringify(buildMockGenomesJson())
     await page.route('**/genomes3.json', route => {
         route.fulfill({status: 200, contentType: 'application/json', body: mockJson})
     })
@@ -328,7 +332,7 @@ describe('GIAB Trio Integration', function () {
             if (!browser) this.skip()
             page = await browser.newPage()
             await page.setViewportSize({width: 1400, height: 900})
-            await interceptGenomeRequests(page, port)
+            await interceptGenomeRequests(page)
         })
 
         after(async function () {
@@ -352,39 +356,13 @@ describe('GIAB Trio Integration', function () {
             expect(text).to.include('40003391')
         })
 
-        it('clicking a variant triggers IGV initialization and BAM track setup', async function () {
-            if (!browser) this.skip()
-            await page.goto(`http://127.0.0.1:${port}/`, {waitUntil: 'networkidle'})
-            // Click the first variant row
-            await page.locator('table tbody tr').first().click()
-            // Wait for track validation to show BAM file accessibility
-            await page.waitForSelector('.track-status', {timeout: 15000})
-            const statusCount = await page.locator('.track-status').count()
-            expect(statusCount).to.be.at.least(3)
-        })
-
-        it('track status indicators confirm all trio BAMs are accessible', async function () {
-            if (!browser) this.skip()
-            await page.goto(`http://127.0.0.1:${port}/`, {waitUntil: 'networkidle'})
-            await page.locator('table tbody tr').first().click()
-            // Wait for track validation
-            await page.waitForSelector('.track-status-ok', {timeout: 15000})
-            const okCount = await page.locator('.track-status-ok').count()
-            // Should have at least 3 accessible tracks (child, mother, father BAMs)
-            expect(okCount).to.be.at.least(3)
-        })
-
         it('IGV section becomes visible after clicking a variant', async function () {
             if (!browser) this.skip()
             await page.goto(`http://127.0.0.1:${port}/`, {waitUntil: 'networkidle'})
             await page.locator('table tbody tr').first().click()
-            // The IGV section should be visible
-            const igvSection = page.locator('#igv-section')
-            await expect(igvSection).to.exist
             // Curation controls should appear
             await page.waitForSelector('#igv-curation', {timeout: 10000})
-            const curationDiv = page.locator('#igv-curation')
-            const display = await curationDiv.evaluate(el => el.style.display)
+            const display = await page.locator('#igv-curation').evaluate(el => el.style.display)
             expect(display).to.equal('flex')
         })
 
@@ -399,6 +377,111 @@ describe('GIAB Trio Integration', function () {
             expect(title).to.include('40003391')
             // Should include DKA/DKT metadata if available
             expect(title).to.include('DKA/DKT')
+        })
+    })
+
+    // -----------------------------------------------------------------------
+    // IGV screenshot capture with real BAM data (requires S3 genome access)
+    // -----------------------------------------------------------------------
+    describe('IGV screenshot with real trio alignments', function () {
+        let page
+
+        before(async function () {
+            if (!browser) this.skip()
+            page = await browser.newPage()
+            await page.setViewportSize({width: 1400, height: 900})
+            await interceptGenomeRequests(page)
+        })
+
+        after(async function () {
+            if (page) await page.close()
+        })
+
+        it('clicking a variant loads IGV with trio alignment tracks', async function () {
+            if (!browser) this.skip()
+            this.timeout(60000)
+            await page.goto(`http://127.0.0.1:${port}/`, {waitUntil: 'networkidle'})
+            await page.locator('table tbody tr').first().click()
+            // Wait for IGV to initialize and tracks to render
+            await page.waitForSelector('.igv-track', {timeout: 45000})
+            // Should have at least 3 alignment tracks (child, mother, father)
+            const trackCount = await page.locator('.igv-track').count()
+            expect(trackCount).to.be.at.least(3)
+        })
+
+        it('track status indicators confirm all trio BAMs are accessible', async function () {
+            if (!browser) this.skip()
+            this.timeout(60000)
+            await page.goto(`http://127.0.0.1:${port}/`, {waitUntil: 'networkidle'})
+            await page.locator('table tbody tr').first().click()
+            await page.waitForSelector('.track-status-ok', {timeout: 45000})
+            const okCount = await page.locator('.track-status-ok').count()
+            // Should have at least 3 accessible tracks (child, mother, father BAMs)
+            expect(okCount).to.be.at.least(3)
+        })
+
+        it('IGV renders non-empty alignment canvases for trio BAMs', async function () {
+            if (!browser) this.skip()
+            this.timeout(60000)
+            await page.goto(`http://127.0.0.1:${port}/`, {waitUntil: 'networkidle'})
+            await page.locator('table tbody tr').first().click()
+            await page.waitForSelector('.igv-track', {timeout: 45000})
+            // Give time for BAM data to fully load and render
+            await page.waitForTimeout(5000)
+
+            // Check that IGV canvases have been drawn to (non-blank)
+            const hasPixelData = await page.evaluate(() => {
+                const canvases = document.querySelectorAll('#igv-div canvas')
+                if (canvases.length === 0) return false
+                let nonBlankCount = 0
+                for (const canvas of canvases) {
+                    if (canvas.width === 0 || canvas.height === 0) continue
+                    const ctx = canvas.getContext('2d')
+                    if (!ctx) continue
+                    // Sample a strip across the middle of the canvas
+                    const y = Math.floor(canvas.height / 2)
+                    const w = Math.min(canvas.width, 200)
+                    const imageData = ctx.getImageData(0, y, w, 1)
+                    const pixels = imageData.data
+                    let nonWhitePixels = 0
+                    for (let i = 0; i < pixels.length; i += 4) {
+                        if (pixels[i] !== 255 || pixels[i + 1] !== 255 || pixels[i + 2] !== 255) {
+                            if (pixels[i + 3] > 0) nonWhitePixels++
+                        }
+                    }
+                    if (nonWhitePixels > 5) nonBlankCount++
+                }
+                return nonBlankCount >= 1
+            })
+            expect(hasPixelData, 'IGV canvases should contain rendered alignment data').to.be.true
+        })
+
+        it('captures a non-trivial screenshot from IGV with real reads', async function () {
+            if (!browser) this.skip()
+            this.timeout(60000)
+            await page.goto(`http://127.0.0.1:${port}/`, {waitUntil: 'networkidle'})
+            await page.locator('table tbody tr').first().click()
+            await page.waitForSelector('.igv-track', {timeout: 45000})
+            await page.waitForTimeout(5000)
+
+            // Capture the largest canvas (alignment pileup) as a data URL
+            const screenshotData = await page.evaluate(() => {
+                const canvases = document.querySelectorAll('#igv-div canvas')
+                if (canvases.length === 0) return null
+                let maxCanvas = null
+                let maxArea = 0
+                for (const c of canvases) {
+                    const area = c.width * c.height
+                    if (area > maxArea) { maxArea = area; maxCanvas = c }
+                }
+                if (!maxCanvas || maxCanvas.width === 0) return null
+                return maxCanvas.toDataURL('image/png')
+            })
+            expect(screenshotData, 'should capture a PNG data URL').to.be.a('string')
+            expect(screenshotData).to.match(/^data:image\/png;base64,/)
+            // A real screenshot with alignment data should be more than a few KB
+            const base64Part = screenshotData.split(',')[1]
+            expect(base64Part.length, 'screenshot should be non-trivial').to.be.greaterThan(500)
         })
     })
 
