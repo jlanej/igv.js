@@ -1251,6 +1251,46 @@ app.post('/api/export/xlsx', async (req, res) => {
                     sws.getCell(`B${infoRow}`).value = v.quality
                 }
 
+                // Trio allelic depths (AD)
+                const adParts = []
+                if (v.child_AD != null && v.child_AD !== '') adParts.push('C:' + String(v.child_AD))
+                if (v.mother_AD != null && v.mother_AD !== '') adParts.push('M:' + String(v.mother_AD))
+                if (v.father_AD != null && v.father_AD !== '') adParts.push('F:' + String(v.father_AD))
+                if (adParts.length) {
+                    infoRow++
+                    sws.getCell(`A${infoRow}`).value = 'AD:'
+                    sws.getCell(`A${infoRow}`).font = {bold: true}
+                    sws.getCell(`B${infoRow}`).value = adParts.join('  ')
+                }
+
+                // Trio genotype quality (GQ)
+                const gqParts = []
+                if (v.child_GQ != null && v.child_GQ !== '') gqParts.push('C:' + String(v.child_GQ))
+                if (v.mother_GQ != null && v.mother_GQ !== '') gqParts.push('M:' + String(v.mother_GQ))
+                if (v.father_GQ != null && v.father_GQ !== '') gqParts.push('F:' + String(v.father_GQ))
+                if (gqParts.length) {
+                    infoRow++
+                    sws.getCell(`A${infoRow}`).value = 'GQ:'
+                    sws.getCell(`A${infoRow}`).font = {bold: true}
+                    sws.getCell(`B${infoRow}`).value = gqParts.join('  ')
+                }
+
+                // Child DKA (if separate column exists)
+                if (v.child_DKA != null && v.child_DKA !== '') {
+                    infoRow++
+                    sws.getCell(`A${infoRow}`).value = 'DKA:'
+                    sws.getCell(`A${infoRow}`).font = {bold: true}
+                    sws.getCell(`B${infoRow}`).value = v.child_DKA
+                }
+
+                // Child DKA/DKT
+                if (v.child_DKA_DKT != null && v.child_DKA_DKT !== '') {
+                    infoRow++
+                    sws.getCell(`A${infoRow}`).value = 'DKA/DKT:'
+                    sws.getCell(`A${infoRow}`).font = {bold: true}
+                    sws.getCell(`B${infoRow}`).value = v.child_DKA_DKT
+                }
+
                 infoRow++
                 sws.getCell(`A${infoRow}`).value = 'Status:'
                 sws.getCell(`A${infoRow}`).font = {bold: true}
