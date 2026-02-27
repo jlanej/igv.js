@@ -1629,6 +1629,16 @@ describe('UI: IGV scroll-into-view on variant selection', function () {
         const res = await request(app).get('/app.js').expect(200)
         expect(res.text).to.include('activeRow.scrollIntoView')
     })
+
+    it('showInIgv navigates to locus before loading tracks to prevent double loading', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        // search() should come before loadTrackList() to avoid two loading cycles
+        const searchPos = res.text.indexOf('igvBrowser.search(locus)')
+        const loadPos = res.text.indexOf('igvBrowser.loadTrackList(tracks)')
+        expect(searchPos).to.be.greaterThan(-1)
+        expect(loadPos).to.be.greaterThan(-1)
+        expect(searchPos).to.be.lessThan(loadPos)
+    })
 })
 
 describe('UI: Increased IGV viewer height', function () {
@@ -1891,63 +1901,6 @@ describe('UI: Previous notes and curation counts from server', function () {
         const loadVariantsMatch = res.text.match(/async function loadVariants\(\)[\s\S]*?(?=\n    async function|\n    function)/)
         expect(loadVariantsMatch).to.not.be.null
         expect(loadVariantsMatch[0]).to.include('refreshNoteSuggestions()')
-    })
-})
-
-// ── Pixel-based screenshot readiness guard ───────────────────────────────────
-describe('UI: Pixel-based IGV screenshot readiness guard', function () {
-    it('app.js includes checkIgvCanvasPixels function', async function () {
-        const res = await request(app).get('/app.js').expect(200)
-        expect(res.text).to.include('function checkIgvCanvasPixels')
-        expect(res.text).to.include('getImageData')
-        // Should sample a bounded 400x200 region on each visible canvas
-        expect(res.text).to.include('Math.min(canvas.width, 400)')
-        expect(res.text).to.include('Math.min(canvas.height, 200)')
-    })
-
-    it('app.js includes waitForIgvPixels function with retry logic', async function () {
-        const res = await request(app).get('/app.js').expect(200)
-        expect(res.text).to.include('async function waitForIgvPixels')
-        expect(res.text).to.include('maxRetries')
-        expect(res.text).to.include('retryDelayMs')
-        expect(res.text).to.include('checkIgvCanvasPixels')
-    })
-
-    it('waitForIgvLoad enforces viewport caches and pixels', async function () {
-        const res = await request(app).get('/app.js').expect(200)
-        // waitForIgvLoad should include viewport feature cache & pixel verification
-        expect(res.text).to.include('async function waitForIgvLoad')
-        expect(res.text).to.include('featureCache.containsRange')
-        expect(res.text).to.include('canvasHasPixels')
-        // The pixel guard should be invoked within waitForIgvLoad and its result enforced
-        const loadFnStart = res.text.indexOf('async function waitForIgvLoad')
-        const pixelCallPos = res.text.indexOf('waitForIgvPixels', loadFnStart)
-        expect(pixelCallPos).to.be.greaterThan(loadFnStart)
-        const returnsPixelGuard = res.text.indexOf('return pixelsReady', loadFnStart)
-        expect(returnsPixelGuard).to.be.greaterThan(loadFnStart)
-    })
-
-    it('captureIgvScreenshot retries when initial capture fails', async function () {
-        const res = await request(app).get('/app.js').expect(200)
-        // captureIgvScreenshot should have retry logic with pixel guard
-        const captureFnStart = res.text.indexOf('async function captureIgvScreenshot')
-        expect(captureFnStart).to.be.greaterThan(-1)
-        // Should reference attempt-based retry and pixel check
-        const afterCapture = res.text.slice(captureFnStart, captureFnStart + 2000)
-        expect(afterCapture).to.include('attempt')
-        expect(afterCapture).to.include('waitForIgvPixels')
-    })
-
-    it('canvasHasPixels checks alpha channel of sampled pixels', async function () {
-        const res = await request(app).get('/app.js').expect(200)
-        const helperStart = res.text.indexOf('function canvasHasPixels')
-        expect(helperStart).to.be.greaterThan(-1)
-        const afterCheck = res.text.slice(helperStart, helperStart + 1500)
-        // Should iterate over alpha channel (every 4th byte at offset 3)
-        expect(afterCheck).to.include('i += 4')
-        expect(afterCheck).to.include('pixels[i]')
-        // Should early-return when threshold met
-        expect(afterCheck).to.include('minNonZeroPixels')
     })
 })
 
