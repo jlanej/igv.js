@@ -1378,8 +1378,64 @@
     }
 
     /**
-     * Wait for all IGV viewports to finish loading by polling their isLoading() state.
-     * Returns true if all viewports settled, false if the timeout was reached.
+     * Sample the largest IGV canvas and return true if enough non-transparent
+     * pixels are present, indicating the canvas has been painted.
+     * Keeps sampling bounded to at most a 400×200 window to avoid heavy
+     * canvas reads.
+     */
+    function checkIgvCanvasPixels(minNonZeroPixels = 10) {
+        const container = document.getElementById('igv-div')
+        if (!container) return false
+        const canvases = container.querySelectorAll('canvas')
+        if (canvases.length === 0) return false
+
+        // Find the largest canvas by area
+        let target = null
+        let maxArea = 0
+        for (const c of canvases) {
+            const area = c.width * c.height
+            if (area > maxArea) { maxArea = area; target = c }
+        }
+        if (!target || target.width === 0 || target.height === 0) return false
+
+        const ctx = target.getContext('2d')
+        if (!ctx) return false
+
+        // Sample a bounded region from the center of the canvas
+        const sampleW = Math.min(target.width, 400)
+        const sampleH = Math.min(target.height, 200)
+        const sx = Math.max(0, Math.floor((target.width - sampleW) / 2))
+        const sy = Math.max(0, Math.floor((target.height - sampleH) / 2))
+
+        const imageData = ctx.getImageData(sx, sy, sampleW, sampleH)
+        const pixels = imageData.data
+        let nonZero = 0
+        // Check alpha channel (every 4th byte starting at offset 3)
+        for (let i = 3; i < pixels.length; i += 4) {
+            if (pixels[i] > 0) nonZero++
+            if (nonZero >= minNonZeroPixels) return true
+        }
+        return false
+    }
+
+    /**
+     * Wait until at least one IGV canvas has meaningful pixel data.
+     * Retries up to `maxRetries` times with `retryDelayMs` between attempts.
+     * Returns true if pixels were detected, false otherwise.
+     */
+    async function waitForIgvPixels(browser, {maxRetries = 5, retryDelayMs = 300, minPixels = 10} = {}) {
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            if (checkIgvCanvasPixels(minPixels)) return true
+            await new Promise(resolve => setTimeout(resolve, retryDelayMs))
+        }
+        console.warn('waitForIgvPixels: canvas still appears blank after ' + maxRetries + ' retries')
+        return false
+    }
+
+    /**
+     * Wait for all IGV viewports to finish loading by polling their isLoading() state,
+     * then verify that canvases contain actual pixel data via waitForIgvPixels.
+     * Returns true if all viewports settled and pixels are present, false if the timeout was reached.
      */
     async function waitForIgvLoad(browser, maxWaitMs = 30000) {
         // Give the search operation time to start network requests
@@ -1404,6 +1460,14 @@
             if (!anyLoading) {
                 // Final buffer to ensure canvas paints are flushed
                 await new Promise(resolve => setTimeout(resolve, 250))
+
+                // Pixel-based readiness check: verify canvas has actual content.
+                // Divide remaining budget by 300ms (the retry delay) to fit retries
+                // within the overall timeout, capped at 5 attempts.
+                const remaining = Math.max(0, maxWaitMs - (Date.now() - start))
+                const maxPixelRetries = Math.min(5, Math.max(1, Math.floor(remaining / 300)))
+                await waitForIgvPixels(browser, {maxRetries: maxPixelRetries, retryDelayMs: 300})
+
                 return true
             }
             await new Promise(resolve => setTimeout(resolve, 250))
@@ -1415,43 +1479,56 @@
     /**
      * Capture the IGV viewer as a PNG data URL by compositing all child
      * canvases in the IGV container onto a single off-screen canvas.
+     * Retries once if the initial capture produces an empty image.
      */
     async function captureIgvScreenshot() {
         if (!igvBrowser || typeof igvBrowser.toSVG !== 'function') return null
 
-        try {
-            const svgString = igvBrowser.toSVG()
-            if (!svgString) return null
-
-            // Convert SVG to PNG via an offscreen Image + Canvas
-            const svgBlob = new Blob([svgString], {type: 'image/svg+xml'})
-            const svgUrl = URL.createObjectURL(svgBlob)
-
-            return new Promise(resolve => {
-                const img = new Image()
-                img.onload = () => {
-                    const dims = igvBrowser.columnContainer.getBoundingClientRect()
-                    const dpr = window.devicePixelRatio || 1
-                    const canvas = document.createElement('canvas')
-                    canvas.width = dims.width * dpr
-                    canvas.height = dims.height * dpr
-                    const ctx = canvas.getContext('2d')
-                    ctx.scale(dpr, dpr)
-                    ctx.drawImage(img, 0, 0)
-                    URL.revokeObjectURL(svgUrl)
-                    resolve(canvas.toDataURL('image/png'))
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                // Guard: if canvas pixels are still missing, wait briefly
+                if (attempt > 0) {
+                    await waitForIgvPixels(igvBrowser, {maxRetries: 3, retryDelayMs: 300})
                 }
-                img.onerror = (e) => {
-                    console.warn('Screenshot SVG-to-PNG conversion failed:', e)
-                    URL.revokeObjectURL(svgUrl)
-                    resolve(null)
+
+                const svgString = igvBrowser.toSVG()
+                if (!svgString) {
+                    if (attempt === 0) continue
+                    return null
                 }
-                img.src = svgUrl
-            })
-        } catch (e) {
-            console.warn('Screenshot capture failed:', e)
-            return null
+
+                // Convert SVG to PNG via an offscreen Image + Canvas
+                const svgBlob = new Blob([svgString], {type: 'image/svg+xml'})
+                const svgUrl = URL.createObjectURL(svgBlob)
+
+                const result = await new Promise(resolve => {
+                    const img = new Image()
+                    img.onload = () => {
+                        const dims = igvBrowser.columnContainer.getBoundingClientRect()
+                        const dpr = window.devicePixelRatio || 1
+                        const canvas = document.createElement('canvas')
+                        canvas.width = dims.width * dpr
+                        canvas.height = dims.height * dpr
+                        const ctx = canvas.getContext('2d')
+                        ctx.scale(dpr, dpr)
+                        ctx.drawImage(img, 0, 0)
+                        URL.revokeObjectURL(svgUrl)
+                        resolve(canvas.toDataURL('image/png'))
+                    }
+                    img.onerror = (e) => {
+                        console.warn('Screenshot SVG-to-PNG conversion failed:', e)
+                        URL.revokeObjectURL(svgUrl)
+                        resolve(null)
+                    }
+                    img.src = svgUrl
+                })
+
+                if (result) return result
+            } catch (e) {
+                console.warn('Screenshot capture failed (attempt ' + (attempt + 1) + '):', e)
+            }
         }
+        return null
     }
 
     // -----------------------------------------------------------------------
