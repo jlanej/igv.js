@@ -608,11 +608,17 @@ describe('API /api/export/xlsx', function () {
         // Should have 2 data rows (variants 0 and 1)
         expect(variantsSheet.rowCount).to.equal(3) // header + 2 data rows
 
-        // Screenshot sheet should exist for variant 0
-        const screenshotSheet = workbook.worksheets.find(s => s.name !== 'Variants' && s.name !== 'Gene Summary' && s.name !== 'Sample Summary')
+        // Screenshot sheet should use short numeric index name
+        const screenshotSheet = workbook.getWorksheet('1')
         expect(screenshotSheet).to.exist
         // Should have back-link text
         expect(screenshotSheet.getCell('D1').value).to.have.property('text', '← Back to Variants')
+
+        // Main table should have a hyperlink from the Screenshot column to the screenshot tab
+        const dataRow = variantsSheet.getRow(2)
+        const linkCell = dataRow.getCell(1)
+        expect(linkCell.value).to.have.property('text', '📷 View')
+        expect(linkCell.value).to.have.property('hyperlink', "#'1'!A1")
     })
 
     it('includes Gene Summary and Sample Summary sheets', async function () {
@@ -894,10 +900,8 @@ describe('XLSX screenshot image embedding', function () {
         const workbook = new ExcelJS.Workbook()
         await workbook.xlsx.load(res.body)
 
-        // Find the screenshot worksheet (not Variants, Gene Summary, or Sample Summary)
-        const screenshotSheet = workbook.worksheets.find(s =>
-            !['Variants', 'Gene Summary', 'Sample Summary'].includes(s.name)
-        )
+        // Find the screenshot worksheet by numeric index name
+        const screenshotSheet = workbook.getWorksheet('1')
         expect(screenshotSheet).to.exist
 
         // Verify that the sheet has an embedded image
