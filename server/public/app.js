@@ -1227,8 +1227,10 @@
                     const flank = 100
                     const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
                     await igvBrowser.search(locus)
-                    // Allow time for tracks to render
-                    await new Promise(resolve => setTimeout(resolve, 1500))
+                    // Ensure all track views are fully loaded and painted
+                    await igvBrowser.updateViews()
+                    // Allow time for final DOM/canvas settle
+                    await new Promise(resolve => setTimeout(resolve, 500))
 
                     // Capture the IGV div as a canvas image
                     const imgData = await captureIgvScreenshot()
@@ -1328,7 +1330,8 @@
                     const flank = 100
                     const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
                     await igvBrowser.search(locus)
-                    await new Promise(resolve => setTimeout(resolve, 1500))
+                    await igvBrowser.updateViews()
+                    await new Promise(resolve => setTimeout(resolve, 500))
                     const imgData = await captureIgvScreenshot()
                     if (imgData) {
                         screenshots[String(v.id)] = imgData
@@ -1397,7 +1400,7 @@
                 const img = new Image()
                 img.onload = () => {
                     const dims = igvBrowser.columnContainer.getBoundingClientRect()
-                    const dpr = window.devicePixelRatio || 1
+                    const dpr = (window.devicePixelRatio || 1) * 2
                     const canvas = document.createElement('canvas')
                     canvas.width = dims.width * dpr
                     canvas.height = dims.height * dpr

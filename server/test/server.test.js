@@ -908,9 +908,9 @@ describe('XLSX screenshot image embedding', function () {
         const images = screenshotSheet.getImages()
         expect(images).to.be.an('array').with.length.greaterThan(0)
 
-        // Verify image placement (should start at row 5, col 0)
+        // Verify image placement (should start after info rows, col 0)
         const img = images[0]
-        expect(img.range.tl.row).to.equal(5)
+        expect(img.range.tl.row).to.be.at.least(5)
         expect(img.range.tl.col).to.equal(0)
 
         // Verify the workbook has media with valid PNG data
@@ -922,6 +922,89 @@ describe('XLSX screenshot image embedding', function () {
         // Check PNG magic bytes
         const pngHeader = Buffer.from([0x89, 0x50, 0x4E, 0x47])
         expect(media.buffer.slice(0, 4).equals(pngHeader)).to.be.true
+    })
+
+    it('places screenshot tabs after all data tabs', async function () {
+        this.timeout(10000)
+        const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1, 2],
+                screenshots: {'0': tinyPng, '1': tinyPng}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        // Collect sheet names in order
+        const sheetNames = workbook.worksheets.map(ws => ws.name)
+
+        // Data tabs should appear before screenshot tabs
+        const variantsIdx = sheetNames.indexOf('Variants')
+        const geneSummaryIdx = sheetNames.indexOf('Gene Summary')
+        const sampleSummaryIdx = sheetNames.indexOf('Sample Summary')
+        const screenshot1Idx = sheetNames.indexOf('1')
+        const screenshot2Idx = sheetNames.indexOf('2')
+
+        expect(variantsIdx).to.be.at.least(0)
+        expect(geneSummaryIdx).to.be.at.least(0)
+        expect(sampleSummaryIdx).to.be.at.least(0)
+        expect(screenshot1Idx).to.be.at.least(0)
+        expect(screenshot2Idx).to.be.at.least(0)
+
+        // Screenshot tabs should come after all data tabs
+        expect(screenshot1Idx).to.be.greaterThan(variantsIdx)
+        expect(screenshot1Idx).to.be.greaterThan(geneSummaryIdx)
+        expect(screenshot1Idx).to.be.greaterThan(sampleSummaryIdx)
+        expect(screenshot2Idx).to.be.greaterThan(sampleSummaryIdx)
+    })
+
+    it('includes additional variant summary info in screenshot tabs', async function () {
+        this.timeout(10000)
+        const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0],
+                screenshots: {'0': tinyPng}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const screenshotSheet = workbook.getWorksheet('1')
+        expect(screenshotSheet).to.exist
+
+        // Collect all label values from column A
+        const labels = []
+        screenshotSheet.eachRow(row => {
+            const val = row.getCell(1).value
+            if (val) labels.push(val)
+        })
+
+        // Should include additional context fields
+        expect(labels).to.include('Variant:')
+        expect(labels).to.include('Gene:')
+        expect(labels).to.include('Impact:')
+        expect(labels).to.include('Inheritance:')
+        expect(labels).to.include('Frequency:')
+        expect(labels).to.include('Quality:')
+        expect(labels).to.include('Status:')
     })
 })
 

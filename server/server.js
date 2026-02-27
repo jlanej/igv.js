@@ -949,78 +949,6 @@ app.post('/api/export/xlsx', async (req, res) => {
             ws.autoFilter = {from: 'A1', to: {row: 1, column: mainCols.length}}
         }
 
-        // --- Screenshot worksheets ------------------------------------------
-        if (hasScreenshots) {
-            for (const [sheetName, vid] of sheetNames) {
-                const v = filtered.find(x => x.id === vid)
-                const imgData = screenshots[String(vid)]
-                if (!v || !imgData) continue
-
-                const sws = workbook.addWorksheet(sheetName)
-
-                // Header row with variant info
-                sws.getCell('A1').value = 'Variant:'
-                sws.getCell('A1').font = {bold: true, size: 12}
-                sws.getCell('B1').value = `${v.chrom}:${v.pos} ${v.ref}→${v.alt}`
-                sws.getCell('B1').font = {size: 12}
-
-                if (v.gene) {
-                    sws.getCell('A2').value = 'Gene:'
-                    sws.getCell('A2').font = {bold: true}
-                    sws.getCell('B2').value = v.gene
-                }
-
-                sws.getCell('A3').value = 'Status:'
-                sws.getCell('A3').font = {bold: true}
-                sws.getCell('B3').value = v.curation_status || 'pending'
-                const sColor = statusColors[v.curation_status] || statusColors.pending
-                sws.getCell('B3').font = {bold: true, color: {argb: sColor}}
-
-                if (v.curation_note) {
-                    sws.getCell('A4').value = 'Note:'
-                    sws.getCell('A4').font = {bold: true}
-                    sws.getCell('B4').value = v.curation_note
-                }
-
-                // Back-link to the Variants sheet
-                sws.getCell('D1').value = {text: '← Back to Variants', hyperlink: '#Variants!A1'}
-                sws.getCell('D1').font = {color: {argb: 'FF2980B9'}, underline: true}
-
-                // Set column widths
-                sws.getColumn(1).width = 12
-                sws.getColumn(2).width = 30
-                sws.getColumn(3).width = 5
-                sws.getColumn(4).width = 22
-
-                // Embed the screenshot image
-                try {
-                    // imgData should be a base64 PNG/JPEG data URI or raw base64
-                    let base64 = imgData
-                    let extension = 'png'
-                    if (base64.startsWith('data:image/jpeg;base64,')) {
-                        base64 = base64.replace('data:image/jpeg;base64,', '')
-                        extension = 'jpeg'
-                    } else if (base64.startsWith('data:image/png;base64,')) {
-                        base64 = base64.replace('data:image/png;base64,', '')
-                    }
-
-                    const imageId = workbook.addImage({
-                        buffer: Buffer.from(base64, 'base64'),
-                        extension: extension
-                    })
-
-                    // Place image starting at row 6 to leave room for header info
-                    sws.addImage(imageId, {
-                        tl: {col: 0, row: 5},
-                        ext: {width: 900, height: 400}
-                    })
-                } catch (imgErr) {
-                    sws.getCell('A6').value = '(Screenshot could not be embedded)'
-                    sws.getCell('A6').font = {italic: true, color: {argb: 'FF999999'}}
-                }
-            }
-        }
-
         // --- Gene Summary worksheet -----------------------------------------
         const geneCol = headerColumns.includes('gene') ? 'gene' : null
         const xlsSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
@@ -1260,6 +1188,119 @@ app.post('/api/export/xlsx', async (req, res) => {
                     if (fIdx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
                 })
                 fIdx++
+            }
+        }
+
+        // --- Screenshot worksheets (placed after all data tabs) --------------
+        if (hasScreenshots) {
+            const ssSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
+            for (const [sheetName, vid] of sheetNames) {
+                const v = filtered.find(x => x.id === vid)
+                const imgData = screenshots[String(vid)]
+                if (!v || !imgData) continue
+
+                const sws = workbook.addWorksheet(sheetName)
+
+                // Header rows with variant info
+                let infoRow = 1
+                sws.getCell(`A${infoRow}`).value = 'Variant:'
+                sws.getCell(`A${infoRow}`).font = {bold: true, size: 12}
+                sws.getCell(`B${infoRow}`).value = `${v.chrom}:${v.pos} ${v.ref}→${v.alt}`
+                sws.getCell(`B${infoRow}`).font = {size: 12}
+
+                if (v.gene) {
+                    infoRow++
+                    sws.getCell(`A${infoRow}`).value = 'Gene:'
+                    sws.getCell(`A${infoRow}`).font = {bold: true}
+                    sws.getCell(`B${infoRow}`).value = v.gene
+                }
+
+                if (ssSampleCol && v[ssSampleCol]) {
+                    infoRow++
+                    sws.getCell(`A${infoRow}`).value = ssSampleCol === 'trio_id' ? 'Trio:' : 'Sample:'
+                    sws.getCell(`A${infoRow}`).font = {bold: true}
+                    sws.getCell(`B${infoRow}`).value = v[ssSampleCol]
+                }
+
+                if (v.impact) {
+                    infoRow++
+                    sws.getCell(`A${infoRow}`).value = 'Impact:'
+                    sws.getCell(`A${infoRow}`).font = {bold: true}
+                    sws.getCell(`B${infoRow}`).value = v.impact
+                }
+
+                if (v.inheritance) {
+                    infoRow++
+                    sws.getCell(`A${infoRow}`).value = 'Inheritance:'
+                    sws.getCell(`A${infoRow}`).font = {bold: true}
+                    sws.getCell(`B${infoRow}`).value = v.inheritance
+                }
+
+                const ssFreqCol = headerColumns.find(c => c.startsWith('freq')) || null
+                if (ssFreqCol && v[ssFreqCol] != null) {
+                    infoRow++
+                    sws.getCell(`A${infoRow}`).value = 'Frequency:'
+                    sws.getCell(`A${infoRow}`).font = {bold: true}
+                    sws.getCell(`B${infoRow}`).value = v[ssFreqCol]
+                }
+
+                if (v.quality != null) {
+                    infoRow++
+                    sws.getCell(`A${infoRow}`).value = 'Quality:'
+                    sws.getCell(`A${infoRow}`).font = {bold: true}
+                    sws.getCell(`B${infoRow}`).value = v.quality
+                }
+
+                infoRow++
+                sws.getCell(`A${infoRow}`).value = 'Status:'
+                sws.getCell(`A${infoRow}`).font = {bold: true}
+                sws.getCell(`B${infoRow}`).value = v.curation_status || 'pending'
+                const sColor = statusColors[v.curation_status] || statusColors.pending
+                sws.getCell(`B${infoRow}`).font = {bold: true, color: {argb: sColor}}
+
+                if (v.curation_note) {
+                    infoRow++
+                    sws.getCell(`A${infoRow}`).value = 'Note:'
+                    sws.getCell(`A${infoRow}`).font = {bold: true}
+                    sws.getCell(`B${infoRow}`).value = v.curation_note
+                }
+
+                // Back-link to the Variants sheet
+                sws.getCell('D1').value = {text: '← Back to Variants', hyperlink: '#Variants!A1'}
+                sws.getCell('D1').font = {color: {argb: 'FF2980B9'}, underline: true}
+
+                // Set column widths
+                sws.getColumn(1).width = 14
+                sws.getColumn(2).width = 30
+                sws.getColumn(3).width = 5
+                sws.getColumn(4).width = 22
+
+                // Embed the screenshot image
+                const imgStartRow = infoRow + 2
+                try {
+                    // imgData should be a base64 PNG/JPEG data URI or raw base64
+                    let base64 = imgData
+                    let extension = 'png'
+                    if (base64.startsWith('data:image/jpeg;base64,')) {
+                        base64 = base64.replace('data:image/jpeg;base64,', '')
+                        extension = 'jpeg'
+                    } else if (base64.startsWith('data:image/png;base64,')) {
+                        base64 = base64.replace('data:image/png;base64,', '')
+                    }
+
+                    const imageId = workbook.addImage({
+                        buffer: Buffer.from(base64, 'base64'),
+                        extension: extension
+                    })
+
+                    sws.addImage(imageId, {
+                        tl: {col: 0, row: imgStartRow - 1},
+                        ext: {width: 1800, height: 800}
+                    })
+                } catch (imgErr) {
+                    sws.getCell(`A${imgStartRow}`).value = '(Screenshot could not be embedded)'
+                    sws.getCell(`A${imgStartRow}`).font = {italic: true, color: {argb: 'FF999999'}}
+                }
             }
         }
 
