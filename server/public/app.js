@@ -1227,8 +1227,7 @@
                     const flank = 100
                     const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
                     await igvBrowser.search(locus)
-                    // Allow time for tracks to render
-                    await new Promise(resolve => setTimeout(resolve, 1500))
+                    await waitForIgvLoad(igvBrowser)
 
                     // Capture the IGV div as a canvas image
                     const imgData = await captureIgvScreenshot()
@@ -1328,7 +1327,7 @@
                     const flank = 100
                     const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
                     await igvBrowser.search(locus)
-                    await new Promise(resolve => setTimeout(resolve, 1500))
+                    await waitForIgvLoad(igvBrowser)
                     const imgData = await captureIgvScreenshot()
                     if (imgData) {
                         screenshots[String(v.id)] = imgData
@@ -1376,6 +1375,41 @@
             btn.disabled = false
             setTimeout(() => { progressDiv.style.display = 'none' }, 2000)
         }
+    }
+
+    /**
+     * Wait for all IGV viewports to finish loading by polling their isLoading() state.
+     * Returns true if all viewports settled, false if the timeout was reached.
+     */
+    async function waitForIgvLoad(browser, maxWaitMs = 30000) {
+        // Give the search operation time to start network requests
+        await new Promise(resolve => setTimeout(resolve, 200))
+
+        const start = Date.now()
+        while (Date.now() - start < maxWaitMs) {
+            let anyLoading = false
+            if (browser.trackViews) {
+                for (const tv of browser.trackViews) {
+                    if (tv.viewports) {
+                        for (const vp of tv.viewports) {
+                            if (typeof vp.isLoading === 'function' && vp.isLoading()) {
+                                anyLoading = true
+                                break
+                            }
+                        }
+                    }
+                    if (anyLoading) break
+                }
+            }
+            if (!anyLoading) {
+                // Final buffer to ensure canvas paints are flushed
+                await new Promise(resolve => setTimeout(resolve, 250))
+                return true
+            }
+            await new Promise(resolve => setTimeout(resolve, 250))
+        }
+        console.warn('waitForIgvLoad: timeout reached after ' + maxWaitMs + 'ms')
+        return false
     }
 
     /**
