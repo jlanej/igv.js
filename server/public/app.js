@@ -449,8 +449,8 @@
         if (igvBrowser) {
             // Remove existing tracks and load new ones for the selected variant
             igvBrowser.removeAllTracks()
-            await igvBrowser.loadTrackList(tracks)
             await igvBrowser.search(locus)
+            await igvBrowser.loadTrackList(tracks)
             validateTrackLoading(tracks, variant)
             return
         }
@@ -1227,7 +1227,8 @@
                     const flank = 100
                     const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
                     await igvBrowser.search(locus)
-                    await waitForIgvLoad(igvBrowser)
+                    // Allow time for tracks to render
+                    await new Promise(resolve => setTimeout(resolve, 1500))
 
                     // Capture the IGV div as a canvas image
                     const imgData = await captureIgvScreenshot()
@@ -1327,7 +1328,7 @@
                     const flank = 100
                     const locus = `${v.chrom}:${Math.max(1, pos - flank)}-${pos + flank}`
                     await igvBrowser.search(locus)
-                    await waitForIgvLoad(igvBrowser)
+                    await new Promise(resolve => setTimeout(resolve, 1500))
                     const imgData = await captureIgvScreenshot()
                     if (imgData) {
                         screenshots[String(v.id)] = imgData
@@ -1378,265 +1379,45 @@
     }
 
     /**
-     * Sample a canvas (bounded to 400x200 from the center) and report whether
-     * at least `minNonZeroPixels` alpha-channel pixels are non-zero.
-     */
-    function canvasHasPixels(canvas, minNonZeroPixels) {
-        if (!canvas || canvas.width === 0 || canvas.height === 0) return false
-        const ctx = canvas.getContext('2d')
-        if (!ctx) return false
-
-        // Sample a bounded region from the center of the canvas
-        const sampleW = Math.min(canvas.width, 400)
-        const sampleH = Math.min(canvas.height, 200)
-        const sx = Math.max(0, Math.floor((canvas.width - sampleW) / 2))
-        const sy = Math.max(0, Math.floor((canvas.height - sampleH) / 2))
-
-        const imageData = ctx.getImageData(sx, sy, sampleW, sampleH)
-        const pixels = imageData.data
-        let nonZero = 0
-        // Check alpha channel (every 4th byte starting at offset 3)
-        for (let i = 3; i < pixels.length; i += 4) {
-            if (pixels[i] > 0) nonZero++
-            if (nonZero >= minNonZeroPixels) return true
-        }
-        return false
-    }
-
-    /**
-     * Determine if a viewport is visible, preferring its isVisible() method and
-     * falling back to a clientWidth check when unavailable.
-     */
-    function viewportIsVisible(vp) {
-        if (typeof vp.isVisible === 'function') return vp.isVisible()
-        if (vp.viewportElement) return vp.viewportElement.clientWidth > 0
-        return false
-    }
-
-    /**
-     * Return all visible viewports from the provided browser's trackViews.
-     */
-    function getVisibleViewports(browser) {
-        if (!browser || !browser.trackViews) return []
-        const viewports = []
-        for (const tv of browser.trackViews) {
-            if (!tv.viewports) continue
-            for (const vp of tv.viewports) {
-                if (viewportIsVisible(vp)) viewports.push(vp)
-            }
-        }
-        return viewports
-    }
-
-    /**
-     * Verify that a viewport's featureCache covers the current range. TrackViewport
-     * caches use the multi-argument form, while the generic FeatureCache uses an
-     * object-based signature.
-     */
-    function featureCacheHasRange(vp, referenceFrame, end, windowFunction) {
-        if (!referenceFrame) return false
-        if (end === undefined) return false
-        if (!vp.featureCache) return false
-        if (typeof vp.featureCache.containsRange !== 'function') return false
-        try {
-            const usesObjectRange = Object.prototype.hasOwnProperty.call(vp.featureCache, 'range') && vp.featureCache.containsRange.length <= 1
-            if (usesObjectRange) {
-                return vp.featureCache.containsRange({chr: referenceFrame.chr, start: referenceFrame.start, end: end})
-            }
-            return vp.featureCache.containsRange(referenceFrame.chr, referenceFrame.start, end, referenceFrame.bpPerPixel, windowFunction)
-        } catch (err) {
-            console.warn('featureCacheHasRange: featureCache.containsRange threw', err)
-            return false
-        }
-    }
-
-    /**
-     * Retrieve a viewport's canvas, falling back to querying the viewportElement.
-     */
-    function getViewportCanvas(vp) {
-        if (!vp) return null
-        if (vp.canvas) return vp.canvas
-        if (vp.viewportElement) {
-            const found = vp.viewportElement.querySelector('canvas')
-            if (found) return found
-        }
-        return null
-    }
-
-    /**
-     * Derive the viewport width using available helpers, falling back to canvas width.
-     */
-    function getViewportWidth(vp, canvas) {
-        if (!vp) return 0
-        if (typeof vp.getWidth === 'function') return vp.getWidth()
-        if (vp.viewportElement) return vp.viewportElement.clientWidth
-        return canvas ? canvas.width : 0
-    }
-
-    /**
-     * Calculate the genomic end coordinate for the current viewport width.
-     */
-    function calculateViewportEnd(rf, width) {
-        if (!rf) return undefined
-        if (typeof rf.calculateEnd === 'function') return rf.calculateEnd(width)
-        if (rf.bpPerPixel) return rf.start + rf.bpPerPixel * width
-        return undefined
-    }
-
-    /**
-     * Retrieve the window function associated with a viewport's track, if any.
-     */
-    function getViewportWindowFunction(vp) {
-        if (!vp || !vp.trackView || !vp.trackView.track) return undefined
-        return vp.trackView.track.windowFunction
-    }
-
-    /**
-     * Sample every visible IGV canvas and return true only if all have enough
-     * non-transparent pixels. This covers pileup and coverage canvases
-     * independently while keeping sampling bounded to a 400×200 window.
-     */
-    function checkIgvCanvasPixels(minNonZeroPixels = 10, browser) {
-        const container = document.getElementById('igv-div')
-        if (!container) return false
-
-        const canvases = []
-
-        for (const vp of getVisibleViewports(browser)) {
-            const canvas = getViewportCanvas(vp)
-            if (canvas) canvases.push(canvas)
-        }
-
-        if (canvases.length === 0) {
-            for (const c of container.querySelectorAll('canvas')) {
-                canvases.push(c)
-            }
-        }
-
-        if (canvases.length === 0) return false
-
-        for (const canvas of canvases) {
-            if (!canvasHasPixels(canvas, minNonZeroPixels)) return false
-        }
-        return true
-    }
-
-    /**
-     * Verify that visible viewports have canvases and populated feature caches
-     * for the current locus. Pixel readiness is enforced separately.
-     */
-    function areViewportsReady(browser) {
-        const viewports = getVisibleViewports(browser)
-        if (viewports.length === 0) return false
-
-        for (const vp of viewports) {
-            const canvas = getViewportCanvas(vp)
-            if (!canvas) return false
-
-            const referenceFrame = vp.referenceFrame
-            const width = getViewportWidth(vp, canvas)
-            const end = calculateViewportEnd(referenceFrame, width)
-            const windowFunction = getViewportWindowFunction(vp)
-
-            if (!featureCacheHasRange(vp, referenceFrame, end, windowFunction)) return false
-        }
-        return true
-    }
-
-    /**
-     * Wait until at least one IGV canvas has meaningful pixel data.
-     * Retries up to `maxRetries` times with `retryDelayMs` between attempts.
-     * Returns true if pixels were detected, false otherwise.
-     */
-    async function waitForIgvPixels(browser, {maxRetries = 5, retryDelayMs = 300, minPixels = 10} = {}) {
-        for (let attempt = 0; attempt < maxRetries; attempt++) {
-            if (checkIgvCanvasPixels(minPixels, browser)) return true
-            await new Promise(resolve => setTimeout(resolve, retryDelayMs))
-        }
-        console.warn('waitForIgvPixels: canvas still appears blank after ' + maxRetries + ' retries')
-        return false
-    }
-
-    /**
-     * Wait for IGV readiness based on observable signals: each visible viewport
-     * must have a canvas, its feature cache populated for the current locus, and
-     * non-blank pixels. Returns false if readiness cannot be reached in time.
-     */
-    async function waitForIgvLoad(browser, maxWaitMs = 30000) {
-        if (!browser) {
-            console.warn('waitForIgvLoad: browser is not available')
-            return false
-        }
-        // Give the search operation time to start network requests
-        await new Promise(resolve => setTimeout(resolve, 200))
-
-        const start = Date.now()
-        while (Date.now() - start < maxWaitMs) {
-            if (areViewportsReady(browser)) {
-                const remaining = Math.max(0, maxWaitMs - (Date.now() - start))
-                const maxPixelRetries = Math.min(5, Math.max(1, Math.floor(remaining / 300)))
-                const pixelsReady = await waitForIgvPixels(browser, {maxRetries: maxPixelRetries, retryDelayMs: 300})
-                return pixelsReady
-            }
-            await new Promise(resolve => setTimeout(resolve, 250))
-        }
-        console.warn('waitForIgvLoad: timeout reached after ' + maxWaitMs + 'ms')
-        return false
-    }
-
-    /**
      * Capture the IGV viewer as a PNG data URL by compositing all child
      * canvases in the IGV container onto a single off-screen canvas.
-     * Retries once if the initial capture produces an empty image.
      */
     async function captureIgvScreenshot() {
         if (!igvBrowser || typeof igvBrowser.toSVG !== 'function') return null
 
-        for (let attempt = 0; attempt < 2; attempt++) {
-            try {
-                // Guard: if canvas pixels are still missing, wait briefly
-                if (attempt > 0) {
-                    await waitForIgvPixels(igvBrowser, {maxRetries: 3, retryDelayMs: 300})
+        try {
+            const svgString = igvBrowser.toSVG()
+            if (!svgString) return null
+
+            // Convert SVG to PNG via an offscreen Image + Canvas
+            const svgBlob = new Blob([svgString], {type: 'image/svg+xml'})
+            const svgUrl = URL.createObjectURL(svgBlob)
+
+            return new Promise(resolve => {
+                const img = new Image()
+                img.onload = () => {
+                    const dims = igvBrowser.columnContainer.getBoundingClientRect()
+                    const dpr = window.devicePixelRatio || 1
+                    const canvas = document.createElement('canvas')
+                    canvas.width = dims.width * dpr
+                    canvas.height = dims.height * dpr
+                    const ctx = canvas.getContext('2d')
+                    ctx.scale(dpr, dpr)
+                    ctx.drawImage(img, 0, 0)
+                    URL.revokeObjectURL(svgUrl)
+                    resolve(canvas.toDataURL('image/png'))
                 }
-
-                const svgString = igvBrowser.toSVG()
-                if (!svgString) {
-                    if (attempt === 0) continue
-                    return null
+                img.onerror = (e) => {
+                    console.warn('Screenshot SVG-to-PNG conversion failed:', e)
+                    URL.revokeObjectURL(svgUrl)
+                    resolve(null)
                 }
-
-                // Convert SVG to PNG via an offscreen Image + Canvas
-                const svgBlob = new Blob([svgString], {type: 'image/svg+xml'})
-                const svgUrl = URL.createObjectURL(svgBlob)
-
-                const result = await new Promise(resolve => {
-                    const img = new Image()
-                    img.onload = () => {
-                        const dims = igvBrowser.columnContainer.getBoundingClientRect()
-                        const dpr = window.devicePixelRatio || 1
-                        const canvas = document.createElement('canvas')
-                        canvas.width = dims.width * dpr
-                        canvas.height = dims.height * dpr
-                        const ctx = canvas.getContext('2d')
-                        ctx.scale(dpr, dpr)
-                        ctx.drawImage(img, 0, 0)
-                        URL.revokeObjectURL(svgUrl)
-                        resolve(canvas.toDataURL('image/png'))
-                    }
-                    img.onerror = (e) => {
-                        console.warn('Screenshot SVG-to-PNG conversion failed:', e)
-                        URL.revokeObjectURL(svgUrl)
-                        resolve(null)
-                    }
-                    img.src = svgUrl
-                })
-
-                if (result) return result
-            } catch (e) {
-                console.warn('Screenshot capture failed (attempt ' + (attempt + 1) + '):', e)
-            }
+                img.src = svgUrl
+            })
+        } catch (e) {
+            console.warn('Screenshot capture failed:', e)
+            return null
         }
-        return null
     }
 
     // -----------------------------------------------------------------------
