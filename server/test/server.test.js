@@ -1894,6 +1894,57 @@ describe('UI: Previous notes and curation counts from server', function () {
     })
 })
 
+// ── Pixel-based screenshot readiness guard ───────────────────────────────────
+describe('UI: Pixel-based IGV screenshot readiness guard', function () {
+    it('app.js includes checkIgvCanvasPixels function', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('function checkIgvCanvasPixels')
+        expect(res.text).to.include('getImageData')
+        // Should sample a bounded 400x200 region
+        expect(res.text).to.include('Math.min(target.width, 400)')
+        expect(res.text).to.include('Math.min(target.height, 200)')
+    })
+
+    it('app.js includes waitForIgvPixels function with retry logic', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('async function waitForIgvPixels')
+        expect(res.text).to.include('maxRetries')
+        expect(res.text).to.include('retryDelayMs')
+        expect(res.text).to.include('checkIgvCanvasPixels')
+    })
+
+    it('waitForIgvLoad calls waitForIgvPixels after viewport polling', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        // Extract the waitForIgvLoad function body
+        const fnMatch = res.text.match(/async function waitForIgvLoad\([\s\S]*?(?=\n    \/\*\*|\n    async function|\n    function\b)/)
+        expect(fnMatch).to.not.be.null
+        expect(fnMatch[0]).to.include('waitForIgvPixels')
+        // Should still have the isLoading viewport polling
+        expect(fnMatch[0]).to.include('isLoading')
+    })
+
+    it('captureIgvScreenshot retries when initial capture fails', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        // Extract the captureIgvScreenshot function body
+        const fnMatch = res.text.match(/async function captureIgvScreenshot\(\)[\s\S]*?(?=\n    \/\/\s*-{3,}|\n    function\b(?!.*\{))/)
+        expect(fnMatch).to.not.be.null
+        // Should have retry loop
+        expect(fnMatch[0]).to.include('attempt')
+        expect(fnMatch[0]).to.include('waitForIgvPixels')
+    })
+
+    it('checkIgvCanvasPixels checks alpha channel of sampled pixels', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        const fnMatch = res.text.match(/function checkIgvCanvasPixels[\s\S]*?(?=\n    \/\*\*|\n    async function)/)
+        expect(fnMatch).to.not.be.null
+        // Should iterate over alpha channel (every 4th byte at offset 3)
+        expect(fnMatch[0]).to.include('i += 4')
+        expect(fnMatch[0]).to.include('pixels[i]')
+        // Should early-return when threshold met
+        expect(fnMatch[0]).to.include('minNonZeroPixels')
+    })
+})
+
 // ── Documentation validation ─────────────────────────────────────────────────
 describe('Documentation', function () {
     const docsDir = path.join(__dirname, '..', '..', 'docs')
