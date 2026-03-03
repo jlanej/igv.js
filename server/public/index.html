@@ -105,6 +105,7 @@
                                 <th>Uncertain</th>
                                 <th>Pending</th>
                                 <th>Variants</th>
+                                <th>Plot</th>
                                 <th>Flag Gene</th>
                             </tr>
                         </thead>
@@ -198,6 +199,17 @@
         <div class="shortcut-row"><span>Uncertain &amp; advance</span> <kbd>U</kbd></div>
         <div class="shortcut-row"><span>Toggle shortcuts</span> <kbd>?</kbd></div>
         <div class="shortcut-row"><span>Toggle sidebar</span> <kbd>Ctrl+B</kbd></div>
+    </div>
+
+    <!-- Lollipop plot modal -->
+    <div id="lollipop-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-content lollipop-modal-content">
+            <div class="modal-header">
+                <h3 id="lollipop-modal-title">Lollipop Plot</h3>
+                <button id="lollipop-modal-close" class="btn btn-sm" title="Close">✕</button>
+            </div>
+            <div id="lollipop-modal-body"></div>
+        </div>
     </div>
 
     <script src="app.js"></script>

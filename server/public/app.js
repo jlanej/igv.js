@@ -733,7 +733,7 @@
 
         const tbody = document.getElementById('summary-body')
         if (!data.summary || data.summary.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9">No gene data available</td></tr>'
+            tbody.innerHTML = '<tr><td colspan="10">No gene data available</td></tr>'
             return
         }
 
@@ -748,6 +748,7 @@
             <td>${g.variants.map(v =>
                 `<span class="badge badge-${v.curation_status}" title="${v.chrom}:${v.pos} ${v.ref}→${v.alt}">${v.chrom}:${v.pos}</span> `
             ).join('')}</td>
+            <td><button class="lollipop-btn" data-gene="${escapeHtml(g.gene)}" title="Lollipop plot for ${escapeHtml(g.gene)}">🍭 Plot</button></td>
             <td>
                 <button class="gene-curate-btn curation-pass" data-gene="${escapeHtml(g.gene)}" data-status="pass" title="Flag all ${g.gene} as Pass">✓</button>
                 <button class="gene-curate-btn curation-fail" data-gene="${escapeHtml(g.gene)}" data-status="fail" title="Flag all ${g.gene} as Fail">✗</button>
@@ -762,6 +763,11 @@
                 const sel = document.querySelector('[data-filter="gene"]')
                 if (sel) { sel.value = gene; loadVariants(); switchTab('variants') }
             })
+        })
+
+        // Lollipop plot buttons
+        tbody.querySelectorAll('.lollipop-btn').forEach(btn => {
+            btn.addEventListener('click', () => showLollipopPlot(btn.dataset.gene))
         })
 
         // Gene curation buttons
@@ -791,6 +797,34 @@
             }
         } catch (err) {
             showNotification('Failed to flag gene: ' + err.message, 'warn')
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Lollipop plot modal
+    // -----------------------------------------------------------------------
+    async function showLollipopPlot(gene) {
+        const modal = document.getElementById('lollipop-modal')
+        const title = document.getElementById('lollipop-modal-title')
+        const body = document.getElementById('lollipop-modal-body')
+
+        title.textContent = `Lollipop Plot — ${gene}`
+        body.innerHTML = '<p>Loading…</p>'
+        modal.style.display = 'flex'
+
+        try {
+            const filters = getActiveFilters()
+            const params = new URLSearchParams(filters)
+            const res = await fetch(`/api/lollipop/${encodeURIComponent(gene)}?${params}`)
+            if (!res.ok) {
+                const err = await res.json()
+                body.innerHTML = `<p style="color:#e74c3c">${err.error || 'Failed to load plot'}</p>`
+                return
+            }
+            const svg = await res.text()
+            body.innerHTML = svg
+        } catch (err) {
+            body.innerHTML = `<p style="color:#e74c3c">Error: ${err.message}</p>`
         }
     }
 
@@ -1178,6 +1212,14 @@
 
         document.getElementById('btn-export-html').addEventListener('click', () => exportHtml())
 
+        // Lollipop modal close
+        document.getElementById('lollipop-modal-close').addEventListener('click', () => {
+            document.getElementById('lollipop-modal').style.display = 'none'
+        })
+        document.getElementById('lollipop-modal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) e.currentTarget.style.display = 'none'
+        })
+
         document.getElementById('btn-apply-filters').addEventListener('click', () => {
             currentPage = 1
             loadVariants()
@@ -1252,6 +1294,27 @@
             }
         }
 
+        // Generate lollipop plots for each gene with passing variants
+        progressText.textContent = 'Generating gene plots…'
+        progressFill.style.width = '85%'
+        const lollipopPlots = {}
+        const geneSet = new Set()
+        for (const v of allVariants) {
+            if (v.gene && v.curation_status === 'pass') geneSet.add(v.gene)
+        }
+        for (const gene of geneSet) {
+            try {
+                const params = new URLSearchParams(filters)
+                const res = await fetch(`/api/lollipop/${encodeURIComponent(gene)}?${params}`)
+                if (!res.ok) continue
+                const svg = await res.text()
+                const pngData = await svgToPng(svg, 900, 340)
+                if (pngData) lollipopPlots[gene] = pngData
+            } catch (err) {
+                console.warn(`Lollipop plot failed for ${gene}:`, err)
+            }
+        }
+
         // Send to server for XLSX generation
         progressText.textContent = 'Generating XLSX…'
         progressFill.style.width = '90%'
@@ -1260,7 +1323,7 @@
             const xlsxRes = await fetch('/api/export/xlsx', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({variantIds, screenshots, filters})
+                body: JSON.stringify({variantIds, screenshots, lollipopPlots, filters})
             })
 
             if (!xlsxRes.ok) {
@@ -1468,6 +1531,30 @@
         const div = document.createElement('div')
         div.textContent = str
         return div.innerHTML
+    }
+
+    /**
+     * Convert an SVG string to a PNG data URI using an off-screen canvas.
+     */
+    function svgToPng(svgText, width, height) {
+        return new Promise((resolve) => {
+            const blob = new Blob([svgText], {type: 'image/svg+xml;charset=utf-8'})
+            const url = URL.createObjectURL(blob)
+            const img = new Image()
+            img.onload = () => {
+                const canvas = document.createElement('canvas')
+                canvas.width = width
+                canvas.height = height
+                const ctx = canvas.getContext('2d')
+                ctx.fillStyle = '#fff'
+                ctx.fillRect(0, 0, width, height)
+                ctx.drawImage(img, 0, 0, width, height)
+                URL.revokeObjectURL(url)
+                resolve(canvas.toDataURL('image/png'))
+            }
+            img.onerror = () => { URL.revokeObjectURL(url); resolve(null) }
+            img.src = url
+        })
     }
 
     function showNotification(msg, type) {

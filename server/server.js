@@ -17,6 +17,7 @@ const path = require('path')
 const ExcelJS = require('exceljs')
 const archiver = require('archiver')
 const log = require('./logger')
+const {generateLollipopSvg} = require('./lollipop')
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -814,6 +815,32 @@ app.get('/api/export', (req, res) => {
 })
 
 // -------------------------------------------------------------------------
+// Lollipop plot – per-gene variant position SVG
+// -------------------------------------------------------------------------
+app.get('/api/lollipop/:gene', (req, res) => {
+    const gene = req.params.gene
+    const geneCol = headerColumns.includes('gene') ? 'gene' : null
+    if (!geneCol) {
+        return res.status(400).json({error: 'No gene column found in data'})
+    }
+
+    const filtered = applyFilters(req.query)
+    const geneVariants = filtered.filter(v => v[geneCol] === gene)
+    if (geneVariants.length === 0) {
+        return res.status(404).json({error: `No variants found for gene ${gene}`})
+    }
+
+    const svgData = geneVariants.map(v => ({
+        chrom: v.chrom, pos: v.pos, ref: v.ref, alt: v.alt,
+        impact: v.impact || '', curation_status: v.curation_status || 'pending'
+    }))
+
+    const svg = generateLollipopSvg(gene, svgData)
+    res.setHeader('Content-Type', 'image/svg+xml')
+    res.send(svg)
+})
+
+// -------------------------------------------------------------------------
 // XLSX Export – publication-quality workbook with variant data and optional
 // IGV screenshots on per-variant tabs, linked from the main sheet.
 // -------------------------------------------------------------------------
@@ -821,7 +848,7 @@ app.use('/api/export/xlsx', express.json({limit: '50mb'}))
 
 app.post('/api/export/xlsx', async (req, res) => {
     try {
-        const {variantIds, screenshots, filters: clientFilters} = req.body || {}
+        const {variantIds, screenshots, lollipopPlots, filters: clientFilters} = req.body || {}
 
         // Determine which variants to include
         let filtered
@@ -1193,6 +1220,56 @@ app.post('/api/export/xlsx', async (req, res) => {
                     if (fIdx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
                 })
                 fIdx++
+            }
+        }
+
+        // --- Gene Lollipop Plot worksheets ------------------------------------
+        const hasLollipopPlots = lollipopPlots && typeof lollipopPlots === 'object' && Object.keys(lollipopPlots).length > 0
+        if (hasLollipopPlots) {
+            for (const [gene, imgData] of Object.entries(lollipopPlots)) {
+                if (!imgData) continue
+                const safeName = `LP ${gene}`.substring(0, 31)
+                const lpws = workbook.addWorksheet(safeName)
+                lpws.getCell('A1').value = `Lollipop Plot: ${gene}`
+                lpws.getCell('A1').font = {bold: true, size: 14, color: {argb: 'FF2C3E50'}}
+                lpws.getColumn(1).width = 20
+                lpws.getColumn(2).width = 40
+
+                // Count passing variants for this gene
+                const geneVariants = filtered.filter(v => v.gene === gene)
+                const passingCount = geneVariants.filter(v => v.curation_status === 'pass').length
+                lpws.getCell('A2').value = 'Variants:'
+                lpws.getCell('A2').font = {bold: true}
+                lpws.getCell('B2').value = `${geneVariants.length} total, ${passingCount} passing`
+
+                // Back-link
+                lpws.getCell('D1').value = {text: '← Back to Variants', hyperlink: '#Variants!A1'}
+                lpws.getCell('D1').font = {color: {argb: 'FF2980B9'}, underline: true}
+                lpws.getColumn(4).width = 22
+
+                // Embed the lollipop plot image
+                try {
+                    let base64 = imgData
+                    let extension = 'png'
+                    if (base64.startsWith('data:image/jpeg;base64,')) {
+                        base64 = base64.replace('data:image/jpeg;base64,', '')
+                        extension = 'jpeg'
+                    } else if (base64.startsWith('data:image/png;base64,')) {
+                        base64 = base64.replace('data:image/png;base64,', '')
+                    }
+
+                    const imageId = workbook.addImage({
+                        buffer: Buffer.from(base64, 'base64'),
+                        extension: extension
+                    })
+                    lpws.addImage(imageId, {
+                        tl: {col: 0, row: 3},
+                        ext: {width: 900, height: 340}
+                    })
+                } catch (imgErr) {
+                    lpws.getCell('A4').value = '(Lollipop plot could not be embedded)'
+                    lpws.getCell('A4').font = {italic: true, color: {argb: 'FF999999'}}
+                }
             }
         }
 

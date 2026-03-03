@@ -1941,3 +1941,262 @@ describe('Documentation', function () {
         })
     })
 })
+
+// =========================================================================
+// Lollipop Plot API
+// =========================================================================
+describe('Lollipop Plot API', function () {
+    function getSvg(url) {
+        return request(app)
+            .get(url)
+            .buffer(true)
+            .parse((res, callback) => {
+                let data = ''
+                res.setEncoding('utf8')
+                res.on('data', chunk => { data += chunk })
+                res.on('end', () => callback(null, data))
+            })
+    }
+
+    it('GET /api/lollipop/:gene returns SVG for a known gene', async function () {
+        const res = await getSvg('/api/lollipop/GENE1').expect(200)
+        expect(res.body).to.include('<svg')
+        expect(res.body).to.include('GENE1')
+        expect(res.body).to.include('Lollipop Plot')
+    })
+
+    it('returns 404 for unknown gene', async function () {
+        const res = await request(app)
+            .get('/api/lollipop/NONEXISTENT_GENE')
+            .expect(404)
+        expect(res.body.error).to.include('No variants found')
+    })
+
+    it('SVG contains impact legend colors', async function () {
+        const res = await getSvg('/api/lollipop/GENE1').expect(200)
+        expect(res.body).to.include('#e74c3c')  // HIGH
+        expect(res.body).to.include('HIGH')
+    })
+
+    it('SVG includes variant positions as lollipop circles', async function () {
+        const res = await getSvg('/api/lollipop/GENE1').expect(200)
+        expect(res.body).to.include('<circle')
+        expect(res.body).to.include('<line')
+        expect(res.body).to.include('chr1:12345')
+    })
+
+    it('respects filters in query string', async function () {
+        const res = await getSvg('/api/lollipop/GENE1?impact=HIGH').expect(200)
+        expect(res.body).to.include('GENE1')
+        expect(res.body).to.include('<circle')
+    })
+})
+
+// =========================================================================
+// Lollipop Plot SVG Generator (unit tests)
+// =========================================================================
+describe('Lollipop SVG Generator', function () {
+    const {generateLollipopSvg} = require('../lollipop')
+
+    it('generates SVG for a gene with variants', function () {
+        const variants = [
+            {chrom: 'chr1', pos: 1000, ref: 'A', alt: 'G', impact: 'HIGH'},
+            {chrom: 'chr1', pos: 2000, ref: 'C', alt: 'T', impact: 'MODERATE'}
+        ]
+        const svg = generateLollipopSvg('TEST_GENE', variants)
+        expect(svg).to.include('<svg')
+        expect(svg).to.include('TEST_GENE')
+        expect(svg).to.include('2 variants')
+        expect(svg).to.include('#e74c3c')  // HIGH color
+        expect(svg).to.include('#f39c12')  // MODERATE color
+    })
+
+    it('generates empty-state SVG for no variants', function () {
+        const svg = generateLollipopSvg('EMPTY_GENE', [])
+        expect(svg).to.include('<svg')
+        expect(svg).to.include('No variants')
+    })
+
+    it('handles single variant', function () {
+        const variants = [{chrom: 'chr1', pos: 5000, ref: 'G', alt: 'A', impact: 'LOW'}]
+        const svg = generateLollipopSvg('SINGLE', variants)
+        expect(svg).to.include('<svg')
+        expect(svg).to.include('1 variant')
+        expect(svg).to.include('<circle')
+    })
+
+    it('handles multiple variants at same position', function () {
+        const variants = [
+            {chrom: 'chr1', pos: 1000, ref: 'A', alt: 'G', impact: 'HIGH'},
+            {chrom: 'chr1', pos: 1000, ref: 'A', alt: 'T', impact: 'MODERATE'}
+        ]
+        const svg = generateLollipopSvg('OVERLAP', variants)
+        expect(svg).to.include('<svg')
+        // Should have 2 circles for 2 variants
+        const circles = svg.match(/<circle[^/]*>/g)
+        // At least 2 data circles (may include legend circles too)
+        expect(circles.length).to.be.at.least(2)
+    })
+
+    it('respects custom width and height options', function () {
+        const variants = [{chrom: 'chr1', pos: 1000, ref: 'A', alt: 'G'}]
+        const svg = generateLollipopSvg('SIZED', variants, {width: 600, height: 200})
+        expect(svg).to.include('width="600"')
+        expect(svg).to.include('height="200"')
+    })
+
+    it('escapes special characters in gene names', function () {
+        const variants = [{chrom: 'chr1', pos: 1000, ref: 'A', alt: 'G'}]
+        const svg = generateLollipopSvg('GENE<>&"TEST', variants)
+        expect(svg).to.not.include('GENE<>')
+        expect(svg).to.include('GENE&lt;&gt;&amp;&quot;TEST')
+    })
+})
+
+// =========================================================================
+// XLSX Gene Lollipop Plot worksheets
+// =========================================================================
+describe('XLSX Gene Lollipop Plot worksheets', function () {
+    after(function () {
+        if (fs.existsSync(curationFile)) fs.unlinkSync(curationFile)
+    })
+
+    it('includes Gene Lollipop Plot worksheet when lollipopPlots provided', async function () {
+        this.timeout(10000)
+        // Create a minimal valid PNG (1x1 white pixel)
+        const pngData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1, 2],
+                lollipopPlots: {GENE1: pngData}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const lpSheet = workbook.getWorksheet('LP GENE1')
+        expect(lpSheet).to.exist
+        expect(lpSheet.getCell('A1').value).to.include('Lollipop Plot')
+        expect(lpSheet.getCell('A1').value).to.include('GENE1')
+    })
+
+    it('lollipop sheet includes variant count and back link', async function () {
+        this.timeout(10000)
+        const pngData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1, 2],
+                lollipopPlots: {GENE1: pngData}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const lpSheet = workbook.getWorksheet('LP GENE1')
+        expect(lpSheet).to.exist
+        // Variant count row
+        expect(lpSheet.getCell('A2').value).to.equal('Variants:')
+        const b2 = lpSheet.getCell('B2').value
+        expect(b2).to.include('total')
+        expect(b2).to.include('passing')
+        // Back link
+        const d1 = lpSheet.getCell('D1').value
+        expect(d1).to.have.property('text', '← Back to Variants')
+    })
+
+    it('omits lollipop sheets when no lollipopPlots provided', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2]})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const sheetNames = workbook.worksheets.map(ws => ws.name)
+        const lpSheets = sheetNames.filter(n => n.startsWith('LP '))
+        expect(lpSheets).to.have.length(0)
+    })
+
+    it('supports multiple gene lollipop plots', async function () {
+        this.timeout(10000)
+        const pngData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1, 2, 3],
+                lollipopPlots: {GENE1: pngData, GENE2: pngData}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        expect(workbook.getWorksheet('LP GENE1')).to.exist
+        expect(workbook.getWorksheet('LP GENE2')).to.exist
+    })
+})
+
+// =========================================================================
+// UI: Lollipop plot integration
+// =========================================================================
+describe('UI: Lollipop plot integration', function () {
+    it('index.html includes lollipop modal', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('lollipop-modal')
+        expect(res.text).to.include('lollipop-modal-body')
+        expect(res.text).to.include('lollipop-modal-close')
+    })
+
+    it('index.html gene summary table has Plot column', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('<th>Plot</th>')
+    })
+
+    it('app.js contains lollipop plot functions', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('showLollipopPlot')
+        expect(res.text).to.include('lollipop-btn')
+        expect(res.text).to.include('svgToPng')
+        expect(res.text).to.include('lollipopPlots')
+    })
+
+    it('styles.css includes lollipop modal styling', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('.modal-overlay')
+        expect(res.text).to.include('.lollipop-modal-content')
+        expect(res.text).to.include('.lollipop-btn')
+    })
+})
