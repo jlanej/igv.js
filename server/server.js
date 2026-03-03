@@ -1225,9 +1225,9 @@ app.post('/api/export/xlsx', async (req, res) => {
 
         // --- Gene Lollipop Plot worksheets ------------------------------------
         const hasLollipopPlots = lollipopPlots && typeof lollipopPlots === 'object' && Object.keys(lollipopPlots).length > 0
-        if (hasLollipopPlots) {
+        if (hasLollipopPlots && geneCol) {
             for (const [gene, imgData] of Object.entries(lollipopPlots)) {
-                if (!imgData) continue
+                if (!imgData || typeof imgData !== 'string' || imgData.length > 5 * 1024 * 1024) continue
                 const safeName = `LP ${gene}`.substring(0, 31)
                 const lpws = workbook.addWorksheet(safeName)
                 lpws.getCell('A1').value = `Lollipop Plot: ${gene}`
@@ -1236,7 +1236,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                 lpws.getColumn(2).width = 40
 
                 // Count passing variants for this gene
-                const geneVariants = filtered.filter(v => v.gene === gene)
+                const geneVariants = filtered.filter(v => v[geneCol] === gene)
                 const passingCount = geneVariants.filter(v => v.curation_status === 'pass').length
                 lpws.getCell('A2').value = 'Variants:'
                 lpws.getCell('A2').font = {bold: true}

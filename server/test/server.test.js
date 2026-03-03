@@ -2032,10 +2032,9 @@ describe('Lollipop SVG Generator', function () {
         ]
         const svg = generateLollipopSvg('OVERLAP', variants)
         expect(svg).to.include('<svg')
-        // Should have 2 circles for 2 variants
-        const circles = svg.match(/<circle[^/]*>/g)
-        // At least 2 data circles (may include legend circles too)
-        expect(circles.length).to.be.at.least(2)
+        // Count data circles (those with a <title> tooltip child)
+        const dataCircles = svg.match(/<circle[^>]*>[\s\S]*?<title>/g)
+        expect(dataCircles).to.have.length(2)
     })
 
     it('respects custom width and height options', function () {
