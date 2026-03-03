@@ -88,7 +88,7 @@ function generateLollipopSvg(gene, variants, opts = {}) {
             const stickH = Math.max(20, stickMaxH * stackRatio)
             const y = margin.top + plotH - stickH
             const color = IMPACT_COLORS[(v.impact || '').toUpperCase()] || DEFAULT_COLOR
-            const label = `${v.chrom}:${v.pos} ${v.ref}→${v.alt}` +
+            const label = `${v.chrom}:${v.pos} ${v.ref}>${v.alt}` +
                 (v.impact ? ` (${v.impact})` : '') +
                 (v.curation_status ? ` [${v.curation_status}]` : '')
             lollipops.push({x, y, stickH, color, label, v})
@@ -126,7 +126,7 @@ function generateLollipopSvg(gene, variants, opts = {}) {
     lines.push(`<rect width="${width}" height="${height}" fill="#fff" rx="4"/>`)
 
     // Title
-    lines.push(`<text x="${width / 2}" y="24" text-anchor="middle" class="lollipop-title">${svgEscape(gene)} — Variant Lollipop Plot</text>`)
+    lines.push(`<text x="${width / 2}" y="24" text-anchor="middle" class="lollipop-title">${svgEscape(gene)} &#8212; Variant Lollipop Plot</text>`)
     lines.push(`<text x="${width / 2}" y="42" text-anchor="middle" class="lollipop-subtitle">${sorted.length} variant${sorted.length !== 1 ? 's' : ''} on ${svgEscape(chrom)}</text>`)
 
     // Gene bar (horizontal backbone)
