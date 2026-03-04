@@ -2227,6 +2227,287 @@ describe('XLSX Gene Lollipop Plot worksheets', function () {
 })
 
 // =========================================================================
+// XLSX gene→lollipop hyperlinks
+// =========================================================================
+describe('XLSX gene to lollipop hyperlinks', function () {
+    it('gene cells link to lollipop sheet when lollipop plots are provided', async function () {
+        this.timeout(10000)
+        const pngData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1, 2],
+                lollipopPlots: {GENE1: pngData}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const variantsSheet = workbook.getWorksheet('Variants')
+        expect(variantsSheet).to.exist
+
+        // Find the gene column index
+        const headerRow = variantsSheet.getRow(1)
+        let geneColIdx = -1
+        headerRow.eachCell((cell, colNumber) => {
+            if (cell.value && cell.value.toString().toLowerCase() === 'gene') geneColIdx = colNumber
+        })
+        expect(geneColIdx).to.be.greaterThan(0)
+
+        // Check that a GENE1 row has a hyperlink to the LP sheet
+        let foundLink = false
+        variantsSheet.eachRow((row, rowNumber) => {
+            if (rowNumber === 1) return // skip header
+            const geneCell = row.getCell(geneColIdx)
+            const cellValue = geneCell.value
+            if (cellValue && typeof cellValue === 'object' && cellValue.text === 'GENE1') {
+                expect(cellValue.hyperlink).to.include('LP GENE1')
+                foundLink = true
+            }
+        })
+        expect(foundLink).to.be.true
+    })
+
+    it('gene cells without lollipop plot have no hyperlink', async function () {
+        this.timeout(10000)
+        const pngData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1, 2, 3],
+                lollipopPlots: {GENE1: pngData}  // Only GENE1, not GENE2
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const variantsSheet = workbook.getWorksheet('Variants')
+        const headerRow = variantsSheet.getRow(1)
+        let geneColIdx = -1
+        headerRow.eachCell((cell, colNumber) => {
+            if (cell.value && cell.value.toString().toLowerCase() === 'gene') geneColIdx = colNumber
+        })
+
+        // GENE2 rows should have plain text, not hyperlinks
+        variantsSheet.eachRow((row, rowNumber) => {
+            if (rowNumber === 1) return
+            const geneCell = row.getCell(geneColIdx)
+            const cellValue = geneCell.value
+            if (cellValue === 'GENE2' || (cellValue && typeof cellValue === 'object' && cellValue.text === 'GENE2')) {
+                // Should be plain text
+                expect(typeof cellValue).to.equal('string')
+            }
+        })
+    })
+})
+
+// =========================================================================
+// XLSX variant column filtering
+// =========================================================================
+describe('XLSX variant column filtering', function () {
+    it('excludes file path columns when filePaths is false', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1],
+                exportConfig: {variantColumns: {filePaths: false}}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const variantsSheet = workbook.getWorksheet('Variants')
+        const headers = []
+        variantsSheet.getRow(1).eachCell(cell => {
+            headers.push(cell.value)
+        })
+        // Should not contain file-path-like columns
+        const fileHeaders = headers.filter(h => {
+            const lower = h.toLowerCase().replace(/ /g, '_')
+            return lower.endsWith('_file') || lower.endsWith('_index')
+        })
+        expect(fileHeaders).to.have.length(0)
+    })
+
+    it('includes all columns by default', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1]})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const variantsSheet = workbook.getWorksheet('Variants')
+        const headers = []
+        variantsSheet.getRow(1).eachCell(cell => {
+            headers.push(cell.value)
+        })
+        // Should have many columns (gene, impact, etc.)
+        expect(headers.length).to.be.greaterThan(4)
+    })
+
+    it('always includes curation columns regardless of config', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1],
+                exportConfig: {variantColumns: {otherAnnotations: false}}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const variantsSheet = workbook.getWorksheet('Variants')
+        const headers = []
+        variantsSheet.getRow(1).eachCell(cell => {
+            headers.push(cell.value)
+        })
+        expect(headers).to.include('Curation Status')
+        expect(headers).to.include('Curation Note')
+    })
+})
+
+// =========================================================================
+// HTML export with export config
+// =========================================================================
+describe('HTML export with export config', function () {
+    const binaryParse = (res, callback) => {
+        const chunks = []
+        res.on('data', chunk => chunks.push(chunk))
+        res.on('end', () => callback(null, Buffer.concat(chunks)))
+    }
+
+    it('accepts exportConfig and filters columns', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/html')
+            .send({
+                variantIds: [0, 1],
+                exportConfig: {variantColumns: {filePaths: false}}
+            })
+            .buffer(true)
+            .parse(binaryParse)
+            .expect(200)
+
+        const JSZip = require('jszip')
+        const zip = await JSZip.loadAsync(res.body)
+        const html = await zip.file('variants_report/index.html').async('string')
+        // Should not contain file path column headers
+        expect(html).to.not.include('Child File')
+    })
+
+    it('respects screenshot config', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/html')
+            .send({
+                variantIds: [0, 1],
+                exportConfig: {igvScreenshots: false}
+            })
+            .buffer(true)
+            .parse(binaryParse)
+            .expect(200)
+
+        const JSZip = require('jszip')
+        const zip = await JSZip.loadAsync(res.body)
+        const html = await zip.file('variants_report/index.html').async('string')
+        // Should still have the variants table
+        expect(html).to.include('variantTable')
+    })
+})
+
+// =========================================================================
+// Export config module – variantColumns
+// =========================================================================
+describe('Export config variantColumns', function () {
+    const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults, categoriseColumn, filterColumns} = require('../export-config')
+
+    it('DEFAULT_EXPORT_CONFIG includes variantColumns', function () {
+        expect(DEFAULT_EXPORT_CONFIG).to.have.property('variantColumns')
+        expect(DEFAULT_EXPORT_CONFIG.variantColumns).to.have.property('coreVariant', true)
+        expect(DEFAULT_EXPORT_CONFIG.variantColumns).to.have.property('filePaths', true)
+        expect(DEFAULT_EXPORT_CONFIG.variantColumns).to.have.property('otherAnnotations', true)
+    })
+
+    it('mergeWithDefaults deep-merges variantColumns', function () {
+        const merged = mergeWithDefaults({variantColumns: {filePaths: false}})
+        expect(merged.variantColumns.filePaths).to.equal(false)
+        expect(merged.variantColumns.coreVariant).to.equal(true)
+    })
+
+    it('categoriseColumn classifies columns correctly', function () {
+        expect(categoriseColumn('chrom')).to.equal('coreVariant')
+        expect(categoriseColumn('pos')).to.equal('coreVariant')
+        expect(categoriseColumn('gene')).to.equal('geneInfo')
+        expect(categoriseColumn('impact')).to.equal('geneInfo')
+        expect(categoriseColumn('frequency')).to.equal('frequency')
+        expect(categoriseColumn('quality')).to.equal('quality')
+        expect(categoriseColumn('child_gt')).to.equal('genotypes')
+        expect(categoriseColumn('child_AD')).to.equal('allelicDepth')
+        expect(categoriseColumn('child_GQ')).to.equal('genotypeQuality')
+        expect(categoriseColumn('sample_id')).to.equal('sampleInfo')
+        expect(categoriseColumn('child_file')).to.equal('filePaths')
+        expect(categoriseColumn('child_vcf_id')).to.equal('filePaths')
+        expect(categoriseColumn('cadd_score')).to.equal('otherAnnotations')
+    })
+
+    it('filterColumns removes disabled categories', function () {
+        const cols = ['chrom', 'pos', 'ref', 'alt', 'gene', 'child_file', 'curation_status']
+        const filtered = filterColumns(cols, {coreVariant: true, geneInfo: true, filePaths: false, otherAnnotations: true})
+        expect(filtered).to.include('chrom')
+        expect(filtered).to.include('gene')
+        expect(filtered).to.not.include('child_file')
+        expect(filtered).to.include('curation_status') // always included
+    })
+
+    it('filterColumns includes all when no config', function () {
+        const cols = ['chrom', 'pos', 'child_file', 'curation_status']
+        const filtered = filterColumns(cols, null)
+        expect(filtered).to.deep.equal(cols)
+    })
+})
+
+// =========================================================================
 // UI: Lollipop plot integration
 // =========================================================================
 describe('UI: Lollipop plot integration', function () {
@@ -2274,6 +2555,9 @@ describe('UI: Lollipop plot integration', function () {
         expect(res.text).to.include('data-config-key="geneAnnotations.enabled"')
         expect(res.text).to.include('data-config-key="geneAnnotations.summary"')
         expect(res.text).to.include('data-config-key="geneAnnotations.omim"')
+        expect(res.text).to.include('data-config-key="variantColumns.coreVariant"')
+        expect(res.text).to.include('data-config-key="variantColumns.filePaths"')
+        expect(res.text).to.include('data-config-key="variantColumns.otherAnnotations"')
     })
 
     it('app.js contains export config functions', async function () {

@@ -20,7 +20,7 @@ const log = require('./logger')
 const {generateLollipopSvg} = require('./lollipop')
 const {fetchProteinDomains} = require('./pfam')
 const {fetchGeneAnnotationsBatch} = require('./gene-annotations')
-const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults} = require('./export-config')
+const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults, filterColumns} = require('./export-config')
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -971,11 +971,23 @@ app.post('/api/export/xlsx', async (req, res) => {
 
         // --- Main "Variants" worksheet --------------------------------------
         const exportCols = [...headerColumns, 'curation_status', 'curation_note']
-        const uniqueCols = [...new Set(exportCols)]
+        const uniqueCols = filterColumns([...new Set(exportCols)], exportCfg.variantColumns)
 
         // If screenshots are present, prepend a "Screenshot" link column
         const hasScreenshots = screenshots && typeof screenshots === 'object' && Object.keys(screenshots).length > 0
         const mainCols = hasScreenshots ? ['Screenshot', ...uniqueCols] : [...uniqueCols]
+
+        // Pre-compute gene→lollipop sheet name map for hyperlinks
+        const hasLollipopPlots = lollipopPlots && typeof lollipopPlots === 'object' && Object.keys(lollipopPlots).length > 0
+        const geneCol = headerColumns.includes('gene') ? 'gene' : null
+        const geneLpSheetNames = new Map()
+        if (hasLollipopPlots && geneCol) {
+            for (const gene of Object.keys(lollipopPlots)) {
+                if (lollipopPlots[gene] && typeof lollipopPlots[gene] === 'string' && lollipopPlots[gene].length <= 5 * 1024 * 1024) {
+                    geneLpSheetNames.set(gene, `LP ${gene}`.substring(0, 31))
+                }
+            }
+        }
 
         const ws = workbook.addWorksheet('Variants', {
             views: [{state: 'frozen', ySplit: 1}]
@@ -1055,6 +1067,20 @@ app.post('/api/export/xlsx', async (req, res) => {
                 }
                 linkCell.font = {color: {argb: 'FF2980B9'}, underline: true}
             }
+
+            // Add hyperlink from gene column to the lollipop plot sheet
+            if (geneCol && v[geneCol] && geneLpSheetNames.has(v[geneCol])) {
+                const geneColIdx = mainCols.indexOf(geneCol) + 1
+                if (geneColIdx > 0) {
+                    const geneCell = dataRow.getCell(geneColIdx)
+                    const lpSheetName = geneLpSheetNames.get(v[geneCol])
+                    geneCell.value = {
+                        text: v[geneCol],
+                        hyperlink: `#'${lpSheetName}'!A1`
+                    }
+                    geneCell.font = {color: {argb: 'FF2980B9'}, underline: true}
+                }
+            }
         })
 
         // Auto-filter on the main sheet
@@ -1063,7 +1089,6 @@ app.post('/api/export/xlsx', async (req, res) => {
         }
 
         // --- Gene Summary worksheet -----------------------------------------
-        const geneCol = headerColumns.includes('gene') ? 'gene' : null
         const xlsSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
         if (geneCol && exportCfg.sheets.geneSummary) {
             const geneMap = {}
@@ -1387,7 +1412,6 @@ app.post('/api/export/xlsx', async (req, res) => {
         }
 
         // --- Gene Lollipop Plot worksheets ------------------------------------
-        const hasLollipopPlots = lollipopPlots && typeof lollipopPlots === 'object' && Object.keys(lollipopPlots).length > 0
         if (hasLollipopPlots && geneCol) {
             for (const [gene, imgData] of Object.entries(lollipopPlots)) {
                 if (!imgData || typeof imgData !== 'string' || imgData.length > 5 * 1024 * 1024) continue
@@ -1606,7 +1630,8 @@ app.use('/api/export/html', express.json({limit: '50mb'}))
 
 app.post('/api/export/html', async (req, res) => {
     try {
-        const {variantIds, screenshots, filters: clientFilters} = req.body || {}
+        const {variantIds, screenshots, filters: clientFilters, exportConfig: clientExportConfig} = req.body || {}
+        const exportCfg = mergeWithDefaults(clientExportConfig || {genomeBuild: GENOME})
 
         let filtered
         if (Array.isArray(variantIds) && variantIds.length > 0) {
@@ -1621,7 +1646,7 @@ app.post('/api/export/html', async (req, res) => {
 
         const hasScreenshots = screenshots && typeof screenshots === 'object' && Object.keys(screenshots).length > 0
         const exportCols = [...headerColumns, 'curation_status', 'curation_note']
-        const uniqueCols = [...new Set(exportCols)]
+        const uniqueCols = filterColumns([...new Set(exportCols)], exportCfg.variantColumns)
 
         // Build screenshot file map
         const screenshotFiles = {}

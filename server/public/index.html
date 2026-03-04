@@ -78,6 +78,19 @@
                     <label><input type="checkbox" data-config-key="sheets.appliedFilters" checked> Applied Filters</label>
                     <label><input type="checkbox" data-config-key="sheets.annotationStatus" checked> Annotation Status</label>
                 </div>
+                <div class="config-section">
+                    <strong>Variant Columns</strong>
+                    <label><input type="checkbox" data-config-key="variantColumns.coreVariant" checked> Core (chrom, pos, ref, alt)</label>
+                    <label><input type="checkbox" data-config-key="variantColumns.geneInfo" checked> Gene Info (gene, impact, inheritance)</label>
+                    <label><input type="checkbox" data-config-key="variantColumns.frequency" checked> Frequency</label>
+                    <label><input type="checkbox" data-config-key="variantColumns.quality" checked> Quality</label>
+                    <label><input type="checkbox" data-config-key="variantColumns.genotypes" checked> Genotypes (*_gt)</label>
+                    <label><input type="checkbox" data-config-key="variantColumns.allelicDepth" checked> Allelic Depth (*_AD)</label>
+                    <label><input type="checkbox" data-config-key="variantColumns.genotypeQuality" checked> Genotype Quality (*_GQ)</label>
+                    <label><input type="checkbox" data-config-key="variantColumns.sampleInfo" checked> Sample Info (sample_id, trio_id)</label>
+                    <label><input type="checkbox" data-config-key="variantColumns.filePaths" checked> File Paths</label>
+                    <label><input type="checkbox" data-config-key="variantColumns.otherAnnotations" checked> Other Annotations</label>
+                </div>
                 <div style="margin-top:8px;">
                     <button id="btn-save-export-config" class="btn btn-sm">💾 Save Config</button>
                     <button id="btn-load-export-config" class="btn btn-sm">📂 Load Config</button>

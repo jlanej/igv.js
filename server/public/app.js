@@ -1256,6 +1256,18 @@
                 pathways: true,
                 geneType: true
             },
+            variantColumns: {
+                coreVariant: true,
+                geneInfo: true,
+                frequency: true,
+                quality: true,
+                genotypes: true,
+                allelicDepth: true,
+                genotypeQuality: true,
+                sampleInfo: true,
+                filePaths: true,
+                otherAnnotations: true
+            },
             genomeBuild: (currentExportConfig && currentExportConfig.genomeBuild) || 'hg38'
         }
         const checkboxes = panel.querySelectorAll('input[type="checkbox"]')
@@ -1478,6 +1490,9 @@
         const progressText = document.getElementById('xlsx-progress-text')
         const btn = document.getElementById('btn-export-html')
 
+        // Get export config from the UI panel
+        const exportConfig = getExportConfigFromUI()
+
         // Fetch all filtered variants across pages
         const filters = getActiveFilters()
         let allVariants = []
@@ -1504,8 +1519,8 @@
         const screenshots = {}
         const variantIds = allVariants.map(v => v.id)
 
-        // Capture IGV screenshots if the browser is available
-        if (igvBrowser) {
+        // Capture IGV screenshots if enabled in config and the browser is available
+        if (exportConfig.igvScreenshots && igvBrowser) {
             for (let i = 0; i < allVariants.length; i++) {
                 const v = allVariants[i]
                 const pct = Math.round(((i + 1) / allVariants.length) * 80)
@@ -1534,7 +1549,7 @@
             const htmlRes = await fetch('/api/export/html', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({variantIds, screenshots, filters})
+                body: JSON.stringify({variantIds, screenshots, filters, exportConfig})
             })
 
             if (!htmlRes.ok) {
