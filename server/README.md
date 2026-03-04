@@ -19,11 +19,26 @@ OpenDemand desktop access).
   additions/removals
 - **Gene summary** – post-filtering summarization showing genes that harbour
   multiple variants passing current filters
+- **Lollipop plots** – per-gene mutation lollipop plots with protein domain
+  overlays (fetched from UniProt)
+- **Gene annotations** – automated gene annotation from MyGene.info (gene name,
+  summary, OMIM, pathways, gene type) displayed in the Gene Summary sheet
 - **Sample QC** – load a per-sample QC file (e.g. VerifyBamID freemix) to
   display trio-aggregated metrics and color-coded warnings in the variant table
+- **Sample summary** – per-sample variant counts by impact and frequency
+  threshold, with cohort-level statistics (mean, median, standard deviation)
 - **TSV export** – download filtered + curated variants as a TSV file
-- **XLSX export** – publication-quality Excel workbook with a styled "Variants"
-  data sheet and per-variant IGV screenshot tabs with cross-sheet hyperlinks
+- **XLSX export** – publication-quality Excel workbook with styled data sheets,
+  per-variant IGV screenshot tabs, gene lollipop plot tabs, cross-sheet
+  hyperlinks (including gene name→lollipop navigation), and configurable
+  variant column selection
+- **HTML export** – interactive single-page HTML report bundled as a ZIP
+  archive, with a sortable/filterable variant table, screenshot gallery with
+  modal viewer, gene summary cards, and embedded data URIs for self-contained
+  viewing
+- **Export configuration** – configurable export settings (saved/loaded from
+  disk) controlling which sheets, visual elements, gene annotations, and
+  variant column categories are included in XLSX and HTML exports
 
 ## Quick Start
 
@@ -316,7 +331,11 @@ node /path/to/igv.js/server/server.js \
 4. **Curate** using Pass / Fail / Uncertain buttons
 5. **Add notes** in the curation text field
 6. Switch to **Gene Summary** tab to see genes with multiple passing variants
-7. **Export** filtered + curated variants as TSV or publication-quality XLSX
+7. View **Lollipop Plots** for genes with passing variants (📊 button)
+8. **Configure export** using the ⚙ panel to choose sheets, columns, and
+   visual elements
+9. **Export** filtered + curated variants as TSV, publication-quality XLSX, or
+   interactive HTML report
 
 Curation state is saved automatically to a JSON file alongside the variants
 TSV.  Keys use a stable `chrom:pos:ref:alt` format (with optional
@@ -328,16 +347,61 @@ using row-index keys are automatically migrated on first load.
 
 The **Export XLSX** button generates a publication-ready workbook containing:
 
-- **Variants** sheet – styled table of all filtered variants with curation
-  status, auto-filters, and frozen header row
-- **Per-variant screenshot tabs** – one worksheet per variant with the IGV
-  alignment view embedded as a PNG image, variant metadata, and a back-link
+- **Variants** sheet – styled table of filtered variants with curation status,
+  auto-filters, frozen header row, and full-row coloring by curation status.
+  Gene names link to their lollipop plot worksheets when available.
+- **Gene Summary** sheet – gene-level statistics (total, samples, pass/fail/
+  uncertain/pending) enriched with annotations from MyGene.info (gene name,
+  gene type, OMIM, pathways, summary)
+- **Sample Summary** sheet – per-sample variant counts by impact group and
+  frequency threshold, plus cohort statistics (mean, median, std dev)
+- **Sample QC** sheet – trio-aggregated QC metrics (if QC data is loaded)
+- **Applied Filters** sheet – key-value summary of active filters
+- **Annotation Status** sheet – genome build info, export config summary,
+  and any annotation fetch errors
+- **Gene Lollipop Plot tabs** – per-gene mutation lollipop plots with protein
+  domain overlays, variant counts, and back-links to the Variants sheet
+- **Per-variant Screenshot tabs** – one worksheet per variant with the IGV
+  alignment view embedded as a PNG image, variant metadata (gene, sample,
+  impact, inheritance, frequency, quality, AD, GQ, DKA), and a back-link
   to the main Variants sheet
-- **Cross-sheet hyperlinks** – the Variants sheet includes a "📷 View" link
-  in each row that jumps to the corresponding screenshot tab
+- **Cross-sheet hyperlinks** – the Variants sheet includes "📷 View" links
+  to screenshot tabs and gene name links to lollipop plot tabs
 
-If IGV has not yet been loaded (no variant clicked), the XLSX is exported
-with the data sheet only.
+### HTML Export
+
+The **Export HTML** button generates an interactive single-page HTML report
+bundled in a ZIP archive.  The report includes:
+
+- **Variants tab** – sortable, filterable, paginated table with status badges
+  and screenshot links
+- **Screenshots tab** – gallery grid of IGV screenshots with a modal viewer
+  supporting keyboard navigation
+- **Gene Summary tab** – gene cards with pass/fail/uncertain/pending counts
+- **Applied Filters** – displayed as chips above the stats bar
+- **Curation Stats** – pass/fail/uncertain/pending summary bar
+
+Screenshots are embedded as base64 data URIs, so the HTML file is fully
+self-contained and viewable without extracting the ZIP.
+
+### Export Configuration
+
+The export config panel (⚙ button in the sidebar) controls which elements
+are included in XLSX and HTML exports.  Settings can be saved to and loaded
+from disk.
+
+| Category | Options |
+|----------|---------|
+| **Visual Elements** | IGV Screenshots, Lollipop Plots, Protein Domains |
+| **Gene Annotations** | Enable/Disable, Gene Name, Summary, OMIM, Pathways, Gene Type |
+| **Worksheets** | Gene Summary, Sample Summary, Sample QC, Applied Filters, Annotation Status |
+| **Variant Columns** | Core (chrom/pos/ref/alt), Gene Info, Frequency, Quality, Genotypes, Allelic Depth, Genotype Quality, Sample Info, File Paths, Other Annotations |
+
+All options default to **enabled**.  The variant column categories allow
+excluding file paths and other technical columns from the exported data.
+
+If IGV has not yet been loaded (no variant clicked), exports are generated
+with data sheets only (no screenshots).
 
 ## Architecture
 
@@ -350,6 +414,10 @@ Dockerfile                          # Multi-stage Docker build (→ Singularity 
 server/
 ├── server.js                       # Express server & REST API
 ├── logger.js                       # Leveled logger with timestamps
+├── lollipop.js                     # Lollipop plot SVG generator
+├── pfam.js                         # Protein domain fetcher (UniProt API)
+├── gene-annotations.js             # Gene annotation fetcher (MyGene.info)
+├── export-config.js                # Export configuration defaults & helpers
 ├── package.json                    # Dependencies
 ├── public/
 │   ├── index.html                  # Web UI
