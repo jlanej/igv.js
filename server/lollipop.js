@@ -180,7 +180,9 @@ function generateLollipopSvg(gene, variants, opts = {}) {
             // Domain label (only if wide enough)
             if (dw > 30) {
                 const labelX = dx1 + dw / 2
-                lines.push(`<text x="${labelX}" y="${barY + 4}" text-anchor="middle" class="domain-label">${svgEscape(d.name.length > Math.floor(dw / 6) ? d.name.substring(0, Math.floor(dw / 6)) + '...' : d.name)}</text>`)
+                const maxChars = Math.floor(dw / 6)
+                const labelText = d.name.length > maxChars ? d.name.substring(0, maxChars) + '...' : d.name
+                lines.push(`<text x="${labelX}" y="${barY + 4}" text-anchor="middle" class="domain-label">${svgEscape(labelText)}</text>`)
             }
         }
     }

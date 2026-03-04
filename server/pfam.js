@@ -19,19 +19,10 @@ const cache = new Map()
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000  // 24 hours
 
 /**
- * Domain colors – visually distinct palette for rendering on the gene bar.
- */
-const DOMAIN_PALETTE = [
-    '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
-    '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
-    '#aec7e8', '#ffbb78', '#98df8a', '#ff9896', '#c5b0d5'
-]
-
-/**
  * Fetch protein domain data for a human gene from UniProt.
  *
  * @param {string} gene - HUGO gene symbol (e.g. "BRCA1", "TP53")
- * @returns {Promise<{proteinLength: number, domains: Array<{name: string, start: number, end: number, accession: string}>, accession: string} | null>}
+ * @returns {Promise<{proteinLength: number, domains: Array<{name: string, start: number, end: number}>, accession: string} | null>}
  */
 async function fetchProteinDomains(gene) {
     if (!gene) return null
@@ -79,8 +70,7 @@ async function fetchProteinDomains(gene) {
                         domains.push({
                             name: feat.description || feat.type,
                             start,
-                            end,
-                            accession: (feat.evidences && feat.evidences[0] && feat.evidences[0].id) || ''
+                            end
                         })
                     }
                 }
@@ -133,8 +123,7 @@ async function fetchDomainsFromEntry(accession) {
                         domains.push({
                             name: feat.description || feat.type,
                             start,
-                            end,
-                            accession: (feat.evidences && feat.evidences[0] && feat.evidences[0].id) || ''
+                            end
                         })
                     }
                 }
@@ -158,4 +147,4 @@ function clearCache() {
     cache.clear()
 }
 
-module.exports = {fetchProteinDomains, clearCache, DOMAIN_PALETTE}
+module.exports = {fetchProteinDomains, clearCache}
