@@ -40,10 +40,11 @@ function svgEscape(str) {
  *
  * @param {string} gene - Gene name
  * @param {Array} variants - Array of {chrom, pos, ref, alt, impact, curation_status}
- * @param {Object} [opts] - Options: width, height, domains, proteinLength, accession
+ * @param {Object} [opts] - Options: width, height, domains, proteinLength, accession, genomeBuild
  *   opts.domains  - Array of {name, start, end} (amino acid positions)
  *   opts.proteinLength - Total protein length in amino acids
  *   opts.accession - UniProt accession for subtitle
+ *   opts.genomeBuild - Reference genome (e.g. "hg38")
  * @returns {string} SVG markup
  */
 function generateLollipopSvg(gene, variants, opts = {}) {
@@ -148,9 +149,11 @@ function generateLollipopSvg(gene, variants, opts = {}) {
     lines.push(`<rect width="${width}" height="${height}" fill="#fff" rx="4"/>`)
 
     // Title
+    const build = opts.genomeBuild ? svgEscape(opts.genomeBuild) : ''
+    const buildTag = build ? ` [${build}]` : ''
     const subtitle = hasDomains && opts.accession
-        ? `${sorted.length} variant${sorted.length !== 1 ? 's' : ''} on ${svgEscape(chrom)} &#8226; ${svgEscape(opts.accession)} (${opts.proteinLength} aa)`
-        : `${sorted.length} variant${sorted.length !== 1 ? 's' : ''} on ${svgEscape(chrom)}`
+        ? `${sorted.length} variant${sorted.length !== 1 ? 's' : ''} on ${svgEscape(chrom)}${buildTag} &#8226; ${svgEscape(opts.accession)} (${opts.proteinLength} aa)`
+        : `${sorted.length} variant${sorted.length !== 1 ? 's' : ''} on ${svgEscape(chrom)}${buildTag}`
     lines.push(`<text x="${width / 2}" y="24" text-anchor="middle" class="lollipop-title">${svgEscape(gene)} &#8212; Variant Lollipop Plot</text>`)
     lines.push(`<text x="${width / 2}" y="42" text-anchor="middle" class="lollipop-subtitle">${subtitle}</text>`)
 
@@ -194,9 +197,10 @@ function generateLollipopSvg(gene, variants, opts = {}) {
         lines.push(`<text x="${tx}" y="${barY + barH / 2 + 20}" text-anchor="middle" class="axis-label">${formatPos(t)}</text>`)
     }
 
-    // Axis label
+    // Axis label – clarifies that lollipops use genomic coordinates while
+    // domain rectangles represent amino acid positions scaled proportionally
     const axisLabel = hasDomains
-        ? `Genomic Position (${svgEscape(chrom)}) &#8226; Protein domains shown on bar`
+        ? `Genomic Position (${svgEscape(chrom)}) &#8226; Protein domains (aa) scaled proportionally on bar`
         : `Genomic Position (${svgEscape(chrom)})`
     lines.push(`<text x="${width / 2}" y="${height - 8}" text-anchor="middle" class="axis-label">${axisLabel}</text>`)
 

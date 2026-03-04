@@ -2070,14 +2070,14 @@ describe('Lollipop SVG Generator', function () {
         expect(svg).to.include('BRCT')
         expect(svg).to.include('P38398')
         expect(svg).to.include('1863 aa')
-        expect(svg).to.include('Protein domains shown on bar')
+        expect(svg).to.include('Protein domains (aa) scaled proportionally on bar')
     })
 
     it('falls back to standard plot when no domains provided', function () {
         const variants = [{chrom: 'chr1', pos: 1000, ref: 'A', alt: 'G'}]
         const svg = generateLollipopSvg('TEST', variants)
         expect(svg).to.not.include('class="domain-rect"')
-        expect(svg).to.not.include('Protein domains shown on bar')
+        expect(svg).to.not.include('Protein domains (aa)')
     })
 
     it('assigns distinct colors to different domains', function () {
@@ -2254,6 +2254,39 @@ describe('UI: Lollipop plot integration', function () {
         expect(res.text).to.include('.lollipop-modal-content')
         expect(res.text).to.include('.lollipop-btn')
     })
+
+    it('index.html includes export config panel', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('export-config-panel')
+        expect(res.text).to.include('btn-export-config')
+        expect(res.text).to.include('btn-save-export-config')
+        expect(res.text).to.include('btn-load-export-config')
+        expect(res.text).to.include('data-config-key')
+    })
+
+    it('index.html has export config toggles for all feature areas', async function () {
+        const res = await request(app).get('/').expect(200)
+        expect(res.text).to.include('data-config-key="igvScreenshots"')
+        expect(res.text).to.include('data-config-key="lollipopPlots"')
+        expect(res.text).to.include('data-config-key="proteinDomains"')
+        expect(res.text).to.include('data-config-key="geneAnnotations.enabled"')
+        expect(res.text).to.include('data-config-key="geneAnnotations.summary"')
+        expect(res.text).to.include('data-config-key="geneAnnotations.omim"')
+    })
+
+    it('app.js contains export config functions', async function () {
+        const res = await request(app).get('/app.js').expect(200)
+        expect(res.text).to.include('loadExportConfig')
+        expect(res.text).to.include('saveExportConfig')
+        expect(res.text).to.include('getExportConfigFromUI')
+        expect(res.text).to.include('applyExportConfigToUI')
+    })
+
+    it('styles.css includes export config panel styling', async function () {
+        const res = await request(app).get('/styles.css').expect(200)
+        expect(res.text).to.include('.config-panel')
+        expect(res.text).to.include('.config-section')
+    })
 })
 
 // =========================================================================
@@ -2301,5 +2334,260 @@ describe('Protein domain fetcher', function () {
         const result2 = await fetchProteinDomains('TP53')
         // Both should return the same value (cached)
         expect(result1).to.deep.equal(result2)
+    })
+})
+
+// =========================================================================
+// Export configuration
+// =========================================================================
+describe('API /api/export-config', function () {
+    const exportConfigFile = path.join(__dirname, '..', 'example_data', 'variants.export-config.json')
+
+    after(function () {
+        if (fs.existsSync(exportConfigFile)) fs.unlinkSync(exportConfigFile)
+    })
+
+    it('returns default config when no saved config exists', async function () {
+        if (fs.existsSync(exportConfigFile)) fs.unlinkSync(exportConfigFile)
+        const res = await request(app).get('/api/export-config').expect(200)
+        expect(res.body).to.have.property('sheets')
+        expect(res.body.sheets).to.have.property('variants', true)
+        expect(res.body).to.have.property('igvScreenshots', true)
+        expect(res.body).to.have.property('lollipopPlots', true)
+        expect(res.body).to.have.property('geneAnnotations')
+        expect(res.body.geneAnnotations).to.have.property('enabled', true)
+        expect(res.body).to.have.property('genomeBuild')
+    })
+
+    it('saves export configuration', async function () {
+        const config = {igvScreenshots: false, lollipopPlots: true}
+        const res = await request(app)
+            .put('/api/export-config')
+            .send(config)
+            .expect(200)
+        expect(res.body).to.have.property('ok', true)
+        expect(fs.existsSync(exportConfigFile)).to.be.true
+    })
+
+    it('loads previously saved export config merged with defaults', async function () {
+        const config = {igvScreenshots: false, geneAnnotations: {enabled: false}}
+        fs.writeFileSync(exportConfigFile, JSON.stringify(config), 'utf-8')
+        const res = await request(app).get('/api/export-config').expect(200)
+        // Custom values
+        expect(res.body.igvScreenshots).to.equal(false)
+        expect(res.body.geneAnnotations.enabled).to.equal(false)
+        // Defaults filled in
+        expect(res.body.sheets.variants).to.equal(true)
+        expect(res.body.lollipopPlots).to.equal(true)
+    })
+
+    it('rejects non-object body', async function () {
+        await request(app)
+            .put('/api/export-config')
+            .send('invalid')
+            .set('Content-Type', 'application/json')
+            .expect(400)
+    })
+})
+
+// =========================================================================
+// Export config module unit tests
+// =========================================================================
+describe('Export config module', function () {
+    const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults} = require('../export-config')
+
+    it('exports DEFAULT_EXPORT_CONFIG with expected keys', function () {
+        expect(DEFAULT_EXPORT_CONFIG).to.have.property('sheets')
+        expect(DEFAULT_EXPORT_CONFIG).to.have.property('igvScreenshots')
+        expect(DEFAULT_EXPORT_CONFIG).to.have.property('lollipopPlots')
+        expect(DEFAULT_EXPORT_CONFIG).to.have.property('proteinDomains')
+        expect(DEFAULT_EXPORT_CONFIG).to.have.property('geneAnnotations')
+        expect(DEFAULT_EXPORT_CONFIG).to.have.property('genomeBuild')
+    })
+
+    it('mergeWithDefaults returns defaults for null input', function () {
+        const merged = mergeWithDefaults(null)
+        expect(merged).to.deep.include(DEFAULT_EXPORT_CONFIG)
+    })
+
+    it('mergeWithDefaults preserves custom values', function () {
+        const merged = mergeWithDefaults({igvScreenshots: false, geneAnnotations: {enabled: false}})
+        expect(merged.igvScreenshots).to.equal(false)
+        expect(merged.geneAnnotations.enabled).to.equal(false)
+        // Defaults still present
+        expect(merged.sheets.variants).to.equal(true)
+        expect(merged.lollipopPlots).to.equal(true)
+    })
+})
+
+// =========================================================================
+// Gene annotation module
+// =========================================================================
+describe('Gene annotation module', function () {
+    const {fetchGeneAnnotation, fetchGeneAnnotationsBatch, clearAnnotationCache} = require('../gene-annotations')
+
+    afterEach(function () {
+        clearAnnotationCache()
+    })
+
+    it('exports fetchGeneAnnotation, fetchGeneAnnotationsBatch, clearAnnotationCache', function () {
+        expect(fetchGeneAnnotation).to.be.a('function')
+        expect(fetchGeneAnnotationsBatch).to.be.a('function')
+        expect(clearAnnotationCache).to.be.a('function')
+    })
+
+    it('returns null for empty gene name', async function () {
+        const result = await fetchGeneAnnotation('')
+        expect(result).to.be.null
+    })
+
+    it('returns null for null gene name', async function () {
+        const result = await fetchGeneAnnotation(null)
+        expect(result).to.be.null
+    })
+
+    it('gracefully handles unreachable API', async function () {
+        this.timeout(15000)
+        const result = await fetchGeneAnnotation('BRCA1')
+        // Either an error object (API unreachable) or valid data
+        expect(result).to.have.property('symbol', 'BRCA1')
+        if (result.error) {
+            expect(result.error).to.be.a('string')
+        } else {
+            expect(result).to.have.property('name')
+            expect(result).to.have.property('summary')
+        }
+    })
+
+    it('returns empty map for empty gene array', async function () {
+        const result = await fetchGeneAnnotationsBatch([])
+        expect(result).to.be.instanceOf(Map)
+        expect(result.size).to.equal(0)
+    })
+
+    it('batch fetch returns results for each gene', async function () {
+        this.timeout(15000)
+        const result = await fetchGeneAnnotationsBatch(['TP53', 'BRCA1'])
+        expect(result).to.be.instanceOf(Map)
+        expect(result.size).to.equal(2)
+        expect(result.has('TP53')).to.be.true
+        expect(result.has('BRCA1')).to.be.true
+    })
+
+    it('caches results across calls', async function () {
+        this.timeout(15000)
+        const result1 = await fetchGeneAnnotation('TP53')
+        const result2 = await fetchGeneAnnotation('TP53')
+        expect(result1).to.deep.equal(result2)
+    })
+})
+
+// =========================================================================
+// Gene annotations API endpoint
+// =========================================================================
+describe('API /api/gene-annotations', function () {
+    it('returns annotations and errors arrays', async function () {
+        this.timeout(15000)
+        const res = await request(app).get('/api/gene-annotations').expect(200)
+        expect(res.body).to.have.property('annotations')
+        expect(res.body).to.have.property('errors')
+        expect(res.body).to.have.property('genomeBuild')
+    })
+
+    it('includes genomeBuild in response', async function () {
+        const res = await request(app).get('/api/gene-annotations').expect(200)
+        expect(res.body.genomeBuild).to.be.a('string')
+    })
+})
+
+// =========================================================================
+// Lollipop SVG genome build display
+// =========================================================================
+describe('Lollipop SVG genome build', function () {
+    const {generateLollipopSvg} = require('../lollipop')
+
+    it('includes genome build in subtitle when provided', function () {
+        const variants = [{chrom: 'chr1', pos: 1000, ref: 'A', alt: 'G', impact: 'HIGH'}]
+        const svg = generateLollipopSvg('TEST', variants, {genomeBuild: 'hg38'})
+        expect(svg).to.include('[hg38]')
+    })
+
+    it('omits build tag when genomeBuild not provided', function () {
+        const variants = [{chrom: 'chr1', pos: 1000, ref: 'A', alt: 'G'}]
+        const svg = generateLollipopSvg('TEST', variants)
+        expect(svg).to.not.include('[hg38]')
+        expect(svg).to.not.include('[hg19]')
+    })
+
+    it('includes build with domain overlay', function () {
+        const variants = [{chrom: 'chr17', pos: 43044295, ref: 'A', alt: 'G', impact: 'HIGH'}]
+        const domains = [{name: 'RING-type', start: 1, end: 101}]
+        const svg = generateLollipopSvg('BRCA1', variants, {
+            domains, proteinLength: 1863, accession: 'P38398', genomeBuild: 'hg38'
+        })
+        expect(svg).to.include('[hg38]')
+        expect(svg).to.include('P38398')
+        expect(svg).to.include('Protein domains (aa) scaled proportionally on bar')
+    })
+})
+
+// =========================================================================
+// XLSX export with Annotation Status sheet
+// =========================================================================
+describe('XLSX Annotation Status worksheet', function () {
+    after(function () {
+        if (fs.existsSync(curationFile)) fs.unlinkSync(curationFile)
+    })
+
+    it('includes Annotation Status sheet with genome build', async function () {
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [], exportConfig: {genomeBuild: 'hg38', geneAnnotations: {enabled: false}}})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        const asws = wb.getWorksheet('Annotation Status')
+        expect(asws).to.not.be.undefined
+        // Should contain genome build info
+        let hasBuild = false
+        asws.eachRow(row => {
+            if (row.getCell(1).value === 'Genome Build') {
+                hasBuild = true
+                expect(row.getCell(4).value).to.include('hg38')
+            }
+        })
+        expect(hasBuild).to.be.true
+    })
+
+    it('includes export config summary in Annotation Status', async function () {
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [], exportConfig: {igvScreenshots: false, lollipopPlots: true}})
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        const asws = wb.getWorksheet('Annotation Status')
+        expect(asws).to.not.be.undefined
+        let hasConfig = false
+        asws.eachRow(row => {
+            if (row.getCell(1).value === 'Export Config') {
+                hasConfig = true
+                expect(row.getCell(4).value).to.include('Screenshots: OFF')
+                expect(row.getCell(4).value).to.include('Lollipop: ON')
+            }
+        })
+        expect(hasConfig).to.be.true
     })
 })

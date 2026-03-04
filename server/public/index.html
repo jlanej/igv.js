@@ -52,6 +52,37 @@
             <button id="btn-export" class="btn">📥 Export TSV</button>
             <button id="btn-export-xlsx" class="btn btn-primary">📊 Export XLSX</button>
             <button id="btn-export-html" class="btn btn-primary">🌐 Export HTML</button>
+            <button id="btn-export-config" class="btn btn-sm" title="Export settings">⚙️ Export Config</button>
+            <div id="export-config-panel" class="config-panel">
+                <h3>Export Configuration</h3>
+                <div class="config-section">
+                    <strong>Visual Elements</strong>
+                    <label><input type="checkbox" data-config-key="igvScreenshots" checked> IGV Screenshots</label>
+                    <label><input type="checkbox" data-config-key="lollipopPlots" checked> Lollipop Plots</label>
+                    <label><input type="checkbox" data-config-key="proteinDomains" checked> Protein Domains</label>
+                </div>
+                <div class="config-section">
+                    <strong>Gene Annotations</strong>
+                    <label><input type="checkbox" data-config-key="geneAnnotations.enabled" checked> Enable Annotations</label>
+                    <label><input type="checkbox" data-config-key="geneAnnotations.geneName" checked> Gene Name</label>
+                    <label><input type="checkbox" data-config-key="geneAnnotations.summary" checked> Summary</label>
+                    <label><input type="checkbox" data-config-key="geneAnnotations.omim" checked> OMIM</label>
+                    <label><input type="checkbox" data-config-key="geneAnnotations.pathways" checked> Pathways</label>
+                    <label><input type="checkbox" data-config-key="geneAnnotations.geneType" checked> Gene Type</label>
+                </div>
+                <div class="config-section">
+                    <strong>Worksheets</strong>
+                    <label><input type="checkbox" data-config-key="sheets.geneSummary" checked> Gene Summary</label>
+                    <label><input type="checkbox" data-config-key="sheets.sampleSummary" checked> Sample Summary</label>
+                    <label><input type="checkbox" data-config-key="sheets.sampleQc" checked> Sample QC</label>
+                    <label><input type="checkbox" data-config-key="sheets.appliedFilters" checked> Applied Filters</label>
+                    <label><input type="checkbox" data-config-key="sheets.annotationStatus" checked> Annotation Status</label>
+                </div>
+                <div style="margin-top:8px;">
+                    <button id="btn-save-export-config" class="btn btn-sm">💾 Save Config</button>
+                    <button id="btn-load-export-config" class="btn btn-sm">📂 Load Config</button>
+                </div>
+            </div>
             <div id="xlsx-progress" style="display:none;">
                 <div class="progress-bar"><div class="progress-fill" id="xlsx-progress-fill"></div></div>
                 <span id="xlsx-progress-text">Preparing…</span>

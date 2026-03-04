@@ -1201,6 +1201,97 @@
         if (panel) panel.classList.toggle('visible')
     }
 
+    // -----------------------------------------------------------------------
+    // Export Configuration
+    // -----------------------------------------------------------------------
+    let currentExportConfig = null
+
+    async function loadExportConfig() {
+        try {
+            const res = await fetch('/api/export-config')
+            if (res.ok) {
+                currentExportConfig = await res.json()
+                applyExportConfigToUI(currentExportConfig)
+            }
+        } catch (_) { /* defaults will be used */ }
+    }
+
+    function applyExportConfigToUI(cfg) {
+        const panel = document.getElementById('export-config-panel')
+        if (!panel) return
+        const checkboxes = panel.querySelectorAll('input[type="checkbox"]')
+        checkboxes.forEach(cb => {
+            const key = cb.dataset.configKey
+            if (!key) return
+            const parts = key.split('.')
+            let val = cfg
+            for (const p of parts) {
+                if (val && typeof val === 'object') val = val[p]
+                else { val = undefined; break }
+            }
+            if (val !== undefined) cb.checked = !!val
+        })
+    }
+
+    function getExportConfigFromUI() {
+        const panel = document.getElementById('export-config-panel')
+        if (!panel) return currentExportConfig || {}
+        const cfg = {
+            sheets: {
+                variants: true,
+                geneSummary: true,
+                sampleSummary: true,
+                sampleQc: true,
+                appliedFilters: true,
+                annotationStatus: true
+            },
+            igvScreenshots: true,
+            lollipopPlots: true,
+            proteinDomains: true,
+            geneAnnotations: {
+                enabled: true,
+                geneName: true,
+                summary: true,
+                omim: true,
+                pathways: true,
+                geneType: true
+            },
+            genomeBuild: (currentExportConfig && currentExportConfig.genomeBuild) || 'hg38'
+        }
+        const checkboxes = panel.querySelectorAll('input[type="checkbox"]')
+        checkboxes.forEach(cb => {
+            const key = cb.dataset.configKey
+            if (!key) return
+            const parts = key.split('.')
+            let target = cfg
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (!target[parts[i]]) target[parts[i]] = {}
+                target = target[parts[i]]
+            }
+            target[parts[parts.length - 1]] = cb.checked
+        })
+        return cfg
+    }
+
+    async function saveExportConfig() {
+        const cfg = getExportConfigFromUI()
+        try {
+            const res = await fetch('/api/export-config', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(cfg)
+            })
+            if (res.ok) {
+                currentExportConfig = cfg
+                showNotification('Export config saved', 'success')
+            } else {
+                showNotification('Failed to save export config', 'warn')
+            }
+        } catch (err) {
+            showNotification('Failed to save export config', 'warn')
+        }
+    }
+
     function setupExport() {
         document.getElementById('btn-export').addEventListener('click', () => {
             const filters = getActiveFilters()
@@ -1234,6 +1325,25 @@
             await loadVariants()
             showNotification('Filters loaded', 'success')
         })
+
+        // Export config panel
+        const configToggle = document.getElementById('btn-export-config')
+        if (configToggle) {
+            configToggle.addEventListener('click', () => {
+                const panel = document.getElementById('export-config-panel')
+                if (panel) panel.classList.toggle('visible')
+            })
+        }
+        const saveConfigBtn = document.getElementById('btn-save-export-config')
+        if (saveConfigBtn) saveConfigBtn.addEventListener('click', saveExportConfig)
+        const loadConfigBtn = document.getElementById('btn-load-export-config')
+        if (loadConfigBtn) loadConfigBtn.addEventListener('click', async () => {
+            await loadExportConfig()
+            showNotification('Export config loaded', 'success')
+        })
+
+        // Load export config on startup
+        loadExportConfig()
     }
 
     // -----------------------------------------------------------------------
@@ -1244,6 +1354,9 @@
         const progressFill = document.getElementById('xlsx-progress-fill')
         const progressText = document.getElementById('xlsx-progress-text')
         const btn = document.getElementById('btn-export-xlsx')
+
+        // Get export config from the UI panel
+        const exportConfig = getExportConfigFromUI()
 
         // Fetch all filtered variants across pages
         const filters = getActiveFilters()
@@ -1271,8 +1384,8 @@
         const screenshots = {}
         const variantIds = allVariants.map(v => v.id)
 
-        // Capture IGV screenshots if the browser is available
-        if (igvBrowser) {
+        // Capture IGV screenshots if enabled in config and the browser is available
+        if (exportConfig.igvScreenshots && igvBrowser) {
             for (let i = 0; i < allVariants.length; i++) {
                 const v = allVariants[i]
                 const pct = Math.round(((i + 1) / allVariants.length) * 80)
@@ -1294,24 +1407,26 @@
             }
         }
 
-        // Generate lollipop plots for each gene with passing variants
-        progressText.textContent = 'Generating gene plots…'
-        progressFill.style.width = '85%'
+        // Generate lollipop plots for each gene (if enabled in config)
         const lollipopPlots = {}
-        const geneSet = new Set()
-        for (const v of allVariants) {
-            if (v.gene && v.curation_status === 'pass') geneSet.add(v.gene)
-        }
-        for (const gene of geneSet) {
-            try {
-                const params = new URLSearchParams(filters)
-                const res = await fetch(`/api/lollipop/${encodeURIComponent(gene)}?${params}`)
-                if (!res.ok) continue
-                const svg = await res.text()
-                const pngData = await svgToPng(svg, 900, 340)
-                if (pngData) lollipopPlots[gene] = pngData
-            } catch (err) {
-                console.warn(`Lollipop plot failed for ${gene}:`, err)
+        if (exportConfig.lollipopPlots) {
+            progressText.textContent = 'Generating gene plots…'
+            progressFill.style.width = '85%'
+            const geneSet = new Set()
+            for (const v of allVariants) {
+                if (v.gene && v.curation_status === 'pass') geneSet.add(v.gene)
+            }
+            for (const gene of geneSet) {
+                try {
+                    const params = new URLSearchParams(filters)
+                    const res = await fetch(`/api/lollipop/${encodeURIComponent(gene)}?${params}`)
+                    if (!res.ok) continue
+                    const svg = await res.text()
+                    const pngData = await svgToPng(svg, 900, 340)
+                    if (pngData) lollipopPlots[gene] = pngData
+                } catch (err) {
+                    console.warn(`Lollipop plot failed for ${gene}:`, err)
+                }
             }
         }
 
@@ -1323,7 +1438,7 @@
             const xlsxRes = await fetch('/api/export/xlsx', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({variantIds, screenshots, lollipopPlots, filters})
+                body: JSON.stringify({variantIds, screenshots, lollipopPlots, filters, exportConfig})
             })
 
             if (!xlsxRes.ok) {
