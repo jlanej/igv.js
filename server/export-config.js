@@ -60,6 +60,8 @@ const DEFAULT_EXPORT_CONFIG = {
 
 /**
  * Categorise a column name into a variantColumns group.
+ * @param {string} col - Column header name (e.g. 'chrom', 'child_file', 'gene')
+ * @returns {string} Category key matching a variantColumns config property
  */
 function categoriseColumn(col) {
     if (['chrom', 'pos', 'ref', 'alt'].includes(col)) return 'coreVariant'
@@ -77,6 +79,9 @@ function categoriseColumn(col) {
 /**
  * Filter columns based on variantColumns config.
  * Curation columns (curation_status, curation_note) are always included.
+ * @param {string[]} columns - Array of column names to filter
+ * @param {Object|null} variantColumnsCfg - variantColumns config object; null keeps all
+ * @returns {string[]} Filtered array of column names
  */
 function filterColumns(columns, variantColumnsCfg) {
     if (!variantColumnsCfg) return columns
