@@ -40,8 +40,51 @@ const DEFAULT_EXPORT_CONFIG = {
         geneType: true            // Gene biotype
     },
 
+    // Variant column categories to include in export
+    variantColumns: {
+        coreVariant: true,        // chrom, pos, ref, alt
+        geneInfo: true,           // gene, impact, inheritance
+        frequency: true,          // freq* columns
+        quality: true,            // quality
+        genotypes: true,          // *_gt columns
+        allelicDepth: true,       // *_AD columns
+        genotypeQuality: true,    // *_GQ columns
+        sampleInfo: true,         // sample_id, trio_id
+        filePaths: true,          // *_file, *_index, *_vcf, *_vcf_id columns
+        otherAnnotations: true    // All other annotation columns
+    },
+
     // Genome build for coordinate reference
     genomeBuild: 'hg38'
+}
+
+/**
+ * Categorise a column name into a variantColumns group.
+ */
+function categoriseColumn(col) {
+    if (['chrom', 'pos', 'ref', 'alt'].includes(col)) return 'coreVariant'
+    if (['gene', 'impact', 'inheritance'].includes(col)) return 'geneInfo'
+    if (col.startsWith('freq')) return 'frequency'
+    if (col === 'quality') return 'quality'
+    if (col.endsWith('_gt')) return 'genotypes'
+    if (col.endsWith('_AD')) return 'allelicDepth'
+    if (col.endsWith('_GQ')) return 'genotypeQuality'
+    if (['sample_id', 'trio_id'].includes(col)) return 'sampleInfo'
+    if (col.endsWith('_file') || col.endsWith('_index') || col.endsWith('_vcf') || col.endsWith('_vcf_id')) return 'filePaths'
+    return 'otherAnnotations'
+}
+
+/**
+ * Filter columns based on variantColumns config.
+ * Curation columns (curation_status, curation_note) are always included.
+ */
+function filterColumns(columns, variantColumnsCfg) {
+    if (!variantColumnsCfg) return columns
+    return columns.filter(col => {
+        if (col === 'curation_status' || col === 'curation_note') return true
+        const category = categoriseColumn(col)
+        return variantColumnsCfg[category] !== false
+    })
 }
 
 /**
@@ -55,8 +98,9 @@ function mergeWithDefaults(partial) {
     // Deep-merge nested objects
     merged.sheets = {...DEFAULT_EXPORT_CONFIG.sheets, ...(partial.sheets || {})}
     merged.geneAnnotations = {...DEFAULT_EXPORT_CONFIG.geneAnnotations, ...(partial.geneAnnotations || {})}
+    merged.variantColumns = {...DEFAULT_EXPORT_CONFIG.variantColumns, ...(partial.variantColumns || {})}
 
     return merged
 }
 
-module.exports = {DEFAULT_EXPORT_CONFIG, mergeWithDefaults}
+module.exports = {DEFAULT_EXPORT_CONFIG, mergeWithDefaults, categoriseColumn, filterColumns}
