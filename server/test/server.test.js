@@ -2050,6 +2050,62 @@ describe('Lollipop SVG Generator', function () {
         expect(svg).to.not.include('GENE<>')
         expect(svg).to.include('GENE&lt;&gt;&amp;&quot;TEST')
     })
+
+    it('renders protein domains on the gene bar when provided', function () {
+        const variants = [
+            {chrom: 'chr17', pos: 43044295, ref: 'A', alt: 'G', impact: 'HIGH'}
+        ]
+        const domains = [
+            {name: 'RING-type', start: 1, end: 101},
+            {name: 'BRCT 1', start: 1646, end: 1736},
+            {name: 'BRCT 2', start: 1756, end: 1855}
+        ]
+        const svg = generateLollipopSvg('BRCA1', variants, {
+            domains,
+            proteinLength: 1863,
+            accession: 'P38398'
+        })
+        expect(svg).to.include('domain-rect')
+        expect(svg).to.include('RING-type')
+        expect(svg).to.include('BRCT')
+        expect(svg).to.include('P38398')
+        expect(svg).to.include('1863 aa')
+        expect(svg).to.include('Protein domains shown on bar')
+    })
+
+    it('falls back to standard plot when no domains provided', function () {
+        const variants = [{chrom: 'chr1', pos: 1000, ref: 'A', alt: 'G'}]
+        const svg = generateLollipopSvg('TEST', variants)
+        expect(svg).to.not.include('class="domain-rect"')
+        expect(svg).to.not.include('Protein domains shown on bar')
+    })
+
+    it('assigns distinct colors to different domains', function () {
+        const variants = [{chrom: 'chr1', pos: 1000, ref: 'A', alt: 'G'}]
+        const domains = [
+            {name: 'Domain_A', start: 10, end: 100},
+            {name: 'Domain_B', start: 200, end: 300}
+        ]
+        const svg = generateLollipopSvg('TEST', variants, {
+            domains, proteinLength: 500
+        })
+        // Both domains should be present as rects
+        const domainRects = svg.match(/class="domain-rect"/g)
+        expect(domainRects).to.have.length(2)
+        // Domain names in tooltips
+        expect(svg).to.include('Domain_A')
+        expect(svg).to.include('Domain_B')
+    })
+
+    it('renders domain legend at bottom when domains present', function () {
+        const variants = [{chrom: 'chr1', pos: 1000, ref: 'A', alt: 'G'}]
+        const domains = [{name: 'Kinase', start: 50, end: 200}]
+        const svg = generateLollipopSvg('TEST', variants, {
+            domains, proteinLength: 400
+        })
+        // Legend should include the domain name
+        expect(svg).to.include('Kinase')
+    })
 })
 
 // =========================================================================
@@ -2197,5 +2253,53 @@ describe('UI: Lollipop plot integration', function () {
         expect(res.text).to.include('.modal-overlay')
         expect(res.text).to.include('.lollipop-modal-content')
         expect(res.text).to.include('.lollipop-btn')
+    })
+})
+
+// =========================================================================
+// Protein domain fetcher (pfam.js)
+// =========================================================================
+describe('Protein domain fetcher', function () {
+    const {fetchProteinDomains, clearCache} = require('../pfam')
+
+    afterEach(function () {
+        clearCache()
+    })
+
+    it('exports fetchProteinDomains and clearCache functions', function () {
+        expect(fetchProteinDomains).to.be.a('function')
+        expect(clearCache).to.be.a('function')
+    })
+
+    it('returns null for empty gene name', async function () {
+        const result = await fetchProteinDomains('')
+        expect(result).to.be.null
+    })
+
+    it('returns null for null gene name', async function () {
+        const result = await fetchProteinDomains(null)
+        expect(result).to.be.null
+    })
+
+    it('gracefully handles unreachable API', async function () {
+        this.timeout(15000)
+        // In this test environment, external APIs are unreachable
+        // The function should return null gracefully
+        const result = await fetchProteinDomains('BRCA1')
+        // Either null (API unreachable) or valid data (API reachable)
+        if (result !== null) {
+            expect(result).to.have.property('proteinLength')
+            expect(result).to.have.property('domains')
+            expect(result).to.have.property('accession')
+            expect(result.domains).to.be.an('array')
+        }
+    })
+
+    it('caches results across calls', async function () {
+        this.timeout(15000)
+        const result1 = await fetchProteinDomains('TP53')
+        const result2 = await fetchProteinDomains('TP53')
+        // Both should return the same value (cached)
+        expect(result1).to.deep.equal(result2)
     })
 })

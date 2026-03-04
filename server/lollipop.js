@@ -3,6 +3,8 @@
  *
  * Generates lollipop-style mutation plots for a given gene, showing
  * variant positions along the genomic region with impact color-coding.
+ * Optionally overlays protein domain annotations (from UniProt/Pfam)
+ * on the gene backbone bar.
  */
 
 'use strict'
@@ -15,6 +17,12 @@ const IMPACT_COLORS = {
 }
 
 const DEFAULT_COLOR = '#7f8c8d'
+
+const DOMAIN_PALETTE = [
+    '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+    '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+    '#aec7e8', '#ffbb78', '#98df8a', '#ff9896', '#c5b0d5'
+]
 
 /**
  * Escape text for safe SVG embedding.
@@ -32,13 +40,17 @@ function svgEscape(str) {
  *
  * @param {string} gene - Gene name
  * @param {Array} variants - Array of {chrom, pos, ref, alt, impact, curation_status}
- * @param {Object} [opts] - Options: width, height
+ * @param {Object} [opts] - Options: width, height, domains, proteinLength, accession
+ *   opts.domains  - Array of {name, start, end} (amino acid positions)
+ *   opts.proteinLength - Total protein length in amino acids
+ *   opts.accession - UniProt accession for subtitle
  * @returns {string} SVG markup
  */
 function generateLollipopSvg(gene, variants, opts = {}) {
     const width = opts.width || 900
-    const height = opts.height || 340
-    const margin = {top: 60, right: 40, bottom: 60, left: 60}
+    const hasDomains = opts.domains && opts.domains.length > 0 && opts.proteinLength > 0
+    const height = opts.height || (hasDomains ? 400 : 340)
+    const margin = {top: 60, right: 40, bottom: hasDomains ? 80 : 60, left: 60}
 
     if (!variants || variants.length === 0) {
         return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
@@ -107,6 +119,15 @@ function generateLollipopSvg(gene, variants, opts = {}) {
 
     const chrom = sorted[0].chrom || ''
 
+    // Assign colors to unique domain names
+    const domainColorMap = {}
+    if (hasDomains) {
+        const uniqueNames = [...new Set(opts.domains.map(d => d.name))]
+        uniqueNames.forEach((name, i) => {
+            domainColorMap[name] = DOMAIN_PALETTE[i % DOMAIN_PALETTE.length]
+        })
+    }
+
     // --- Build SVG ---
     const lines = []
     lines.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`)
@@ -115,24 +136,54 @@ function generateLollipopSvg(gene, variants, opts = {}) {
     lines.push(`  .lollipop-subtitle { font: 12px Arial, sans-serif; fill: #7f8c8d; }`)
     lines.push(`  .axis-label { font: 11px Arial, sans-serif; fill: #555; }`)
     lines.push(`  .axis-line { stroke: #bbb; stroke-width: 1; }`)
-    lines.push(`  .gene-bar { fill: #2c3e50; rx: 4; }`)
+    lines.push(`  .gene-bar { fill: #bdc3c7; }`)
     lines.push(`  .stick { stroke-width: 2; }`)
     lines.push(`  .dot { stroke: #fff; stroke-width: 1.5; }`)
     lines.push(`  .legend-text { font: 11px Arial, sans-serif; fill: #555; }`)
-    lines.push(`  .tooltip-text { font: 10px Arial, sans-serif; fill: #333; }`)
+    lines.push(`  .domain-label { font: 9px Arial, sans-serif; fill: #fff; pointer-events: none; }`)
+    lines.push(`  .domain-rect { stroke: #fff; stroke-width: 0.5; opacity: 0.85; }`)
     lines.push(`</style>`)
 
     // Background
     lines.push(`<rect width="${width}" height="${height}" fill="#fff" rx="4"/>`)
 
     // Title
+    const subtitle = hasDomains && opts.accession
+        ? `${sorted.length} variant${sorted.length !== 1 ? 's' : ''} on ${svgEscape(chrom)} &#8226; ${svgEscape(opts.accession)} (${opts.proteinLength} aa)`
+        : `${sorted.length} variant${sorted.length !== 1 ? 's' : ''} on ${svgEscape(chrom)}`
     lines.push(`<text x="${width / 2}" y="24" text-anchor="middle" class="lollipop-title">${svgEscape(gene)} &#8212; Variant Lollipop Plot</text>`)
-    lines.push(`<text x="${width / 2}" y="42" text-anchor="middle" class="lollipop-subtitle">${sorted.length} variant${sorted.length !== 1 ? 's' : ''} on ${svgEscape(chrom)}</text>`)
+    lines.push(`<text x="${width / 2}" y="42" text-anchor="middle" class="lollipop-subtitle">${subtitle}</text>`)
 
     // Gene bar (horizontal backbone)
     const barY = margin.top + plotH
-    const barH = 8
-    lines.push(`<rect x="${margin.left}" y="${barY - barH / 2}" width="${plotW}" height="${barH}" class="gene-bar"/>`)
+    const barH = hasDomains ? 20 : 8
+    lines.push(`<rect x="${margin.left}" y="${barY - barH / 2}" width="${plotW}" height="${barH}" class="gene-bar" rx="3"/>`)
+
+    // --- Protein domain overlays ---
+    if (hasDomains) {
+        const proteinLen = opts.proteinLength
+        // Map protein amino acid positions to x-coordinates on the plot
+        // We overlay domains proportionally on the gene bar
+        for (const d of opts.domains) {
+            const dStart = Math.max(0, d.start)
+            const dEnd = Math.min(proteinLen, d.end)
+            // Map domain aa positions to proportional position on the bar
+            const dx1 = margin.left + (dStart / proteinLen) * plotW
+            const dx2 = margin.left + (dEnd / proteinLen) * plotW
+            const dw = Math.max(2, dx2 - dx1)
+            const color = domainColorMap[d.name] || '#999'
+            const tooltip = `${d.name} (${d.start}-${d.end} aa)`
+            lines.push(`<rect x="${dx1}" y="${barY - barH / 2}" width="${dw}" height="${barH}" fill="${color}" class="domain-rect" rx="2">`)
+            lines.push(`  <title>${svgEscape(tooltip)}</title>`)
+            lines.push(`</rect>`)
+
+            // Domain label (only if wide enough)
+            if (dw > 30) {
+                const labelX = dx1 + dw / 2
+                lines.push(`<text x="${labelX}" y="${barY + 4}" text-anchor="middle" class="domain-label">${svgEscape(d.name.length > Math.floor(dw / 6) ? d.name.substring(0, Math.floor(dw / 6)) + '...' : d.name)}</text>`)
+            }
+        }
+    }
 
     // Axis ticks
     for (const t of ticks) {
@@ -142,7 +193,10 @@ function generateLollipopSvg(gene, variants, opts = {}) {
     }
 
     // Axis label
-    lines.push(`<text x="${width / 2}" y="${height - 8}" text-anchor="middle" class="axis-label">Genomic Position (${svgEscape(chrom)})</text>`)
+    const axisLabel = hasDomains
+        ? `Genomic Position (${svgEscape(chrom)}) &#8226; Protein domains shown on bar`
+        : `Genomic Position (${svgEscape(chrom)})`
+    lines.push(`<text x="${width / 2}" y="${height - 8}" text-anchor="middle" class="axis-label">${axisLabel}</text>`)
 
     // Lollipop sticks and dots
     for (const lp of lollipops) {
@@ -152,7 +206,7 @@ function generateLollipopSvg(gene, variants, opts = {}) {
         lines.push(`</circle>`)
     }
 
-    // Legend
+    // Impact legend (top-right)
     const legendX = width - margin.right - 160
     const legendY = margin.top - 5
     let ly = legendY
@@ -160,6 +214,19 @@ function generateLollipopSvg(gene, variants, opts = {}) {
         lines.push(`<circle cx="${legendX}" cy="${ly}" r="5" fill="${color}"/>`)
         lines.push(`<text x="${legendX + 10}" y="${ly + 4}" class="legend-text">${impact}</text>`)
         ly += 16
+    }
+
+    // Domain legend (bottom, below axis)
+    if (hasDomains) {
+        const domainLegendY = height - 24
+        let dlx = margin.left
+        for (const [name, color] of Object.entries(domainColorMap)) {
+            const labelW = name.length * 7 + 20
+            if (dlx + labelW > width - margin.right) break  // don't overflow
+            lines.push(`<rect x="${dlx}" y="${domainLegendY - 7}" width="12" height="12" fill="${color}" rx="2"/>`)
+            lines.push(`<text x="${dlx + 16}" y="${domainLegendY + 4}" class="legend-text">${svgEscape(name)}</text>`)
+            dlx += labelW
+        }
     }
 
     lines.push(`</svg>`)
@@ -190,4 +257,4 @@ function formatPos(pos) {
     return String(pos)
 }
 
-module.exports = {generateLollipopSvg, IMPACT_COLORS}
+module.exports = {generateLollipopSvg, IMPACT_COLORS, DOMAIN_PALETTE}

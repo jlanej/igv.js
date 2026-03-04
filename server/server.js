@@ -18,6 +18,7 @@ const ExcelJS = require('exceljs')
 const archiver = require('archiver')
 const log = require('./logger')
 const {generateLollipopSvg} = require('./lollipop')
+const {fetchProteinDomains} = require('./pfam')
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -815,9 +816,9 @@ app.get('/api/export', (req, res) => {
 })
 
 // -------------------------------------------------------------------------
-// Lollipop plot – per-gene variant position SVG
+// Lollipop plot – per-gene variant position SVG with protein domain overlay
 // -------------------------------------------------------------------------
-app.get('/api/lollipop/:gene', (req, res) => {
+app.get('/api/lollipop/:gene', async (req, res) => {
     const gene = req.params.gene
     const geneCol = headerColumns.includes('gene') ? 'gene' : null
     if (!geneCol) {
@@ -835,7 +836,20 @@ app.get('/api/lollipop/:gene', (req, res) => {
         impact: v.impact || '', curation_status: v.curation_status || 'pending'
     }))
 
-    const svg = generateLollipopSvg(gene, svgData)
+    // Fetch protein domain annotations from UniProt (non-blocking, graceful fallback)
+    const svgOpts = {}
+    try {
+        const domainData = await fetchProteinDomains(gene)
+        if (domainData && domainData.domains && domainData.domains.length > 0) {
+            svgOpts.domains = domainData.domains
+            svgOpts.proteinLength = domainData.proteinLength
+            svgOpts.accession = domainData.accession
+        }
+    } catch (err) {
+        log.warn(`Failed to fetch protein domains for ${gene}: ${err.message}`)
+    }
+
+    const svg = generateLollipopSvg(gene, svgData, svgOpts)
     res.setHeader('Content-Type', 'image/svg+xml')
     res.send(svg)
 })
