@@ -689,7 +689,9 @@ app.get('/api/export-config', (_req, res) => {
     if (fs.existsSync(EXPORT_CONFIG_FILE)) {
         try {
             const data = JSON.parse(fs.readFileSync(EXPORT_CONFIG_FILE, 'utf-8'))
-            return res.json(mergeWithDefaults(data))
+            const merged = mergeWithDefaults(data)
+            merged.genomeBuild = GENOME  // Server genome build is authoritative
+            return res.json(merged)
         } catch (e) {
             log.warn('Could not parse export config file:', e.message)
         }

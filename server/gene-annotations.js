@@ -16,6 +16,7 @@
 'use strict'
 
 const MYGENE_BASE = 'https://mygene.info/v3'
+const MAX_PATHWAYS = 10
 
 // Fields we request – kept minimal to reduce payload & latency.
 // Covers: gene summary, genomic location, OMIM/MIM, ClinVar counts,
@@ -191,7 +192,7 @@ function parseHit(hit, gene) {
     // KEGG pathways
     if (hit.pathway && hit.pathway.kegg) {
         const kegg = Array.isArray(hit.pathway.kegg) ? hit.pathway.kegg : [hit.pathway.kegg]
-        result.pathways = kegg.map(p => ({id: p.id, name: p.name})).slice(0, 10)
+        result.pathways = kegg.map(p => ({id: p.id, name: p.name})).slice(0, MAX_PATHWAYS)
     }
 
     return result
