@@ -733,7 +733,7 @@
 
         const tbody = document.getElementById('summary-body')
         if (!data.summary || data.summary.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9">No gene data available</td></tr>'
+            tbody.innerHTML = '<tr><td colspan="10">No gene data available</td></tr>'
             return
         }
 
@@ -748,6 +748,7 @@
             <td>${g.variants.map(v =>
                 `<span class="badge badge-${v.curation_status}" title="${v.chrom}:${v.pos} ${v.ref}→${v.alt}">${v.chrom}:${v.pos}</span> `
             ).join('')}</td>
+            <td><button class="lollipop-btn" data-gene="${escapeHtml(g.gene)}" title="Lollipop plot for ${escapeHtml(g.gene)}">🍭 Plot</button></td>
             <td>
                 <button class="gene-curate-btn curation-pass" data-gene="${escapeHtml(g.gene)}" data-status="pass" title="Flag all ${g.gene} as Pass">✓</button>
                 <button class="gene-curate-btn curation-fail" data-gene="${escapeHtml(g.gene)}" data-status="fail" title="Flag all ${g.gene} as Fail">✗</button>
@@ -762,6 +763,11 @@
                 const sel = document.querySelector('[data-filter="gene"]')
                 if (sel) { sel.value = gene; loadVariants(); switchTab('variants') }
             })
+        })
+
+        // Lollipop plot buttons
+        tbody.querySelectorAll('.lollipop-btn').forEach(btn => {
+            btn.addEventListener('click', () => showLollipopPlot(btn.dataset.gene))
         })
 
         // Gene curation buttons
@@ -791,6 +797,34 @@
             }
         } catch (err) {
             showNotification('Failed to flag gene: ' + err.message, 'warn')
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Lollipop plot modal
+    // -----------------------------------------------------------------------
+    async function showLollipopPlot(gene) {
+        const modal = document.getElementById('lollipop-modal')
+        const title = document.getElementById('lollipop-modal-title')
+        const body = document.getElementById('lollipop-modal-body')
+
+        title.textContent = `Lollipop Plot — ${gene}`
+        body.innerHTML = '<p>Loading…</p>'
+        modal.style.display = 'flex'
+
+        try {
+            const filters = getActiveFilters()
+            const params = new URLSearchParams(filters)
+            const res = await fetch(`/api/lollipop/${encodeURIComponent(gene)}?${params}`)
+            if (!res.ok) {
+                const err = await res.json()
+                body.innerHTML = `<p style="color:#e74c3c">${err.error || 'Failed to load plot'}</p>`
+                return
+            }
+            const svg = await res.text()
+            body.innerHTML = svg
+        } catch (err) {
+            body.innerHTML = `<p style="color:#e74c3c">Error: ${err.message}</p>`
         }
     }
 
@@ -1167,6 +1201,97 @@
         if (panel) panel.classList.toggle('visible')
     }
 
+    // -----------------------------------------------------------------------
+    // Export Configuration
+    // -----------------------------------------------------------------------
+    let currentExportConfig = null
+
+    async function loadExportConfig() {
+        try {
+            const res = await fetch('/api/export-config')
+            if (res.ok) {
+                currentExportConfig = await res.json()
+                applyExportConfigToUI(currentExportConfig)
+            }
+        } catch (_) { /* defaults will be used */ }
+    }
+
+    function applyExportConfigToUI(cfg) {
+        const panel = document.getElementById('export-config-panel')
+        if (!panel) return
+        const checkboxes = panel.querySelectorAll('input[type="checkbox"]')
+        checkboxes.forEach(cb => {
+            const key = cb.dataset.configKey
+            if (!key) return
+            const parts = key.split('.')
+            let val = cfg
+            for (const p of parts) {
+                if (val && typeof val === 'object') val = val[p]
+                else { val = undefined; break }
+            }
+            if (val !== undefined) cb.checked = !!val
+        })
+    }
+
+    function getExportConfigFromUI() {
+        const panel = document.getElementById('export-config-panel')
+        if (!panel) return currentExportConfig || {}
+        const cfg = {
+            sheets: {
+                variants: true,
+                geneSummary: true,
+                sampleSummary: true,
+                sampleQc: true,
+                appliedFilters: true,
+                annotationStatus: true
+            },
+            igvScreenshots: true,
+            lollipopPlots: true,
+            proteinDomains: true,
+            geneAnnotations: {
+                enabled: true,
+                geneName: true,
+                summary: true,
+                omim: true,
+                pathways: true,
+                geneType: true
+            },
+            genomeBuild: (currentExportConfig && currentExportConfig.genomeBuild) || 'hg38'
+        }
+        const checkboxes = panel.querySelectorAll('input[type="checkbox"]')
+        checkboxes.forEach(cb => {
+            const key = cb.dataset.configKey
+            if (!key) return
+            const parts = key.split('.')
+            let target = cfg
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (!target[parts[i]]) target[parts[i]] = {}
+                target = target[parts[i]]
+            }
+            target[parts[parts.length - 1]] = cb.checked
+        })
+        return cfg
+    }
+
+    async function saveExportConfig() {
+        const cfg = getExportConfigFromUI()
+        try {
+            const res = await fetch('/api/export-config', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(cfg)
+            })
+            if (res.ok) {
+                currentExportConfig = cfg
+                showNotification('Export config saved', 'success')
+            } else {
+                showNotification('Failed to save export config', 'warn')
+            }
+        } catch (err) {
+            showNotification('Failed to save export config', 'warn')
+        }
+    }
+
     function setupExport() {
         document.getElementById('btn-export').addEventListener('click', () => {
             const filters = getActiveFilters()
@@ -1177,6 +1302,14 @@
         document.getElementById('btn-export-xlsx').addEventListener('click', () => exportXlsx())
 
         document.getElementById('btn-export-html').addEventListener('click', () => exportHtml())
+
+        // Lollipop modal close
+        document.getElementById('lollipop-modal-close').addEventListener('click', () => {
+            document.getElementById('lollipop-modal').style.display = 'none'
+        })
+        document.getElementById('lollipop-modal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) e.currentTarget.style.display = 'none'
+        })
 
         document.getElementById('btn-apply-filters').addEventListener('click', () => {
             currentPage = 1
@@ -1192,6 +1325,25 @@
             await loadVariants()
             showNotification('Filters loaded', 'success')
         })
+
+        // Export config panel
+        const configToggle = document.getElementById('btn-export-config')
+        if (configToggle) {
+            configToggle.addEventListener('click', () => {
+                const panel = document.getElementById('export-config-panel')
+                if (panel) panel.classList.toggle('visible')
+            })
+        }
+        const saveConfigBtn = document.getElementById('btn-save-export-config')
+        if (saveConfigBtn) saveConfigBtn.addEventListener('click', saveExportConfig)
+        const loadConfigBtn = document.getElementById('btn-load-export-config')
+        if (loadConfigBtn) loadConfigBtn.addEventListener('click', async () => {
+            await loadExportConfig()
+            showNotification('Export config loaded', 'success')
+        })
+
+        // Load export config on startup
+        loadExportConfig()
     }
 
     // -----------------------------------------------------------------------
@@ -1202,6 +1354,9 @@
         const progressFill = document.getElementById('xlsx-progress-fill')
         const progressText = document.getElementById('xlsx-progress-text')
         const btn = document.getElementById('btn-export-xlsx')
+
+        // Get export config from the UI panel
+        const exportConfig = getExportConfigFromUI()
 
         // Fetch all filtered variants across pages
         const filters = getActiveFilters()
@@ -1229,8 +1384,8 @@
         const screenshots = {}
         const variantIds = allVariants.map(v => v.id)
 
-        // Capture IGV screenshots if the browser is available
-        if (igvBrowser) {
+        // Capture IGV screenshots if enabled in config and the browser is available
+        if (exportConfig.igvScreenshots && igvBrowser) {
             for (let i = 0; i < allVariants.length; i++) {
                 const v = allVariants[i]
                 const pct = Math.round(((i + 1) / allVariants.length) * 80)
@@ -1252,6 +1407,29 @@
             }
         }
 
+        // Generate lollipop plots for each gene (if enabled in config)
+        const lollipopPlots = {}
+        if (exportConfig.lollipopPlots) {
+            progressText.textContent = 'Generating gene plots…'
+            progressFill.style.width = '85%'
+            const geneSet = new Set()
+            for (const v of allVariants) {
+                if (v.gene && v.curation_status === 'pass') geneSet.add(v.gene)
+            }
+            for (const gene of geneSet) {
+                try {
+                    const params = new URLSearchParams(filters)
+                    const res = await fetch(`/api/lollipop/${encodeURIComponent(gene)}?${params}`)
+                    if (!res.ok) continue
+                    const svg = await res.text()
+                    const pngData = await svgToPng(svg, 900, 340)
+                    if (pngData) lollipopPlots[gene] = pngData
+                } catch (err) {
+                    console.warn(`Lollipop plot failed for ${gene}:`, err)
+                }
+            }
+        }
+
         // Send to server for XLSX generation
         progressText.textContent = 'Generating XLSX…'
         progressFill.style.width = '90%'
@@ -1260,7 +1438,7 @@
             const xlsxRes = await fetch('/api/export/xlsx', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({variantIds, screenshots, filters})
+                body: JSON.stringify({variantIds, screenshots, lollipopPlots, filters, exportConfig})
             })
 
             if (!xlsxRes.ok) {
@@ -1468,6 +1646,30 @@
         const div = document.createElement('div')
         div.textContent = str
         return div.innerHTML
+    }
+
+    /**
+     * Convert an SVG string to a PNG data URI using an off-screen canvas.
+     */
+    function svgToPng(svgText, width, height) {
+        return new Promise((resolve) => {
+            const blob = new Blob([svgText], {type: 'image/svg+xml;charset=utf-8'})
+            const url = URL.createObjectURL(blob)
+            const img = new Image()
+            img.onload = () => {
+                const canvas = document.createElement('canvas')
+                canvas.width = width
+                canvas.height = height
+                const ctx = canvas.getContext('2d')
+                ctx.fillStyle = '#fff'
+                ctx.fillRect(0, 0, width, height)
+                ctx.drawImage(img, 0, 0, width, height)
+                URL.revokeObjectURL(url)
+                resolve(canvas.toDataURL('image/png'))
+            }
+            img.onerror = () => { URL.revokeObjectURL(url); resolve(null) }
+            img.src = url
+        })
     }
 
     function showNotification(msg, type) {

@@ -17,6 +17,10 @@ const path = require('path')
 const ExcelJS = require('exceljs')
 const archiver = require('archiver')
 const log = require('./logger')
+const {generateLollipopSvg} = require('./lollipop')
+const {fetchProteinDomains} = require('./pfam')
+const {fetchGeneAnnotationsBatch} = require('./gene-annotations')
+const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults} = require('./export-config')
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -32,6 +36,7 @@ const VARIANTS_FILE = getArg('variants', path.join(__dirname, 'example_data', 'v
 const DATA_DIR = getArg('data-dir', getArg('data_dir', path.join(__dirname, 'example_data')))
 const CURATION_FILE = getArg('curation-file', VARIANTS_FILE.replace(/\.tsv$/, '.curation.json'))
 const FILTERS_FILE = getArg('filters-file', VARIANTS_FILE.replace(/\.tsv$/, '.filters.json'))
+const EXPORT_CONFIG_FILE = getArg('export-config-file', VARIANTS_FILE.replace(/\.tsv$/, '.export-config.json'))
 const SAMPLE_QC_FILE = getArg('sample-qc', null)
 const VCF_FILE = getArg('vcf', null)
 const VCF_SAMPLES = getArg('vcf-samples', null)  // e.g. "proband:NA12878,mother:NA12891,father:NA12892"
@@ -677,6 +682,68 @@ app.put('/api/filter-config', (req, res) => {
     }
 })
 
+// -------------------------------------------------------------------------
+// Export configuration – persisted settings controlling XLSX/HTML export
+// -------------------------------------------------------------------------
+app.get('/api/export-config', (_req, res) => {
+    if (fs.existsSync(EXPORT_CONFIG_FILE)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(EXPORT_CONFIG_FILE, 'utf-8'))
+            const merged = mergeWithDefaults(data)
+            merged.genomeBuild = GENOME  // Server genome build is authoritative
+            return res.json(merged)
+        } catch (e) {
+            log.warn('Could not parse export config file:', e.message)
+        }
+    }
+    res.json(mergeWithDefaults({genomeBuild: GENOME}))
+})
+
+app.put('/api/export-config', (req, res) => {
+    const config = req.body
+    if (!config || typeof config !== 'object') {
+        return res.status(400).json({error: 'Request body must be a JSON object'})
+    }
+    try {
+        const merged = mergeWithDefaults(config)
+        fs.writeFileSync(EXPORT_CONFIG_FILE, JSON.stringify(merged, null, 2), 'utf-8')
+        log.info('Saved export configuration')
+        res.json({ok: true})
+    } catch (e) {
+        log.error('Failed to save export config:', e.message)
+        res.status(500).json({error: 'Failed to save export configuration'})
+    }
+})
+
+// -------------------------------------------------------------------------
+// Gene annotations – MyGene.info batch lookup
+// -------------------------------------------------------------------------
+app.get('/api/gene-annotations', async (req, res) => {
+    const geneCol = headerColumns.includes('gene') ? 'gene' : null
+    if (!geneCol) {
+        return res.json({annotations: {}, errors: [], message: 'No gene column found'})
+    }
+
+    const filtered = applyFilters(req.query)
+    const genes = [...new Set(filtered.map(v => v[geneCol]).filter(Boolean))]
+
+    if (genes.length === 0) {
+        return res.json({annotations: {}, errors: []})
+    }
+
+    const annotMap = await fetchGeneAnnotationsBatch(genes)
+    const annotations = {}
+    const errors = []
+    for (const [gene, data] of annotMap) {
+        if (data && data.error) {
+            errors.push({gene, error: data.error})
+        }
+        annotations[gene] = data
+    }
+
+    res.json({annotations, errors, genomeBuild: GENOME})
+})
+
 // Gene-level summary (post-filtering)
 app.get('/api/summary', (req, res) => {
     const filtered = applyFilters(req.query)
@@ -814,6 +881,45 @@ app.get('/api/export', (req, res) => {
 })
 
 // -------------------------------------------------------------------------
+// Lollipop plot – per-gene variant position SVG with protein domain overlay
+// -------------------------------------------------------------------------
+app.get('/api/lollipop/:gene', async (req, res) => {
+    const gene = req.params.gene
+    const geneCol = headerColumns.includes('gene') ? 'gene' : null
+    if (!geneCol) {
+        return res.status(400).json({error: 'No gene column found in data'})
+    }
+
+    const filtered = applyFilters(req.query)
+    const geneVariants = filtered.filter(v => v[geneCol] === gene)
+    if (geneVariants.length === 0) {
+        return res.status(404).json({error: `No variants found for gene ${gene}`})
+    }
+
+    const svgData = geneVariants.map(v => ({
+        chrom: v.chrom, pos: v.pos, ref: v.ref, alt: v.alt,
+        impact: v.impact || '', curation_status: v.curation_status || 'pending'
+    }))
+
+    // Fetch protein domain annotations from UniProt (non-blocking, graceful fallback)
+    const svgOpts = {genomeBuild: GENOME}
+    try {
+        const domainData = await fetchProteinDomains(gene)
+        if (domainData && domainData.domains && domainData.domains.length > 0) {
+            svgOpts.domains = domainData.domains
+            svgOpts.proteinLength = domainData.proteinLength
+            svgOpts.accession = domainData.accession
+        }
+    } catch (err) {
+        log.warn(`Failed to fetch protein domains for ${gene}: ${err.message}`)
+    }
+
+    const svg = generateLollipopSvg(gene, svgData, svgOpts)
+    res.setHeader('Content-Type', 'image/svg+xml')
+    res.send(svg)
+})
+
+// -------------------------------------------------------------------------
 // XLSX Export – publication-quality workbook with variant data and optional
 // IGV screenshots on per-variant tabs, linked from the main sheet.
 // -------------------------------------------------------------------------
@@ -821,7 +927,9 @@ app.use('/api/export/xlsx', express.json({limit: '50mb'}))
 
 app.post('/api/export/xlsx', async (req, res) => {
     try {
-        const {variantIds, screenshots, filters: clientFilters} = req.body || {}
+        const {variantIds, screenshots, lollipopPlots, filters: clientFilters, exportConfig: clientExportConfig} = req.body || {}
+        const exportCfg = mergeWithDefaults(clientExportConfig || {genomeBuild: GENOME})
+        const annotationErrors = []  // Track annotation fetch failures
 
         // Determine which variants to include
         let filtered
@@ -957,7 +1065,7 @@ app.post('/api/export/xlsx', async (req, res) => {
         // --- Gene Summary worksheet -----------------------------------------
         const geneCol = headerColumns.includes('gene') ? 'gene' : null
         const xlsSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
-        if (geneCol) {
+        if (geneCol && exportCfg.sheets.geneSummary) {
             const geneMap = {}
             for (const v of filtered) {
                 const gene = v[geneCol]
@@ -972,9 +1080,20 @@ app.post('/api/export/xlsx', async (req, res) => {
                 delete g._samples
                 return g
             }).sort((a, b) => b.total - a.total)
+
+            // Fetch gene annotations if enabled
+            let geneAnnotations = new Map()
+            if (exportCfg.geneAnnotations.enabled && geneSummary.length > 0) {
+                try {
+                    geneAnnotations = await fetchGeneAnnotationsBatch(geneSummary.map(g => g.gene))
+                } catch (err) {
+                    annotationErrors.push({source: 'MyGene.info', error: err.message})
+                }
+            }
+
             if (geneSummary.length > 0) {
                 const gws = workbook.addWorksheet('Gene Summary', {views: [{state: 'frozen', ySplit: 1}]})
-                gws.columns = [
+                const gsCols = [
                     {header: 'Gene', key: 'gene', width: 16},
                     {header: 'Total', key: 'total', width: 10},
                     {header: 'Samples', key: 'samples', width: 10},
@@ -983,6 +1102,17 @@ app.post('/api/export/xlsx', async (req, res) => {
                     {header: 'Uncertain', key: 'uncertain', width: 12},
                     {header: 'Pending', key: 'pending', width: 10}
                 ]
+
+                // Add annotation columns based on config
+                if (exportCfg.geneAnnotations.enabled) {
+                    if (exportCfg.geneAnnotations.geneName) gsCols.push({header: 'Gene Name', key: 'geneName', width: 30})
+                    if (exportCfg.geneAnnotations.geneType) gsCols.push({header: 'Gene Type', key: 'geneType', width: 14})
+                    if (exportCfg.geneAnnotations.omim) gsCols.push({header: 'OMIM', key: 'omim', width: 12})
+                    if (exportCfg.geneAnnotations.pathways) gsCols.push({header: 'Pathways', key: 'pathways', width: 30})
+                    if (exportCfg.geneAnnotations.summary) gsCols.push({header: 'Summary', key: 'summary', width: 50})
+                }
+
+                gws.columns = gsCols
                 const gsHeader = gws.getRow(1)
                 gsHeader.eachCell(cell => {
                     cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin
@@ -990,13 +1120,24 @@ app.post('/api/export/xlsx', async (req, res) => {
                 })
                 gsHeader.height = 24
                 geneSummary.forEach((g, idx) => {
+                    // Enrich with annotations
+                    const ann = geneAnnotations.get(g.gene)
+                    if (ann && !ann.error) {
+                        if (exportCfg.geneAnnotations.geneName) g.geneName = ann.name || ''
+                        if (exportCfg.geneAnnotations.geneType) g.geneType = ann.geneType || ''
+                        if (exportCfg.geneAnnotations.omim) g.omim = ann.mim || ''
+                        if (exportCfg.geneAnnotations.pathways) g.pathways = (ann.pathways || []).map(p => p.name).join('; ')
+                        if (exportCfg.geneAnnotations.summary) g.summary = ann.summary || ''
+                    } else if (ann && ann.error) {
+                        annotationErrors.push({source: 'MyGene.info', gene: g.gene, error: ann.error})
+                    }
                     const row = gws.addRow(g)
                     row.eachCell(cell => {
                         cell.border = borderThin
                         if (idx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
                     })
                 })
-                gws.autoFilter = {from: 'A1', to: {row: 1, column: 7}}
+                gws.autoFilter = {from: 'A1', to: {row: 1, column: gsCols.length}}
             }
         }
 
@@ -1193,6 +1334,105 @@ app.post('/api/export/xlsx', async (req, res) => {
                     if (fIdx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
                 })
                 fIdx++
+            }
+        }
+
+        // --- Annotation Status worksheet ------------------------------------
+        // Reports which external data fetches succeeded or failed, so the
+        // user knows exactly what data may be missing from the export.
+        if (exportCfg.sheets.annotationStatus) {
+            const asws = workbook.addWorksheet('Annotation Status', {views: [{state: 'frozen', ySplit: 1}]})
+            asws.columns = [
+                {header: 'Source', key: 'source', width: 20},
+                {header: 'Gene', key: 'gene', width: 16},
+                {header: 'Status', key: 'status', width: 14},
+                {header: 'Details', key: 'details', width: 50}
+            ]
+            const asHeader = asws.getRow(1)
+            asHeader.eachCell(cell => {
+                cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin
+                cell.alignment = {vertical: 'middle', horizontal: 'center'}
+            })
+            asHeader.height = 24
+
+            // Metadata row: genome build
+            const buildRow = asws.addRow({source: 'Genome Build', gene: '', status: 'Info', details: exportCfg.genomeBuild || GENOME})
+            buildRow.eachCell(cell => { cell.border = borderThin })
+
+            // Export config summary
+            const cfgRow = asws.addRow({source: 'Export Config', gene: '', status: 'Info', details: `Screenshots: ${exportCfg.igvScreenshots ? 'ON' : 'OFF'}, Lollipop: ${exportCfg.lollipopPlots ? 'ON' : 'OFF'}, Annotations: ${exportCfg.geneAnnotations.enabled ? 'ON' : 'OFF'}`})
+            cfgRow.eachCell(cell => { cell.border = borderThin })
+
+            if (annotationErrors.length === 0) {
+                const okRow = asws.addRow({source: 'All Sources', gene: '', status: 'OK', details: 'All annotation fetches completed successfully'})
+                okRow.eachCell(cell => { cell.border = borderThin })
+                okRow.getCell(3).font = {bold: true, color: {argb: 'FF27AE60'}}
+            } else {
+                // Deduplicate errors by source+gene
+                const seen = new Set()
+                let asIdx = 0
+                for (const err of annotationErrors) {
+                    const key = `${err.source}:${err.gene || ''}`
+                    if (seen.has(key)) continue
+                    seen.add(key)
+                    const row = asws.addRow({source: err.source, gene: err.gene || '', status: 'FAILED', details: err.error})
+                    row.eachCell(cell => {
+                        cell.border = borderThin
+                        if (asIdx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
+                    })
+                    row.getCell(3).font = {bold: true, color: {argb: 'FFE74C3C'}}
+                    asIdx++
+                }
+            }
+        }
+
+        // --- Gene Lollipop Plot worksheets ------------------------------------
+        const hasLollipopPlots = lollipopPlots && typeof lollipopPlots === 'object' && Object.keys(lollipopPlots).length > 0
+        if (hasLollipopPlots && geneCol) {
+            for (const [gene, imgData] of Object.entries(lollipopPlots)) {
+                if (!imgData || typeof imgData !== 'string' || imgData.length > 5 * 1024 * 1024) continue
+                const safeName = `LP ${gene}`.substring(0, 31)
+                const lpws = workbook.addWorksheet(safeName)
+                lpws.getCell('A1').value = `Lollipop Plot: ${gene}`
+                lpws.getCell('A1').font = {bold: true, size: 14, color: {argb: 'FF2C3E50'}}
+                lpws.getColumn(1).width = 20
+                lpws.getColumn(2).width = 40
+
+                // Count passing variants for this gene
+                const geneVariants = filtered.filter(v => v[geneCol] === gene)
+                const passingCount = geneVariants.filter(v => v.curation_status === 'pass').length
+                lpws.getCell('A2').value = 'Variants:'
+                lpws.getCell('A2').font = {bold: true}
+                lpws.getCell('B2').value = `${geneVariants.length} total, ${passingCount} passing`
+
+                // Back-link
+                lpws.getCell('D1').value = {text: '← Back to Variants', hyperlink: '#Variants!A1'}
+                lpws.getCell('D1').font = {color: {argb: 'FF2980B9'}, underline: true}
+                lpws.getColumn(4).width = 22
+
+                // Embed the lollipop plot image
+                try {
+                    let base64 = imgData
+                    let extension = 'png'
+                    if (base64.startsWith('data:image/jpeg;base64,')) {
+                        base64 = base64.replace('data:image/jpeg;base64,', '')
+                        extension = 'jpeg'
+                    } else if (base64.startsWith('data:image/png;base64,')) {
+                        base64 = base64.replace('data:image/png;base64,', '')
+                    }
+
+                    const imageId = workbook.addImage({
+                        buffer: Buffer.from(base64, 'base64'),
+                        extension: extension
+                    })
+                    lpws.addImage(imageId, {
+                        tl: {col: 0, row: 3},
+                        ext: {width: 900, height: 340}
+                    })
+                } catch (imgErr) {
+                    lpws.getCell('A4').value = '(Lollipop plot could not be embedded)'
+                    lpws.getCell('A4').font = {italic: true, color: {argb: 'FF999999'}}
+                }
             }
         }
 

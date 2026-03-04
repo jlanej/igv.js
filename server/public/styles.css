@@ -557,3 +557,26 @@ td.qc-cell-pass { color: var(--pass); }
 td.qc-cell-warn { color: var(--uncertain); font-weight: 600; }
 td.qc-cell-fail { color: var(--fail); font-weight: 600; }
 td.qc-cell-critical { color: #922b21; font-weight: 700; background: #fdedec; }
+
+/* Lollipop plot modal */
+.modal-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5); z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+}
+.modal-content { background: #fff; border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); max-width: 960px; width: 95%; }
+.lollipop-modal-content { overflow: hidden; }
+.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.modal-header h3 { font-size: 16px; }
+#lollipop-modal-body { padding: 16px; overflow: auto; max-height: 80vh; text-align: center; }
+#lollipop-modal-body svg { max-width: 100%; height: auto; }
+.lollipop-btn { cursor: pointer; background: none; border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 13px; }
+
+/* Export config panel */
+.config-panel { display: none; margin-top: 8px; padding: 10px; background: var(--bg-light); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+.config-panel.visible { display: block; }
+.config-panel h3 { margin: 0 0 8px; font-size: 14px; color: var(--primary); }
+.config-section { margin-bottom: 8px; }
+.config-section strong { display: block; margin-bottom: 4px; font-size: 12px; color: var(--text-light); text-transform: uppercase; letter-spacing: 0.5px; }
+.config-section label { display: block; padding: 2px 0; cursor: pointer; }
+.config-section label input[type="checkbox"] { margin-right: 6px; }
