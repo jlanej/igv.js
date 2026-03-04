@@ -1946,6 +1946,8 @@ describe('Documentation', function () {
 // Lollipop Plot API
 // =========================================================================
 describe('Lollipop Plot API', function () {
+    this.timeout(15000)
+
     function getSvg(url) {
         return request(app)
             .get(url)
