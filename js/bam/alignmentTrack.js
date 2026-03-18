@@ -1269,6 +1269,14 @@ class AlignmentTrack extends TrackBase {
                             }
                         })
                     }
+
+                    list.push({
+                        label: 'BLAST read sequence at NCBI',
+                        click: () => {
+                            const url = `https://blast.ncbi.nlm.nih.gov/Blast.cgi?PAGE_TYPE=BlastSearch&PROGRAM=blastn&MEGABLAST=on&DATABASE=nt&QUERY=${encodeURIComponent(seqstring)}`
+                            window.open(url, '_blank')
+                        }
+                    })
                 }
 
                 list.push('<hr/>')
