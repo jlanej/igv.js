@@ -1234,7 +1234,7 @@ class AlignmentTrack extends TrackBase {
 
                     if (seqstring.length < maxSequenceSize) {
                         list.push({
-                            label: 'BLAT visible sequence',
+                            label: 'BLAT read sequence',
                             click: () => {
                                 const sequence = clickedAlignment.isNegativeStrand() ? reverseComplementSequence(seqstring) : seqstring
                                 const name = `${clickedAlignment.readName} - blat`
@@ -1269,15 +1269,24 @@ class AlignmentTrack extends TrackBase {
                             }
                         })
                     }
-
-                    list.push({
-                        label: 'BLAST read sequence at NCBI',
-                        click: () => {
-                            const url = `https://blast.ncbi.nlm.nih.gov/Blast.cgi?PAGE_TYPE=BlastSearch&PROGRAM=blastn&MEGABLAST=on&DATABASE=nt&QUERY=${encodeURIComponent(seqstring)}`
-                            window.open(url, '_blank')
-                        }
-                    })
                 }
+
+                list.push({
+                    label: 'BLAST read sequence at NCBI',
+                    click: () => {
+                        const seq = clickedAlignment.seq
+                        if (!seq || seq === "*") {
+                            this.browser.alert.present("Read sequence is not available for BLAST search (this read has no stored sequence data)")
+                            return
+                        }
+                        if (seq.length > maxSequenceSize) {
+                            this.browser.alert.present(`Read sequence is too long for BLAST search (${seq.length} > ${maxSequenceSize})`)
+                            return
+                        }
+                        const url = `https://blast.ncbi.nlm.nih.gov/Blast.cgi?PAGE_TYPE=BlastSearch&PROGRAM=blastn&MEGABLAST=on&DATABASE=nt&QUERY=${encodeURIComponent(seq)}`
+                        window.open(url, '_blank')
+                    }
+                })
 
                 list.push('<hr/>')
             }
