@@ -931,6 +931,7 @@ app.post('/api/export/xlsx', async (req, res) => {
         const exportCfg = mergeWithDefaults(clientExportConfig || {genomeBuild: GENOME})
         const annotationErrors = []  // Track annotation fetch failures
         const exportErrors = []      // Track all non-fatal errors encountered during export
+        const IMAGE_EMBED_RETRIES = 2  // Number of attempts for image embedding
 
         // Determine which variants to include
         let filtered
@@ -1431,6 +1432,9 @@ app.post('/api/export/xlsx', async (req, res) => {
         }
 
         // --- Gene Lollipop Plot worksheets ------------------------------------
+        // Outer try/catch: protects workbook from total section failure
+        // Inner try/catch per gene: isolates individual worksheet failures
+        // Innermost retry loop: retries transient image decode/embed errors
         try {
         if (hasLollipopPlots && geneCol) {
             for (const [gene, imgData] of Object.entries(lollipopPlots)) {
@@ -1457,7 +1461,7 @@ app.post('/api/export/xlsx', async (req, res) => {
 
                 // Embed the lollipop plot image (with retry)
                 let imgEmbedded = false
-                for (let attempt = 0; attempt < 2 && !imgEmbedded; attempt++) {
+                for (let attempt = 0; attempt < IMAGE_EMBED_RETRIES && !imgEmbedded; attempt++) {
                     try {
                         let base64 = imgData
                         let extension = 'png'
@@ -1478,7 +1482,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                         })
                         imgEmbedded = true
                     } catch (imgErr) {
-                        if (attempt === 1) {
+                        if (attempt === IMAGE_EMBED_RETRIES - 1) {
                             lpws.getCell('A4').value = '(Lollipop plot could not be embedded)'
                             lpws.getCell('A4').font = {italic: true, color: {argb: 'FF999999'}}
                             exportErrors.push({section: `Lollipop Plot: ${gene}`, error: `Image embed failed: ${imgErr.message}`})
@@ -1497,6 +1501,7 @@ app.post('/api/export/xlsx', async (req, res) => {
         }
 
         // --- Screenshot worksheets (placed after all data tabs) --------------
+        // Same layered error handling as lollipop plots (see comments above)
         try {
         if (hasScreenshots) {
             const ssSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
@@ -1625,7 +1630,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                 // Embed the screenshot image (with retry)
                 const imgStartRow = infoRow + 2
                 let imgEmbedded = false
-                for (let attempt = 0; attempt < 2 && !imgEmbedded; attempt++) {
+                for (let attempt = 0; attempt < IMAGE_EMBED_RETRIES && !imgEmbedded; attempt++) {
                     try {
                         // imgData should be a base64 PNG/JPEG data URI or raw base64
                         let base64 = imgData
@@ -1648,7 +1653,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                         })
                         imgEmbedded = true
                     } catch (imgErr) {
-                        if (attempt === 1) {
+                        if (attempt === IMAGE_EMBED_RETRIES - 1) {
                             sws.getCell(`A${imgStartRow}`).value = '(Screenshot could not be embedded)'
                             sws.getCell(`A${imgStartRow}`).font = {italic: true, color: {argb: 'FF999999'}}
                             exportErrors.push({section: `Screenshot: ${v.chrom}:${v.pos}`, error: `Image embed failed: ${imgErr.message}`})

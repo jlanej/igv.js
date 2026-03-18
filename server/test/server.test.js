@@ -2987,7 +2987,7 @@ describe('XLSX export robustness', function () {
 
         const varSheet = workbook.getWorksheet('Variants')
         expect(varSheet).to.exist
-        expect(varSheet.rowCount).to.equal(11)
+        expect(varSheet.rowCount).to.equal(11) // header + 10 test variants
     })
 
     it('includes server error details in 500 JSON response', async function () {
