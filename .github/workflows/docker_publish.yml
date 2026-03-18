@@ -4,6 +4,11 @@ on:
   push:
     branches: [master, main]
     paths:
+      - 'js/**'
+      - 'css/**'
+      - 'package.json'
+      - 'rollup.config.js'
+      - 'rollup.config.iife.js'
       - 'server/**'
       - 'Dockerfile'
       - '.dockerignore'
