@@ -923,13 +923,15 @@ app.get('/api/lollipop/:gene', async (req, res) => {
 // XLSX Export – publication-quality workbook with variant data and optional
 // IGV screenshots on per-variant tabs, linked from the main sheet.
 // -------------------------------------------------------------------------
-app.use('/api/export/xlsx', express.json({limit: '50mb'}))
+app.use('/api/export/xlsx', express.json({limit: '200mb'}))
 
 app.post('/api/export/xlsx', async (req, res) => {
     try {
         const {variantIds, screenshots, lollipopPlots, filters: clientFilters, exportConfig: clientExportConfig} = req.body || {}
         const exportCfg = mergeWithDefaults(clientExportConfig || {genomeBuild: GENOME})
         const annotationErrors = []  // Track annotation fetch failures
+        const exportErrors = []      // Track all non-fatal errors encountered during export
+        const IMAGE_EMBED_RETRIES = 2  // Number of attempts for image embedding
 
         // Determine which variants to include
         let filtered
@@ -983,7 +985,7 @@ app.post('/api/export/xlsx', async (req, res) => {
         const geneLpSheetNames = new Map()
         if (hasLollipopPlots && geneCol) {
             for (const gene of Object.keys(lollipopPlots)) {
-                if (lollipopPlots[gene] && typeof lollipopPlots[gene] === 'string' && lollipopPlots[gene].length <= 5 * 1024 * 1024) {
+                if (lollipopPlots[gene] && typeof lollipopPlots[gene] === 'string' && lollipopPlots[gene].length <= 10 * 1024 * 1024) {
                     geneLpSheetNames.set(gene, `LP ${gene}`.substring(0, 31))
                 }
             }
@@ -1090,6 +1092,7 @@ app.post('/api/export/xlsx', async (req, res) => {
 
         // --- Gene Summary worksheet -----------------------------------------
         const xlsSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
+        try {
         if (geneCol && exportCfg.sheets.geneSummary) {
             const geneMap = {}
             for (const v of filtered) {
@@ -1165,6 +1168,10 @@ app.post('/api/export/xlsx', async (req, res) => {
                 gws.autoFilter = {from: 'A1', to: {row: 1, column: gsCols.length}}
             }
         }
+        } catch (sectionErr) {
+            log.warn('Gene Summary worksheet failed:', sectionErr.message)
+            exportErrors.push({section: 'Gene Summary', error: sectionErr.message})
+        }
 
         // --- Sample Summary worksheet ---------------------------------------
         const impactCol = headerColumns.includes('impact') ? 'impact' : null
@@ -1172,7 +1179,7 @@ app.post('/api/export/xlsx', async (req, res) => {
         const sampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
         const ssThresholds = SAMPLE_SUMMARY_THRESHOLDS
         const ssImpactGroups = SAMPLE_SUMMARY_IMPACT_GROUPS
-        {
+        try {
             const sampleMap = {}
             for (const v of filtered) {
                 const sid = sampleCol ? (v[sampleCol] || 'unknown') : 'all'
@@ -1284,9 +1291,13 @@ app.post('/api/export/xlsx', async (req, res) => {
                     })
                 }
             }
+        } catch (sectionErr) {
+            log.warn('Sample Summary worksheet failed:', sectionErr.message)
+            exportErrors.push({section: 'Sample Summary', error: sectionErr.message})
         }
 
         // --- Sample QC worksheet --------------------------------------------
+        try {
         if (sampleQcTrios.length > 0) {
             const metricCols = sampleQcColumns.filter(c => !['trio_id', 'role', 'sample_id'].includes(c))
             const roles = ['proband', 'mother', 'father']
@@ -1336,8 +1347,13 @@ app.post('/api/export/xlsx', async (req, res) => {
             })
             qcws.autoFilter = {from: 'A1', to: {row: 1, column: qcColDefs.length}}
         }
+        } catch (sectionErr) {
+            log.warn('Sample QC worksheet failed:', sectionErr.message)
+            exportErrors.push({section: 'Sample QC', error: sectionErr.message})
+        }
 
         // --- Applied Filters worksheet --------------------------------------
+        try {
         if (clientFilters && typeof clientFilters === 'object' && Object.keys(clientFilters).length > 0) {
             const fws = workbook.addWorksheet('Applied Filters', {views: [{state: 'frozen', ySplit: 1}]})
             fws.columns = [
@@ -1360,6 +1376,10 @@ app.post('/api/export/xlsx', async (req, res) => {
                 })
                 fIdx++
             }
+        }
+        } catch (sectionErr) {
+            log.warn('Applied Filters worksheet failed:', sectionErr.message)
+            exportErrors.push({section: 'Applied Filters', error: sectionErr.message})
         }
 
         // --- Annotation Status worksheet ------------------------------------
@@ -1412,10 +1432,15 @@ app.post('/api/export/xlsx', async (req, res) => {
         }
 
         // --- Gene Lollipop Plot worksheets ------------------------------------
+        // Outer try/catch: protects workbook from total section failure
+        // Inner try/catch per gene: isolates individual worksheet failures
+        // Innermost retry loop: retries transient image decode/embed errors
+        try {
         if (hasLollipopPlots && geneCol) {
             for (const [gene, imgData] of Object.entries(lollipopPlots)) {
-                if (!imgData || typeof imgData !== 'string' || imgData.length > 5 * 1024 * 1024) continue
+                if (!imgData || typeof imgData !== 'string' || imgData.length > 10 * 1024 * 1024) continue
                 const safeName = `LP ${gene}`.substring(0, 31)
+                try {
                 const lpws = workbook.addWorksheet(safeName)
                 lpws.getCell('A1').value = `Lollipop Plot: ${gene}`
                 lpws.getCell('A1').font = {bold: true, size: 14, color: {argb: 'FF2C3E50'}}
@@ -1434,33 +1459,50 @@ app.post('/api/export/xlsx', async (req, res) => {
                 lpws.getCell('D1').font = {color: {argb: 'FF2980B9'}, underline: true}
                 lpws.getColumn(4).width = 22
 
-                // Embed the lollipop plot image
-                try {
-                    let base64 = imgData
-                    let extension = 'png'
-                    if (base64.startsWith('data:image/jpeg;base64,')) {
-                        base64 = base64.replace('data:image/jpeg;base64,', '')
-                        extension = 'jpeg'
-                    } else if (base64.startsWith('data:image/png;base64,')) {
-                        base64 = base64.replace('data:image/png;base64,', '')
-                    }
+                // Embed the lollipop plot image (with retry)
+                let imgEmbedded = false
+                for (let attempt = 0; attempt < IMAGE_EMBED_RETRIES && !imgEmbedded; attempt++) {
+                    try {
+                        let base64 = imgData
+                        let extension = 'png'
+                        if (base64.startsWith('data:image/jpeg;base64,')) {
+                            base64 = base64.replace('data:image/jpeg;base64,', '')
+                            extension = 'jpeg'
+                        } else if (base64.startsWith('data:image/png;base64,')) {
+                            base64 = base64.replace('data:image/png;base64,', '')
+                        }
 
-                    const imageId = workbook.addImage({
-                        buffer: Buffer.from(base64, 'base64'),
-                        extension: extension
-                    })
-                    lpws.addImage(imageId, {
-                        tl: {col: 0, row: 3},
-                        ext: {width: 900, height: 340}
-                    })
-                } catch (imgErr) {
-                    lpws.getCell('A4').value = '(Lollipop plot could not be embedded)'
-                    lpws.getCell('A4').font = {italic: true, color: {argb: 'FF999999'}}
+                        const imageId = workbook.addImage({
+                            buffer: Buffer.from(base64, 'base64'),
+                            extension: extension
+                        })
+                        lpws.addImage(imageId, {
+                            tl: {col: 0, row: 3},
+                            ext: {width: 900, height: 340}
+                        })
+                        imgEmbedded = true
+                    } catch (imgErr) {
+                        if (attempt === IMAGE_EMBED_RETRIES - 1) {
+                            lpws.getCell('A4').value = '(Lollipop plot could not be embedded)'
+                            lpws.getCell('A4').font = {italic: true, color: {argb: 'FF999999'}}
+                            exportErrors.push({section: `Lollipop Plot: ${gene}`, error: `Image embed failed: ${imgErr.message}`})
+                        }
+                    }
+                }
+                } catch (lpErr) {
+                    log.warn(`Lollipop worksheet failed for ${gene}:`, lpErr.message)
+                    exportErrors.push({section: `Lollipop Plot: ${gene}`, error: lpErr.message})
                 }
             }
         }
+        } catch (sectionErr) {
+            log.warn('Lollipop Plot worksheets failed:', sectionErr.message)
+            exportErrors.push({section: 'Lollipop Plots', error: sectionErr.message})
+        }
 
         // --- Screenshot worksheets (placed after all data tabs) --------------
+        // Same layered error handling as lollipop plots (see comments above)
+        try {
         if (hasScreenshots) {
             const ssSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
             for (const [sheetName, vid] of sheetNames) {
@@ -1468,6 +1510,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                 const imgData = screenshots[String(vid)]
                 if (!v || !imgData) continue
 
+                try {
                 const sws = workbook.addWorksheet(sheetName)
 
                 // Header rows with variant info
@@ -1584,32 +1627,82 @@ app.post('/api/export/xlsx', async (req, res) => {
                 sws.getColumn(3).width = 5
                 sws.getColumn(4).width = 22
 
-                // Embed the screenshot image
+                // Embed the screenshot image (with retry)
                 const imgStartRow = infoRow + 2
-                try {
-                    // imgData should be a base64 PNG/JPEG data URI or raw base64
-                    let base64 = imgData
-                    let extension = 'png'
-                    if (base64.startsWith('data:image/jpeg;base64,')) {
-                        base64 = base64.replace('data:image/jpeg;base64,', '')
-                        extension = 'jpeg'
-                    } else if (base64.startsWith('data:image/png;base64,')) {
-                        base64 = base64.replace('data:image/png;base64,', '')
+                let imgEmbedded = false
+                for (let attempt = 0; attempt < IMAGE_EMBED_RETRIES && !imgEmbedded; attempt++) {
+                    try {
+                        // imgData should be a base64 PNG/JPEG data URI or raw base64
+                        let base64 = imgData
+                        let extension = 'png'
+                        if (base64.startsWith('data:image/jpeg;base64,')) {
+                            base64 = base64.replace('data:image/jpeg;base64,', '')
+                            extension = 'jpeg'
+                        } else if (base64.startsWith('data:image/png;base64,')) {
+                            base64 = base64.replace('data:image/png;base64,', '')
+                        }
+
+                        const imageId = workbook.addImage({
+                            buffer: Buffer.from(base64, 'base64'),
+                            extension: extension
+                        })
+
+                        sws.addImage(imageId, {
+                            tl: {col: 0, row: imgStartRow - 1},
+                            ext: {width: 1800, height: 800}
+                        })
+                        imgEmbedded = true
+                    } catch (imgErr) {
+                        if (attempt === IMAGE_EMBED_RETRIES - 1) {
+                            sws.getCell(`A${imgStartRow}`).value = '(Screenshot could not be embedded)'
+                            sws.getCell(`A${imgStartRow}`).font = {italic: true, color: {argb: 'FF999999'}}
+                            exportErrors.push({section: `Screenshot: ${v.chrom}:${v.pos}`, error: `Image embed failed: ${imgErr.message}`})
+                        }
                     }
-
-                    const imageId = workbook.addImage({
-                        buffer: Buffer.from(base64, 'base64'),
-                        extension: extension
-                    })
-
-                    sws.addImage(imageId, {
-                        tl: {col: 0, row: imgStartRow - 1},
-                        ext: {width: 1800, height: 800}
-                    })
-                } catch (imgErr) {
-                    sws.getCell(`A${imgStartRow}`).value = '(Screenshot could not be embedded)'
-                    sws.getCell(`A${imgStartRow}`).font = {italic: true, color: {argb: 'FF999999'}}
                 }
+                } catch (ssErr) {
+                    log.warn(`Screenshot worksheet failed for variant ${vid}:`, ssErr.message)
+                    exportErrors.push({section: `Screenshot: variant ${vid}`, error: ssErr.message})
+                }
+            }
+        }
+        } catch (sectionErr) {
+            log.warn('Screenshot worksheets failed:', sectionErr.message)
+            exportErrors.push({section: 'Screenshots', error: sectionErr.message})
+        }
+
+        // --- Export Errors worksheet -----------------------------------------
+        // If any non-fatal errors occurred during export, embed them in a
+        // dedicated tab so the user can see exactly what went wrong.
+        if (exportErrors.length > 0) {
+            try {
+                const errWs = workbook.addWorksheet('Export Errors', {views: [{state: 'frozen', ySplit: 1}]})
+                errWs.columns = [
+                    {header: 'Section', key: 'section', width: 28},
+                    {header: 'Error', key: 'error', width: 60},
+                    {header: 'Timestamp', key: 'timestamp', width: 22}
+                ]
+                const errHeader = errWs.getRow(1)
+                errHeader.eachCell(cell => {
+                    cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFC0392B'}}
+                    cell.font = {bold: true, color: {argb: 'FFFFFFFF'}, size: 11}
+                    cell.border = borderThin
+                    cell.alignment = {vertical: 'middle', horizontal: 'center'}
+                })
+                errHeader.height = 24
+
+                const ts = new Date().toISOString()
+                exportErrors.forEach((err, idx) => {
+                    const row = errWs.addRow({section: err.section, error: err.error, timestamp: ts})
+                    row.eachCell(cell => {
+                        cell.border = borderThin
+                        if (idx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
+                    })
+                })
+
+                log.warn(`XLSX export completed with ${exportErrors.length} non-fatal error(s)`)
+            } catch (errSheetErr) {
+                log.warn('Failed to create Export Errors worksheet:', errSheetErr.message)
             }
         }
 
@@ -1619,8 +1712,10 @@ app.post('/api/export/xlsx', async (req, res) => {
         await workbook.xlsx.write(res)
         res.end()
     } catch (err) {
-        log.error('XLSX export error:', err.message)
-        res.status(500).json({error: 'Failed to generate XLSX export'})
+        log.error('XLSX export error:', err.message, err.stack)
+        if (!res.headersSent) {
+            res.status(500).json({error: `XLSX export failed: ${err.message}`})
+        }
     }
 })
 

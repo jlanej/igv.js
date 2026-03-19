@@ -2877,3 +2877,125 @@ describe('XLSX Annotation Status worksheet', function () {
         expect(hasConfig).to.be.true
     })
 })
+
+describe('XLSX export robustness', function () {
+    const xlsxParser = (res, callback) => {
+        const chunks = []
+        res.on('data', chunk => chunks.push(chunk))
+        res.on('end', () => callback(null, Buffer.concat(chunks)))
+    }
+
+    it('returns detailed error message on invalid request', async function () {
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [9999]})
+            .expect(400)
+        expect(res.body).to.have.property('error')
+        expect(res.body.error).to.be.a('string')
+        expect(res.body.error.length).to.be.greaterThan(0)
+    })
+
+    it('exports workbook even with invalid screenshot data', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1],
+                screenshots: {'0': 'not-valid-base64!!!'}
+            })
+            .buffer(true)
+            .parse(xlsxParser)
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const varSheet = workbook.getWorksheet('Variants')
+        expect(varSheet).to.exist
+        expect(varSheet.rowCount).to.be.at.least(2)
+    })
+
+    it('exports workbook even with invalid lollipop image data', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1, 2],
+                lollipopPlots: {GENE1: 'not-valid-base64!!!'}
+            })
+            .buffer(true)
+            .parse(xlsxParser)
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const varSheet = workbook.getWorksheet('Variants')
+        expect(varSheet).to.exist
+    })
+
+    it('accepts large body payloads without 413 error', async function () {
+        this.timeout(15000)
+        const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+        const screenshots = {}
+        for (let i = 0; i < 5; i++) {
+            screenshots[String(i)] = tinyPng
+        }
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4], screenshots})
+            .buffer(true)
+            .parse(xlsxParser)
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+        expect(workbook.getWorksheet('Variants')).to.exist
+    })
+
+    it('creates screenshot sheet even when image embed fails', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0],
+                screenshots: {'0': 'data:image/png;base64,INVALID_BASE64_DATA!!!'}
+            })
+            .buffer(true)
+            .parse(xlsxParser)
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        expect(workbook.getWorksheet('Variants')).to.exist
+        const sheetNames = workbook.worksheets.map(ws => ws.name)
+        expect(sheetNames).to.include('1')
+    })
+
+    it('handles all variants export without hidden size limits', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({})
+            .buffer(true)
+            .parse(xlsxParser)
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+
+        const varSheet = workbook.getWorksheet('Variants')
+        expect(varSheet).to.exist
+        expect(varSheet.rowCount).to.equal(11) // header + 10 test variants
+    })
+
+    it('includes server error details in 500 JSON response', async function () {
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [99999]})
+            .expect(400)
+        expect(res.body).to.have.property('error')
+        expect(res.body.error).to.include('No variants')
+    })
+})

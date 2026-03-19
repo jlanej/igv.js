@@ -1442,43 +1442,59 @@
             }
         }
 
-        // Send to server for XLSX generation
+        // Send to server for XLSX generation (with retry)
         progressText.textContent = 'Generating XLSX…'
         progressFill.style.width = '90%'
 
-        try {
-            const xlsxRes = await fetch('/api/export/xlsx', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({variantIds, screenshots, lollipopPlots, filters, exportConfig})
-            })
+        const maxRetries = 2
+        let lastError = null
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                if (attempt > 1) {
+                    progressText.textContent = `Retrying XLSX generation (attempt ${attempt}/${maxRetries})…`
+                }
 
-            if (!xlsxRes.ok) {
-                let msg = 'Export failed'
-                try { const err = await xlsxRes.json(); msg = err.error || msg } catch (_) {}
-                throw new Error(msg)
+                const xlsxRes = await fetch('/api/export/xlsx', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({variantIds, screenshots, lollipopPlots, filters, exportConfig})
+                })
+
+                if (!xlsxRes.ok) {
+                    let msg = `Export failed (HTTP ${xlsxRes.status})`
+                    try { const err = await xlsxRes.json(); msg = err.error || msg } catch (_) {}
+                    throw new Error(msg)
+                }
+
+                const blob = await xlsxRes.blob()
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = 'variants_export.xlsx'
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+                URL.revokeObjectURL(url)
+
+                progressText.textContent = 'Done!'
+                progressFill.style.width = '100%'
+                showNotification(`Exported ${allVariants.length} variants to XLSX`, 'success')
+                lastError = null
+                break
+            } catch (err) {
+                console.error(`XLSX export error (attempt ${attempt}/${maxRetries}):`, err)
+                lastError = err
+                if (attempt < maxRetries) {
+                    // Brief pause before retry
+                    await new Promise(r => setTimeout(r, 1000))
+                }
             }
-
-            const blob = await xlsxRes.blob()
-            const url = URL.createObjectURL(blob)
-            const a = document.createElement('a')
-            a.href = url
-            a.download = 'variants_export.xlsx'
-            document.body.appendChild(a)
-            a.click()
-            document.body.removeChild(a)
-            URL.revokeObjectURL(url)
-
-            progressText.textContent = 'Done!'
-            progressFill.style.width = '100%'
-            showNotification(`Exported ${allVariants.length} variants to XLSX`, 'success')
-        } catch (err) {
-            console.error('XLSX export error:', err)
-            showNotification('XLSX export failed: ' + err.message, 'warn')
-        } finally {
-            btn.disabled = false
-            setTimeout(() => { progressDiv.style.display = 'none' }, 2000)
         }
+        if (lastError) {
+            showNotification('XLSX export failed: ' + lastError.message, 'warn')
+        }
+        btn.disabled = false
+        setTimeout(() => { progressDiv.style.display = 'none' }, 2000)
     }
 
     // -----------------------------------------------------------------------
