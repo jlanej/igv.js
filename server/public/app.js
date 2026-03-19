@@ -331,11 +331,14 @@
 
     function getActiveFilters() {
         const params = {}
+
+        // Column-specific filters (dropdowns, range inputs)
         document.querySelectorAll('[data-filter]').forEach(el => {
             const key = el.dataset.filter
             const val = el.value.trim()
             if (val) params[key] = val
         })
+        // Checkbox group filters (categorical multi-select)
         document.querySelectorAll('[data-checkbox-filter]').forEach(group => {
             const key = group.dataset.checkboxFilter
             const checked = [...group.querySelectorAll('input[type="checkbox"]:checked')]
@@ -353,6 +356,16 @@
         if (activeConds.length > 0) {
             params.functional_filter = JSON.stringify(activeConds)
         }
+        // Free-text search
+        const searchInput = document.getElementById('variant-search')
+        if (searchInput && searchInput.value.trim()) {
+            params.search = searchInput.value.trim()
+        }
+        // Active sort (for reproducibility)
+        if (sortField) {
+            params.sort = sortField
+            params.order = sortOrder || 'asc'
+        }
         return params
     }
 
@@ -361,6 +374,10 @@
         document.querySelectorAll('[data-checkbox-filter] input[type="checkbox"]').forEach(cb => { cb.checked = false })
         functionalConditions = []
         renderFunctionalFilterRows()
+        const searchInput = document.getElementById('variant-search')
+        if (searchInput) searchInput.value = ''
+        sortField = ''
+        sortOrder = ''
         currentPage = 1
         loadVariants()
     }
@@ -369,22 +386,14 @@
     // Variant loading
     // -----------------------------------------------------------------------
     async function loadVariants() {
+        // getActiveFilters() already includes search and sort for reproducibility;
+        // add pagination on top.
         const filters = getActiveFilters()
         const params = new URLSearchParams({
             ...filters,
             page: currentPage,
             per_page: perPage
         })
-        if (sortField) {
-            params.set('sort', sortField)
-            params.set('order', sortOrder)
-        }
-
-        // Include search term if present
-        const searchInput = document.getElementById('variant-search')
-        if (searchInput && searchInput.value.trim()) {
-            params.set('search', searchInput.value.trim())
-        }
 
         const res = await fetch(`/api/variants?${params}`)
         const data = await res.json()
@@ -2035,6 +2044,23 @@
                         renderFunctionalFilterRows()
                     }
                 } catch (_) { /* ignore invalid JSON */ }
+                continue
+            }
+
+            // Search term – restore free-text input
+            if (key === 'search') {
+                const searchInput = document.getElementById('variant-search')
+                if (searchInput) searchInput.value = val
+                continue
+            }
+
+            // Sort field/order – restore table sort state
+            if (key === 'sort') {
+                sortField = val
+                continue
+            }
+            if (key === 'order') {
+                sortOrder = val
                 continue
             }
 

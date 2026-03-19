@@ -888,18 +888,21 @@ describe('XLSX Applied Filters sheet', function () {
         filtersSheet.getRow(1).eachCell(cell => fHeader.push(cell.value))
         expect(fHeader).to.include('Filter')
         expect(fHeader).to.include('Value')
-        // Should have one row per filter + header
-        expect(filtersSheet.rowCount).to.equal(Object.keys(sentFilters).length + 1)
-        // Check filter values
+        // Sheet now always includes a 'Variant Filters' heading + filter rows + 'Export Settings' heading + settings rows
+        expect(filtersSheet.rowCount).to.be.at.least(Object.keys(sentFilters).length + 1)
+        // Check filter values appear somewhere in the sheet
         const filterValues = []
         for (let r = 2; r <= filtersSheet.rowCount; r++) {
             filterValues.push(filtersSheet.getRow(r).getCell(1).value)
         }
         expect(filterValues).to.include('Impact')
         expect(filterValues).to.include('Frequency Max')
+        // Export Settings section should also be present
+        expect(filterValues).to.include('Export Settings')
+        expect(filterValues).to.include('Genome Build')
     })
 
-    it('omits Applied Filters sheet when no filters provided', async function () {
+    it('always creates Applied Filters sheet (includes Export Settings even without filters)', async function () {
         this.timeout(10000)
         const res = await request(app)
             .post('/api/export/xlsx')
@@ -914,7 +917,126 @@ describe('XLSX Applied Filters sheet', function () {
 
         const workbook = new ExcelJS.Workbook()
         await workbook.xlsx.load(res.body)
-        expect(workbook.getWorksheet('Applied Filters')).to.be.undefined
+        const filtersSheet = workbook.getWorksheet('Applied Filters')
+        expect(filtersSheet).to.exist
+        // Should contain Export Settings even with no user filters
+        const filterValues = []
+        for (let r = 2; r <= filtersSheet.rowCount; r++) {
+            filterValues.push(filtersSheet.getRow(r).getCell(1).value)
+        }
+        expect(filterValues).to.include('Export Settings')
+        expect(filterValues).to.include('Genome Build')
+    })
+
+    it('renders functional_filter as human-readable condition rows in XLSX', async function () {
+        this.timeout(10000)
+        const conditions = [
+            {col: 'impact', op: 'in', values: ['HIGH', 'MODERATE']},
+            {col: 'quality', op: '>', value: 40}
+        ]
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1, 2, 3, 4],
+                filters: {functional_filter: JSON.stringify(conditions)}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+        const filtersSheet = workbook.getWorksheet('Applied Filters')
+        expect(filtersSheet).to.exist
+        const rowValues = []
+        for (let r = 1; r <= filtersSheet.rowCount; r++) {
+            const row = filtersSheet.getRow(r)
+            rowValues.push({filter: row.getCell(1).value, value: row.getCell(2).value})
+        }
+        // Should have a "Functional Filter (OR)" label row
+        const ffRow = rowValues.find(r => String(r.filter || '').includes('Functional Filter'))
+        expect(ffRow).to.exist
+        // Should have per-condition rows with human-readable descriptions
+        const condRow1 = rowValues.find(r => String(r.value || '').includes('impact in [HIGH, MODERATE]'))
+        expect(condRow1).to.exist
+        const condRow2 = rowValues.find(r => String(r.value || '').includes('quality > 40'))
+        expect(condRow2).to.exist
+    })
+
+    it('includes sort and search in Applied Filters sheet', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1, 2],
+                filters: {sort: 'quality', order: 'desc', search: 'GENE1'}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+        const filtersSheet = workbook.getWorksheet('Applied Filters')
+        expect(filtersSheet).to.exist
+        const filterValues = []
+        const filterCellValues = {}
+        for (let r = 2; r <= filtersSheet.rowCount; r++) {
+            const row = filtersSheet.getRow(r)
+            const label = String(row.getCell(1).value || '')
+            const val = String(row.getCell(2).value || '')
+            filterValues.push(label)
+            filterCellValues[label] = val
+        }
+        // Sort row should appear (with order combined)
+        expect(filterValues).to.include('Sort')
+        expect(filterCellValues['Sort']).to.include('quality')
+        expect(filterCellValues['Sort']).to.include('desc')
+        // Search row should appear
+        expect(filterValues).to.include('Search')
+        expect(filterCellValues['Search']).to.equal('GENE1')
+    })
+
+    it('includes variantColumns in Applied Filters / Export Settings', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0],
+                exportConfig: {variantColumns: {coreVariant: true, geneInfo: true, frequency: false}}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+        const filtersSheet = workbook.getWorksheet('Applied Filters')
+        expect(filtersSheet).to.exist
+        const filterValues = []
+        const filterCellValues = {}
+        for (let r = 2; r <= filtersSheet.rowCount; r++) {
+            const row = filtersSheet.getRow(r)
+            const label = String(row.getCell(1).value || '')
+            const val = String(row.getCell(2).value || '')
+            filterValues.push(label)
+            filterCellValues[label] = val
+        }
+        // Excluded columns should be listed
+        expect(filterValues).to.include('Variant Columns Excluded')
+        expect(filterCellValues['Variant Columns Excluded']).to.include('frequency')
     })
 })
 
