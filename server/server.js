@@ -343,6 +343,71 @@ function getTrioQcMap() {
     return new Map(sampleQcTrios.map(t => [t.trio_id, t]))
 }
 
+/**
+ * Evaluate a single functional filter condition against a variant.
+ *
+ * Supported operators:
+ *   Categorical : "in"  – cell value matches one of `values` (case-insensitive)
+ *                "eq"  – cell equals `value` (case-insensitive)
+ *                "neq" – cell does not equal `value` (case-insensitive)
+ *                "contains" – cell contains `value` as a substring (case-insensitive)
+ *   Numeric     : ">"  ">="  "<"  "<=" – numeric comparison against `value`
+ *
+ * @param {Object} variant - A single variant row object
+ * @param {{col:string, op:string, value?:string|number, values?:string[]}} cond
+ * @returns {boolean}
+ */
+function evaluateCondition(variant, cond) {
+    const {col, op, value, values} = cond
+    const cell = variant[col]
+
+    switch (op) {
+        case 'in': {
+            const cellStr = String(cell ?? '').toLowerCase()
+            return Array.isArray(values) && values.some(v => cellStr === String(v).toLowerCase())
+        }
+        case 'eq': {
+            return String(cell ?? '').toLowerCase() === String(value ?? '').toLowerCase()
+        }
+        case 'neq': {
+            return String(cell ?? '').toLowerCase() !== String(value ?? '').toLowerCase()
+        }
+        case 'contains': {
+            return String(cell ?? '').toLowerCase().includes(String(value ?? '').toLowerCase())
+        }
+        case '>': {
+            const n = Number(cell)
+            return !isNaN(n) && n > Number(value)
+        }
+        case '>=': {
+            const n = Number(cell)
+            return !isNaN(n) && n >= Number(value)
+        }
+        case '<': {
+            const n = Number(cell)
+            return !isNaN(n) && n < Number(value)
+        }
+        case '<=': {
+            const n = Number(cell)
+            return !isNaN(n) && n <= Number(value)
+        }
+        default:
+            return false
+    }
+}
+
+/**
+ * Return true if the variant satisfies at least one condition in the list
+ * (OR semantics across the conditions array).
+ *
+ * @param {Object} variant
+ * @param {Array} conditions - Array of condition objects (see evaluateCondition)
+ * @returns {boolean}
+ */
+function matchesFunctionalFilter(variant, conditions) {
+    return conditions.some(cond => evaluateCondition(variant, cond))
+}
+
 function applyFilters(query) {
     let filtered = [...variants]
 
@@ -356,8 +421,22 @@ function applyFilters(query) {
         }
     }
 
+    // Functional filter: JSON-encoded array of OR conditions, each condition
+    // may test any column with any supported operator.
+    if (query.functional_filter) {
+        try {
+            const conditions = JSON.parse(query.functional_filter)
+            if (Array.isArray(conditions) && conditions.length > 0) {
+                filtered = filtered.filter(v => matchesFunctionalFilter(v, conditions))
+            }
+        } catch (_) {
+            // Malformed JSON – silently ignore so other filters still apply
+        }
+    }
+
     for (const [key, val] of Object.entries(query)) {
-        if (key === 'page' || key === 'per_page' || key === 'sort' || key === 'order' || key === 'search') continue
+        if (key === 'page' || key === 'per_page' || key === 'sort' || key === 'order' ||
+            key === 'search' || key === 'functional_filter') continue
         if (!val) continue
 
         // Range filters: field_min / field_max

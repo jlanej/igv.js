@@ -84,6 +84,9 @@
     // Maximum unique values for a category to display as checkboxes instead of a dropdown
     const CHECKBOX_THRESHOLD = 10
 
+    // Functional filter conditions – each entry: {col, op, value}
+    let functionalConditions = []
+
     function buildFilterPanel() {
         const container = document.getElementById('filter-controls')
         container.innerHTML = ''
@@ -112,7 +115,125 @@
             }
         }
 
+        // Functional filter – OR conditions across any column
+        container.appendChild(createFunctionalFilterGroup())
+
         setupFilterCollapseAll()
+    }
+
+    // -----------------------------------------------------------------------
+    // Functional Filter
+    // -----------------------------------------------------------------------
+
+    const FUNCTIONAL_FILTER_OPS = [
+        {value: 'in',       label: 'is one of (comma-separated)'},
+        {value: 'eq',       label: 'equals'},
+        {value: 'neq',      label: 'not equals'},
+        {value: 'contains', label: 'contains'},
+        {value: '>',        label: '> (greater than)'},
+        {value: '>=',       label: '>= (greater or equal)'},
+        {value: '<',        label: '< (less than)'},
+        {value: '<=',       label: '<= (less or equal)'}
+    ]
+
+    function createFunctionalFilterGroup() {
+        const div = document.createElement('div')
+        div.className = 'filter-group'
+        div.id = 'functional-filter-group'
+        div.innerHTML = `
+            <div class="filter-group-header" role="button" tabindex="0" aria-expanded="true">
+                <span class="toggle-icon">▼</span>Functional Filter
+            </div>
+            <div class="filter-group-content">
+                <p class="functional-filter-hint">OR conditions – a variant passes if <em>any</em> condition matches.</p>
+                <div id="functional-filter-rows"></div>
+                <button type="button" id="btn-add-condition" class="btn-secondary">+ Add Condition</button>
+            </div>`
+        setupFilterGroupToggle(div)
+
+        // Render existing conditions (e.g. restored from saved config)
+        renderFunctionalFilterRows()
+
+        div.querySelector('#btn-add-condition').addEventListener('click', () => {
+            functionalConditions.push({col: config.columns[0] || '', op: 'in', value: ''})
+            renderFunctionalFilterRows()
+        })
+
+        return div
+    }
+
+    function renderFunctionalFilterRows() {
+        const container = document.getElementById('functional-filter-rows')
+        if (!container) return
+        container.innerHTML = ''
+
+        const colOptions = (config.columns || [])
+            .filter(c => c !== 'curation_note')
+            .map(c => `<option value="${escapeHtml(c)}">${formatLabel(c)}</option>`)
+            .join('')
+
+        const opOptions = FUNCTIONAL_FILTER_OPS
+            .map(o => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`)
+            .join('')
+
+        functionalConditions.forEach((cond, idx) => {
+            const row = document.createElement('div')
+            row.className = 'functional-condition-row'
+            // For "in" operator, display values array as comma-separated string
+            const displayVal = cond.op === 'in'
+                ? (Array.isArray(cond.values) ? cond.values.join(', ') : (cond.value ?? ''))
+                : (cond.value ?? '')
+            row.innerHTML = `
+                <select class="fc-col">
+                    ${colOptions}
+                </select>
+                <select class="fc-op">
+                    ${opOptions}
+                </select>
+                <input type="text" class="fc-val" placeholder="${cond.op === 'in' ? 'val1, val2, …' : 'value'}" value="${escapeHtml(String(displayVal))}">
+                <button type="button" class="fc-remove btn-icon" title="Remove condition">×</button>`
+
+            row.querySelector('.fc-col').value = cond.col
+            row.querySelector('.fc-op').value = cond.op
+
+            row.querySelector('.fc-col').addEventListener('change', e => {
+                functionalConditions[idx].col = e.target.value
+            })
+            row.querySelector('.fc-op').addEventListener('change', e => {
+                const newOp = e.target.value
+                const valInput = row.querySelector('.fc-val')
+                // Update placeholder when switching operators
+                valInput.placeholder = newOp === 'in' ? 'val1, val2, …' : 'value'
+                functionalConditions[idx].op = newOp
+                // Migrate stored value ↔ values when toggling to/from "in"
+                if (newOp === 'in') {
+                    const raw = String(functionalConditions[idx].value ?? '')
+                    functionalConditions[idx].values = raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : []
+                    delete functionalConditions[idx].value
+                } else {
+                    const raw = Array.isArray(functionalConditions[idx].values)
+                        ? functionalConditions[idx].values.join(', ')
+                        : (functionalConditions[idx].value ?? '')
+                    functionalConditions[idx].value = raw
+                    delete functionalConditions[idx].values
+                }
+            })
+            row.querySelector('.fc-val').addEventListener('input', e => {
+                if (functionalConditions[idx].op === 'in') {
+                    // Store as values array (split on commas)
+                    functionalConditions[idx].values = e.target.value
+                        .split(',').map(s => s.trim()).filter(Boolean)
+                } else {
+                    functionalConditions[idx].value = e.target.value
+                }
+            })
+            row.querySelector('.fc-remove').addEventListener('click', () => {
+                functionalConditions.splice(idx, 1)
+                renderFunctionalFilterRows()
+            })
+
+            container.appendChild(row)
+        })
     }
 
     function createFilterGroup(col, options) {
@@ -221,12 +342,25 @@
                 .map(cb => cb.value)
             if (checked.length > 0) params[key] = checked.join(',')
         })
+        // Serialize functional conditions (skip incomplete rows)
+        const activeConds = functionalConditions.filter(c => {
+            if (!c.col || !c.op) return false
+            // "in" operator requires a non-empty values array
+            if (c.op === 'in') return Array.isArray(c.values) && c.values.length > 0
+            // all other operators require a non-empty value string
+            return String(c.value ?? '').trim() !== ''
+        })
+        if (activeConds.length > 0) {
+            params.functional_filter = JSON.stringify(activeConds)
+        }
         return params
     }
 
     function clearFilters() {
         document.querySelectorAll('[data-filter]').forEach(el => { el.value = '' })
         document.querySelectorAll('[data-checkbox-filter] input[type="checkbox"]').forEach(cb => { cb.checked = false })
+        functionalConditions = []
+        renderFunctionalFilterRows()
         currentPage = 1
         loadVariants()
     }
@@ -1892,6 +2026,18 @@
 
     function applyFiltersToUI(filters) {
         for (const [key, val] of Object.entries(filters)) {
+            // Functional filter – restore conditions array
+            if (key === 'functional_filter') {
+                try {
+                    const conds = JSON.parse(val)
+                    if (Array.isArray(conds)) {
+                        functionalConditions = conds
+                        renderFunctionalFilterRows()
+                    }
+                } catch (_) { /* ignore invalid JSON */ }
+                continue
+            }
+
             // Check for checkbox group first
             const group = document.querySelector(`[data-checkbox-filter="${key}"]`)
             if (group) {
