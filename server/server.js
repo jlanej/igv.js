@@ -526,7 +526,7 @@ function applyFilters(query) {
 // Express app
 // ---------------------------------------------------------------------------
 const app = express()
-app.use(express.json({limit: '50mb'}))
+app.use(express.json({limit: '200mb'}))
 app.use(log.requestLogger)
 
 // Serve static UI files
