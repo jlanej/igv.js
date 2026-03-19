@@ -3253,15 +3253,15 @@ describe('XLSX export robustness', function () {
     })
 
     it('accepts large body payloads without 413 error', async function () {
-        this.timeout(15000)
-        const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
-        const screenshots = {}
-        for (let i = 0; i < 5; i++) {
-            screenshots[String(i)] = tinyPng
-        }
+        this.timeout(30000)
+        // Build a fake screenshot entry that pushes the JSON body over the old
+        // 50 MB global limit so we can confirm the 200 MB limit is in effect.
+        // 51 MB of base64 characters (~= 51 * 1024 * 1024 chars).
+        const bigFakeBase64 = 'A'.repeat(51 * 1024 * 1024)
+        const screenshots = {'0': `data:image/png;base64,${bigFakeBase64}`}
         const res = await request(app)
             .post('/api/export/xlsx')
-            .send({variantIds: [0, 1, 2, 3, 4], screenshots})
+            .send({variantIds: [0], screenshots})
             .buffer(true)
             .parse(xlsxParser)
             .expect(200)
