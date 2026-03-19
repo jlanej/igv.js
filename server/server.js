@@ -343,6 +343,108 @@ function getTrioQcMap() {
     return new Map(sampleQcTrios.map(t => [t.trio_id, t]))
 }
 
+/**
+ * Evaluate a single functional filter condition against a variant.
+ *
+ * Supported operators:
+ *   Categorical : "in"  – cell value matches one of `values` (case-insensitive)
+ *                "eq"  – cell equals `value` (case-insensitive)
+ *                "neq" – cell does not equal `value` (case-insensitive)
+ *                "contains" – cell contains `value` as a substring (case-insensitive)
+ *   Numeric     : ">"  ">="  "<"  "<=" – numeric comparison against `value`
+ *
+ * @param {Object} variant - A single variant row object
+ * @param {{col:string, op:string, value?:string|number, values?:string[]}} cond
+ * @returns {boolean}
+ */
+function evaluateCondition(variant, cond) {
+    const {col, op, value, values} = cond
+    const cell = variant[col]
+
+    switch (op) {
+        case 'in': {
+            const cellStr = String(cell ?? '').toLowerCase()
+            return Array.isArray(values) && values.some(v => cellStr === String(v).toLowerCase())
+        }
+        case 'eq': {
+            return String(cell ?? '').toLowerCase() === String(value ?? '').toLowerCase()
+        }
+        case 'neq': {
+            return String(cell ?? '').toLowerCase() !== String(value ?? '').toLowerCase()
+        }
+        case 'contains': {
+            return String(cell ?? '').toLowerCase().includes(String(value ?? '').toLowerCase())
+        }
+        case '>': {
+            const n = Number(cell)
+            return !isNaN(n) && n > Number(value)
+        }
+        case '>=': {
+            const n = Number(cell)
+            return !isNaN(n) && n >= Number(value)
+        }
+        case '<': {
+            const n = Number(cell)
+            return !isNaN(n) && n < Number(value)
+        }
+        case '<=': {
+            const n = Number(cell)
+            return !isNaN(n) && n <= Number(value)
+        }
+        default:
+            return false
+    }
+}
+
+/**
+ * Return true if the variant satisfies at least one condition in the list
+ * (OR semantics across the conditions array).
+ *
+ * @param {Object} variant
+ * @param {Array} conditions - Array of condition objects (see evaluateCondition)
+ * @returns {boolean}
+ */
+function matchesFunctionalFilter(variant, conditions) {
+    return conditions.some(cond => evaluateCondition(variant, cond))
+}
+
+/**
+ * Format a single functional filter condition as a human-readable phrase.
+ * @param {{col:string, op:string, value?:*, values?:string[]}} cond
+ * @returns {string}
+ */
+function formatCondition(cond) {
+    const col = cond.col || '?'
+    const op = cond.op || '?'
+    if (op === 'in') {
+        const vals = Array.isArray(cond.values) ? cond.values.join(', ') : String(cond.value ?? '')
+        return `${col} in [${vals}]`
+    }
+    if (op === 'eq') return `${col} = ${cond.value ?? ''}`
+    if (op === 'neq') return `${col} ≠ ${cond.value ?? ''}`
+    if (op === 'contains') return `${col} contains "${cond.value ?? ''}"`
+    return `${col} ${op} ${cond.value ?? ''}`
+}
+
+/**
+ * Convert a functional_filter JSON string into a human-readable description.
+ * Each condition becomes a phrase; conditions are joined with " OR ".
+ *
+ * @param {string} jsonStr - JSON-encoded array of condition objects
+ * @returns {string} Human-readable filter description, or the raw string on parse failure
+ */
+function functionalFilterToHuman(jsonStr) {
+    let conditions
+    try {
+        conditions = JSON.parse(jsonStr)
+    } catch (_) {
+        return String(jsonStr)
+    }
+    if (!Array.isArray(conditions) || conditions.length === 0) return '(empty)'
+    return conditions.map(formatCondition).join(' OR ')
+}
+
+
 function applyFilters(query) {
     let filtered = [...variants]
 
@@ -356,8 +458,22 @@ function applyFilters(query) {
         }
     }
 
+    // Functional filter: JSON-encoded array of OR conditions, each condition
+    // may test any column with any supported operator.
+    if (query.functional_filter) {
+        try {
+            const conditions = JSON.parse(query.functional_filter)
+            if (Array.isArray(conditions) && conditions.length > 0) {
+                filtered = filtered.filter(v => matchesFunctionalFilter(v, conditions))
+            }
+        } catch (_) {
+            // Malformed JSON – silently ignore so other filters still apply
+        }
+    }
+
     for (const [key, val] of Object.entries(query)) {
-        if (key === 'page' || key === 'per_page' || key === 'sort' || key === 'order' || key === 'search') continue
+        if (key === 'page' || key === 'per_page' || key === 'sort' || key === 'order' ||
+            key === 'search' || key === 'functional_filter') continue
         if (!val) continue
 
         // Range filters: field_min / field_max
@@ -1354,29 +1470,95 @@ app.post('/api/export/xlsx', async (req, res) => {
 
         // --- Applied Filters worksheet --------------------------------------
         try {
-        if (clientFilters && typeof clientFilters === 'object' && Object.keys(clientFilters).length > 0) {
-            const fws = workbook.addWorksheet('Applied Filters', {views: [{state: 'frozen', ySplit: 1}]})
-            fws.columns = [
-                {header: 'Filter', key: 'filter', width: 24},
-                {header: 'Value', key: 'value', width: 40}
-            ]
-            const fHeader = fws.getRow(1)
-            fHeader.eachCell(cell => {
-                cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin
-                cell.alignment = {vertical: 'middle', horizontal: 'center'}
+        // Always create the Applied Filters sheet so the export is self-documenting
+        const fws = workbook.addWorksheet('Applied Filters', {views: [{state: 'frozen', ySplit: 1}]})
+        fws.columns = [
+            {header: 'Filter', key: 'filter', width: 30},
+            {header: 'Value', key: 'value', width: 60}
+        ]
+        const fHeader = fws.getRow(1)
+        fHeader.eachCell(cell => {
+            cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin
+            cell.alignment = {vertical: 'middle', horizontal: 'center'}
+        })
+        fHeader.height = 24
+
+        // Helper: add a styled data row
+        let fIdx = 0
+        const addFilterRow = (label, value) => {
+            const row = fws.addRow({filter: label, value: String(value)})
+            row.eachCell(cell => {
+                cell.border = borderThin
+                if (fIdx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
             })
-            fHeader.height = 24
-            let fIdx = 0
-            for (const [key, value] of Object.entries(clientFilters)) {
-                const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-                const row = fws.addRow({filter: label, value: String(value)})
-                row.eachCell(cell => {
-                    cell.border = borderThin
-                    if (fIdx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
-                })
-                fIdx++
-            }
+            fIdx++
         }
+
+        // -- Section heading helper
+        const addSectionHeading = (title) => {
+            const row = fws.addRow({filter: title, value: ''})
+            row.getCell(1).font = {bold: true, color: {argb: 'FF2C3E50'}}
+            row.getCell(1).fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFD6EAF8'}}
+            row.getCell(2).fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFD6EAF8'}}
+            row.eachCell(cell => { cell.border = borderThin })
+            fIdx++
+        }
+
+        // --- Variant Filters ---
+        addSectionHeading('Variant Filters')
+        if (clientFilters && typeof clientFilters === 'object' && Object.keys(clientFilters).length > 0) {
+            for (const [key, value] of Object.entries(clientFilters)) {
+                if (value === '' || value === null || value === undefined) continue
+                if (key === 'page' || key === 'per_page') continue
+
+                if (key === 'functional_filter') {
+                    // Expand each OR condition as its own row for readability
+                    let conditions
+                    try { conditions = JSON.parse(value) } catch (_) { conditions = null }
+                    if (Array.isArray(conditions) && conditions.length > 0) {
+                        addFilterRow('Functional Filter (OR)', '— see rows below —')
+                        conditions.forEach((c, i) => {
+                            addFilterRow(`  Condition ${i + 1}`, formatCondition(c))
+                        })
+                    } else {
+                        addFilterRow('Functional Filter', functionalFilterToHuman(value))
+                    }
+                } else if (key === 'sort') {
+                    // Sort label formatted nicely; order is rendered together below
+                    const orderVal = clientFilters.order || 'asc'
+                    addFilterRow('Sort', `${value} (${orderVal})`)
+                } else if (key === 'order') {
+                    // Skip – combined into sort row above
+                } else {
+                    const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+                    addFilterRow(label, value)
+                }
+            }
+        } else {
+            addFilterRow('(no filters applied)', '')
+        }
+
+        // --- Export Settings ---
+        addSectionHeading('Export Settings')
+        addFilterRow('Genome Build', exportCfg.genomeBuild || GENOME)
+        addFilterRow('IGV Screenshots', exportCfg.igvScreenshots ? 'ON' : 'OFF')
+        addFilterRow('Lollipop Plots', exportCfg.lollipopPlots ? 'ON' : 'OFF')
+        addFilterRow('Protein Domains', exportCfg.proteinDomains ? 'ON' : 'OFF')
+        addFilterRow('Gene Annotations', exportCfg.geneAnnotations.enabled ? 'ON' : 'OFF')
+        if (exportCfg.geneAnnotations.enabled) {
+            const gaDetails = ['geneName', 'summary', 'omim', 'pathways', 'geneType']
+                .filter(k => exportCfg.geneAnnotations[k])
+                .join(', ')
+            if (gaDetails) addFilterRow('  Annotation Fields', gaDetails)
+        }
+
+        // Variant column categories
+        const colCats = exportCfg.variantColumns || {}
+        const includedCats = Object.entries(colCats).filter(([, v]) => v !== false).map(([k]) => k)
+        const excludedCats = Object.entries(colCats).filter(([, v]) => v === false).map(([k]) => k)
+        addFilterRow('Variant Columns Included', includedCats.length > 0 ? includedCats.join(', ') : 'all')
+        if (excludedCats.length > 0) addFilterRow('Variant Columns Excluded', excludedCats.join(', '))
+
         } catch (sectionErr) {
             log.warn('Applied Filters worksheet failed:', sectionErr.message)
             exportErrors.push({section: 'Applied Filters', error: sectionErr.message})
@@ -1769,11 +1951,22 @@ app.post('/api/export/html', async (req, res) => {
             geneSummary.push(...Object.values(geneMap).sort((a, b) => b.total - a.total))
         }
 
-        // Build filter summary
+        // Build filter summary (human-readable for the HTML report header)
         const filterEntries = []
         if (clientFilters && typeof clientFilters === 'object') {
             for (const [key, value] of Object.entries(clientFilters)) {
-                if (value !== '' && value !== null && value !== undefined) {
+                if (value === '' || value === null || value === undefined) continue
+                if (key === 'page' || key === 'per_page' || key === 'order') continue
+
+                if (key === 'functional_filter') {
+                    filterEntries.push({
+                        label: 'Functional Filter',
+                        value: functionalFilterToHuman(value)
+                    })
+                } else if (key === 'sort') {
+                    const orderVal = clientFilters.order || 'asc'
+                    filterEntries.push({label: 'Sort', value: `${value} (${orderVal})`})
+                } else {
                     filterEntries.push({
                         label: key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
                         value: String(value)

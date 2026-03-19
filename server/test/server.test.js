@@ -116,6 +116,202 @@ describe('API /api/variants', function () {
     })
 })
 
+describe('API /api/variants functional_filter', function () {
+    // Helper to build the functional_filter query param
+    function ff(conditions) {
+        return encodeURIComponent(JSON.stringify(conditions))
+    }
+
+    // Test data (example_data/variants.tsv):
+    //   impact: HIGH×5, MODERATE×3, LOW×2
+    //   quality values: 35 42 50 28 38 45 55 32 48 30
+
+    it('categorical "in" – single value matches expected rows', async function () {
+        const conds = [{col: 'impact', op: 'in', values: ['HIGH']}]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(5)
+        res.body.data.forEach(v => expect(v.impact).to.equal('HIGH'))
+    })
+
+    it('categorical "in" – multiple values act as OR within the condition', async function () {
+        const conds = [{col: 'impact', op: 'in', values: ['HIGH', 'MODERATE']}]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(8)
+        res.body.data.forEach(v => expect(['HIGH', 'MODERATE']).to.include(v.impact))
+    })
+
+    it('categorical "in" is case-insensitive', async function () {
+        const conds = [{col: 'impact', op: 'in', values: ['high', 'moderate']}]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(8)
+    })
+
+    it('numeric ">" – returns only variants above threshold', async function () {
+        // quality > 40: values 42,50,45,55,48 → 5 variants
+        const conds = [{col: 'quality', op: '>', value: 40}]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(5)
+        res.body.data.forEach(v => expect(Number(v.quality)).to.be.greaterThan(40))
+    })
+
+    it('numeric ">=" – returns variants at or above threshold', async function () {
+        // quality >= 50: 50, 55 → 2 variants
+        const conds = [{col: 'quality', op: '>=', value: 50}]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(2)
+        res.body.data.forEach(v => expect(Number(v.quality)).to.be.at.least(50))
+    })
+
+    it('numeric "<" – returns variants below threshold', async function () {
+        // quality < 30: 28 → 1 variant
+        const conds = [{col: 'quality', op: '<', value: 30}]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(1)
+        res.body.data.forEach(v => expect(Number(v.quality)).to.be.lessThan(30))
+    })
+
+    it('numeric "<=" – returns variants at or below threshold', async function () {
+        // quality <= 30: 28, 30 → 2 variants
+        const conds = [{col: 'quality', op: '<=', value: 30}]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(2)
+        res.body.data.forEach(v => expect(Number(v.quality)).to.be.at.most(30))
+    })
+
+    it('categorical "eq" – matches exact single value', async function () {
+        const conds = [{col: 'impact', op: 'eq', value: 'LOW'}]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(2)
+        res.body.data.forEach(v => expect(v.impact).to.equal('LOW'))
+    })
+
+    it('categorical "neq" – excludes the specified value', async function () {
+        // neq HIGH → MODERATE(3) + LOW(2) = 5
+        const conds = [{col: 'impact', op: 'neq', value: 'HIGH'}]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(5)
+        res.body.data.forEach(v => expect(v.impact).to.not.equal('HIGH'))
+    })
+
+    it('"contains" – substring match on categorical column', async function () {
+        // inheritance contains "de" matches "de_novo" (8 variants)
+        const conds = [{col: 'inheritance', op: 'contains', value: 'de'}]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(8)
+    })
+
+    it('multiple OR conditions – variant passes if ANY condition matches', async function () {
+        // impact=HIGH (5) OR quality>40 (5); combined OR: 7 unique variants
+        // HIGH variants with quality: 35,50,38,55,48  (all pass via impact)
+        // MODERATE variants with quality>40: 42,45     (pass via quality)
+        const conds = [
+            {col: 'impact', op: 'in', values: ['HIGH']},
+            {col: 'quality', op: '>', value: 40}
+        ]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(7)
+        res.body.data.forEach(v => {
+            const byImpact = v.impact === 'HIGH'
+            const byQuality = Number(v.quality) > 40
+            expect(byImpact || byQuality).to.be.true
+        })
+    })
+
+    it('three-way OR: HIGH or MODERATE or quality>=50', async function () {
+        // HIGH(5) + MODERATE(3) + quality>=50 includes only already-covered variants → 8
+        const conds = [
+            {col: 'impact', op: 'eq', value: 'HIGH'},
+            {col: 'impact', op: 'eq', value: 'MODERATE'},
+            {col: 'quality', op: '>=', value: 50}
+        ]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(8)
+    })
+
+    it('functional_filter AND regular filter are ANDed together', async function () {
+        // functional: impact=HIGH OR quality>40 (7 variants)
+        // AND regular: gene=GENE1 (2 variants: chr1:12345 HIGH, chr1:54321 MODERATE/quality=42>40)
+        const conds = [
+            {col: 'impact', op: 'in', values: ['HIGH']},
+            {col: 'quality', op: '>', value: 40}
+        ]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}&gene=GENE1`)
+            .expect(200)
+        expect(res.body.total).to.equal(2)
+        res.body.data.forEach(v => expect(v.gene).to.equal('GENE1'))
+    })
+
+    it('empty conditions array returns all variants', async function () {
+        const conds = []
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(10)
+    })
+
+    it('invalid JSON in functional_filter is ignored gracefully', async function () {
+        const res = await request(app)
+            .get('/api/variants?functional_filter=not_valid_json')
+            .expect(200)
+        expect(res.body.total).to.equal(10)
+    })
+
+    it('unknown column in functional_filter returns zero matches', async function () {
+        const conds = [{col: 'nonexistent_col', op: 'eq', value: 'anything'}]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(0)
+    })
+
+    it('unknown operator in functional_filter returns zero matches', async function () {
+        const conds = [{col: 'impact', op: 'INVALID_OP', value: 'HIGH'}]
+        const res = await request(app)
+            .get(`/api/variants?functional_filter=${ff(conds)}`)
+            .expect(200)
+        expect(res.body.total).to.equal(0)
+    })
+
+    it('functional_filter is preserved in filter-config save/load round-trip', async function () {
+        const filtersFile = path.join(__dirname, '..', 'example_data', 'variants.filters.json')
+        const conds = [{col: 'impact', op: 'in', values: ['HIGH', 'MODERATE']}]
+        const filterConfig = {functional_filter: JSON.stringify(conds)}
+
+        await request(app).put('/api/filter-config').send(filterConfig).expect(200)
+        const res = await request(app).get('/api/filter-config').expect(200)
+        expect(res.body).to.have.property('functional_filter')
+        const loaded = JSON.parse(res.body.functional_filter)
+        expect(loaded).to.deep.equal(conds)
+
+        if (fs.existsSync(filtersFile)) fs.unlinkSync(filtersFile)
+    })
+})
+
 describe('API /api/variants curation_counts and all_notes', function () {
     after(function () {
         if (fs.existsSync(curationFile)) fs.unlinkSync(curationFile)
@@ -692,18 +888,21 @@ describe('XLSX Applied Filters sheet', function () {
         filtersSheet.getRow(1).eachCell(cell => fHeader.push(cell.value))
         expect(fHeader).to.include('Filter')
         expect(fHeader).to.include('Value')
-        // Should have one row per filter + header
-        expect(filtersSheet.rowCount).to.equal(Object.keys(sentFilters).length + 1)
-        // Check filter values
+        // Sheet now always includes a 'Variant Filters' heading + filter rows + 'Export Settings' heading + settings rows
+        expect(filtersSheet.rowCount).to.be.at.least(Object.keys(sentFilters).length + 1)
+        // Check filter values appear somewhere in the sheet
         const filterValues = []
         for (let r = 2; r <= filtersSheet.rowCount; r++) {
             filterValues.push(filtersSheet.getRow(r).getCell(1).value)
         }
         expect(filterValues).to.include('Impact')
         expect(filterValues).to.include('Frequency Max')
+        // Export Settings section should also be present
+        expect(filterValues).to.include('Export Settings')
+        expect(filterValues).to.include('Genome Build')
     })
 
-    it('omits Applied Filters sheet when no filters provided', async function () {
+    it('always creates Applied Filters sheet (includes Export Settings even without filters)', async function () {
         this.timeout(10000)
         const res = await request(app)
             .post('/api/export/xlsx')
@@ -718,7 +917,126 @@ describe('XLSX Applied Filters sheet', function () {
 
         const workbook = new ExcelJS.Workbook()
         await workbook.xlsx.load(res.body)
-        expect(workbook.getWorksheet('Applied Filters')).to.be.undefined
+        const filtersSheet = workbook.getWorksheet('Applied Filters')
+        expect(filtersSheet).to.exist
+        // Should contain Export Settings even with no user filters
+        const filterValues = []
+        for (let r = 2; r <= filtersSheet.rowCount; r++) {
+            filterValues.push(filtersSheet.getRow(r).getCell(1).value)
+        }
+        expect(filterValues).to.include('Export Settings')
+        expect(filterValues).to.include('Genome Build')
+    })
+
+    it('renders functional_filter as human-readable condition rows in XLSX', async function () {
+        this.timeout(10000)
+        const conditions = [
+            {col: 'impact', op: 'in', values: ['HIGH', 'MODERATE']},
+            {col: 'quality', op: '>', value: 40}
+        ]
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1, 2, 3, 4],
+                filters: {functional_filter: JSON.stringify(conditions)}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+        const filtersSheet = workbook.getWorksheet('Applied Filters')
+        expect(filtersSheet).to.exist
+        const rowValues = []
+        for (let r = 1; r <= filtersSheet.rowCount; r++) {
+            const row = filtersSheet.getRow(r)
+            rowValues.push({filter: row.getCell(1).value, value: row.getCell(2).value})
+        }
+        // Should have a "Functional Filter (OR)" label row
+        const ffRow = rowValues.find(r => String(r.filter || '').includes('Functional Filter'))
+        expect(ffRow).to.exist
+        // Should have per-condition rows with human-readable descriptions
+        const condRow1 = rowValues.find(r => String(r.value || '').includes('impact in [HIGH, MODERATE]'))
+        expect(condRow1).to.exist
+        const condRow2 = rowValues.find(r => String(r.value || '').includes('quality > 40'))
+        expect(condRow2).to.exist
+    })
+
+    it('includes sort and search in Applied Filters sheet', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0, 1, 2],
+                filters: {sort: 'quality', order: 'desc', search: 'GENE1'}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+        const filtersSheet = workbook.getWorksheet('Applied Filters')
+        expect(filtersSheet).to.exist
+        const filterValues = []
+        const filterCellValues = {}
+        for (let r = 2; r <= filtersSheet.rowCount; r++) {
+            const row = filtersSheet.getRow(r)
+            const label = String(row.getCell(1).value || '')
+            const val = String(row.getCell(2).value || '')
+            filterValues.push(label)
+            filterCellValues[label] = val
+        }
+        // Sort row should appear (with order combined)
+        expect(filterValues).to.include('Sort')
+        expect(filterCellValues['Sort']).to.include('quality')
+        expect(filterCellValues['Sort']).to.include('desc')
+        // Search row should appear
+        expect(filterValues).to.include('Search')
+        expect(filterCellValues['Search']).to.equal('GENE1')
+    })
+
+    it('includes variantColumns in Applied Filters / Export Settings', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({
+                variantIds: [0],
+                exportConfig: {variantColumns: {coreVariant: true, geneInfo: true, frequency: false}}
+            })
+            .buffer(true)
+            .parse((res, callback) => {
+                const chunks = []
+                res.on('data', chunk => chunks.push(chunk))
+                res.on('end', () => callback(null, Buffer.concat(chunks)))
+            })
+            .expect(200)
+
+        const workbook = new ExcelJS.Workbook()
+        await workbook.xlsx.load(res.body)
+        const filtersSheet = workbook.getWorksheet('Applied Filters')
+        expect(filtersSheet).to.exist
+        const filterValues = []
+        const filterCellValues = {}
+        for (let r = 2; r <= filtersSheet.rowCount; r++) {
+            const row = filtersSheet.getRow(r)
+            const label = String(row.getCell(1).value || '')
+            const val = String(row.getCell(2).value || '')
+            filterValues.push(label)
+            filterCellValues[label] = val
+        }
+        // Excluded columns should be listed
+        expect(filterValues).to.include('Variant Columns Excluded')
+        expect(filterCellValues['Variant Columns Excluded']).to.include('frequency')
     })
 })
 
