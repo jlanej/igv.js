@@ -40,7 +40,7 @@ const CONTAMINATION_TIERS = [
     {label: 'clean',   max: 0.02, description: 'Minimal non-human signal (≤2%)'},
     {label: 'caution', max: 0.05, description: 'Low-level non-human signal (2–5%)'},
     {label: 'concern', max: 0.15, description: 'Moderate non-human signal (5–15%)'},
-    {label: 'high',    min: 0.15, description: 'High non-human signal (≥15%)'}
+    {label: 'high',    min: 0.15, description: 'High non-human signal (>15%)'}
 ]
 
 // Cache parsed BED data (keyed by file path → variant key → rows)
@@ -127,7 +127,7 @@ function parseBedByVariant(filePath) {
  */
 function classifyContamination(fraction) {
     for (const tier of CONTAMINATION_TIERS) {
-        if (tier.max !== undefined && fraction < tier.max) return tier
+        if (tier.max !== undefined && fraction <= tier.max) return tier
         if (tier.min !== undefined && fraction >= tier.min) return tier
     }
     return {label: 'unknown', description: 'Unable to classify'}
@@ -199,10 +199,10 @@ function computeVariantMetrics(rows) {
     const clipLeftVals = primaryRows.map(r => r.softclipLeft).filter(v => !isNaN(v))
     const clipRightVals = primaryRows.map(r => r.softclipRight).filter(v => !isNaN(v))
     const meanLeft = clipLeftVals.length > 0
-        ? Math.round(clipLeftVals.reduce((a, b) => a + b, 0) / clipLeftVals.length * 10) / 10
+        ? Math.round((clipLeftVals.reduce((a, b) => a + b, 0) / clipLeftVals.length) * 10) / 10
         : 0
     const meanRight = clipRightVals.length > 0
-        ? Math.round(clipRightVals.reduce((a, b) => a + b, 0) / clipRightVals.length * 10) / 10
+        ? Math.round((clipRightVals.reduce((a, b) => a + b, 0) / clipRightVals.length) * 10) / 10
         : 0
     const highClipReads = primaryRows.filter(r => r.softclipLeft > 30 || r.softclipRight > 30).length
 

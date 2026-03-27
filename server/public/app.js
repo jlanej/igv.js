@@ -2064,8 +2064,8 @@
             sel.addEventListener('change', () => {
                 if (!igvBrowser) return
                 const mode = sel.value
-                const tracks = (igvBrowser.trackViews?.map(tv => tv.track)
-                    .filter(t => t?.type === 'annotation' && t?.format === 'bed')) ?? []
+                const tracks = (igvBrowser.trackViews ?? []).map(tv => tv.track)
+                    .filter(t => t?.type === 'annotation' && t?.format === 'bed')
                 tracks.forEach(t => { t.displayMode = mode })
                 if (igvBrowser.updateViews) igvBrowser.updateViews()
             })

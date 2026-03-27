@@ -3429,16 +3429,29 @@ describe('Species Metrics module', function () {
             expect(speciesMetrics.classifyContamination(0.01).label).to.equal('clean')
         })
 
+        it('classifies boundary value at 2% as clean', function () {
+            expect(speciesMetrics.classifyContamination(0.02).label).to.equal('clean')
+        })
+
         it('classifies caution samples', function () {
             expect(speciesMetrics.classifyContamination(0.03).label).to.equal('caution')
+        })
+
+        it('classifies boundary value at 5% as caution', function () {
+            expect(speciesMetrics.classifyContamination(0.05).label).to.equal('caution')
         })
 
         it('classifies concern samples', function () {
             expect(speciesMetrics.classifyContamination(0.08).label).to.equal('concern')
         })
 
+        it('classifies boundary value at 15% as concern', function () {
+            expect(speciesMetrics.classifyContamination(0.15).label).to.equal('concern')
+        })
+
         it('classifies high contamination', function () {
             expect(speciesMetrics.classifyContamination(0.20).label).to.equal('high')
+            expect(speciesMetrics.classifyContamination(0.16).label).to.equal('high')
         })
     })
 

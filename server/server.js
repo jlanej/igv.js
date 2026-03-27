@@ -78,12 +78,18 @@ for (const raw of getArgAll('bed-tracks')) {
         if (!trimmed) continue
         const colonIdx = trimmed.indexOf(':')
         let label, filePath
-        // Check for Windows paths (C:\...) or URLs (http://) – colon at index 1 or in http(s):
-        if (colonIdx > 1 && !trimmed.startsWith('http')) {
+        // Detect label:path format.  Skip if the colon belongs to a
+        // Windows drive letter (index 1, e.g. C:\…) or a URL scheme
+        // (http:// or https://).
+        const isUrl = /^https?:\/\//i.test(trimmed)
+        const isWindowsDrive = colonIdx === 1 && /^[a-zA-Z]$/.test(trimmed[0])
+        if (colonIdx > 0 && !isUrl && !isWindowsDrive) {
             label = trimmed.slice(0, colonIdx).trim()
             filePath = trimmed.slice(colonIdx + 1).trim()
         } else {
-            label = path.basename(trimmed, path.extname(trimmed)).replace(/\.(bed|bed\.gz)$/i, '')
+            // Auto-generate label from filename, stripping .bed.gz / .bed extensions
+            const basename = path.basename(trimmed)
+            label = basename.replace(/\.(bed\.gz|bed)$/i, '')
             filePath = trimmed
         }
         BED_TRACK_CONFIGS.push({name: label, path: filePath})
