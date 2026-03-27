@@ -614,3 +614,30 @@ td.qc-cell-critical { color: #922b21; font-weight: 700; background: #fdedec; }
 .config-section strong { display: block; margin-bottom: 4px; font-size: 12px; color: var(--text-light); text-transform: uppercase; letter-spacing: 0.5px; }
 .config-section label { display: block; padding: 2px 0; cursor: pointer; }
 .config-section label input[type="checkbox"] { margin-right: 6px; }
+
+/* Species metrics panel */
+#species-metrics-panel { margin-top: 8px; padding: 10px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; }
+#species-metrics-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+#species-metrics-header h3 { margin: 0; font-size: 14px; color: var(--primary); }
+.species-summary { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.species-assessment { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 4px; font-size: 13px; }
+.species-assessment strong { min-width: 64px; text-align: center; padding: 2px 8px; border-radius: 3px; color: #fff; font-size: 12px; }
+.species-clean strong { background: var(--pass); }
+.species-caution strong { background: var(--uncertain); }
+.species-concern strong { background: #e67e22; }
+.species-high strong { background: var(--fail); }
+.species-unknown strong { background: var(--pending); }
+.species-stats { display: flex; flex-wrap: wrap; gap: 12px; }
+.species-stats span { white-space: nowrap; }
+.species-domains, .species-taxa, .species-guards { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.species-domain { padding: 1px 6px; border-radius: 3px; font-size: 12px; background: var(--hover); }
+.species-domain-bacteria { background: #fadbd8; color: #922b21; }
+.species-domain-human { background: #d5f5e3; color: #1e8449; }
+.species-domain-viruses { background: #fdebd0; color: #b9770e; }
+.species-domain-fungi { background: #ebdef0; color: #7d3c98; }
+.species-domain-unclassified { background: #eaeded; color: #566573; }
+.species-taxon { padding: 1px 6px; border-radius: 3px; font-size: 12px; background: #eaf2f8; color: #2471a3; }
+
+/* BED track controls */
+#bed-track-controls { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; }
+#bed-track-controls .settings-item { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; }

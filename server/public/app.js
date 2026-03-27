@@ -64,6 +64,7 @@
             setupSidebarToggle()
             setupDisplayModeControl()
             setupIgvSettings()
+            setupBedTrackControls()
             setupVariantSearch()
             setupNoteSuggestions()
 
@@ -583,6 +584,9 @@
 
         await showInIgv(v)
 
+        // Load species metrics if BED tracks are configured
+        loadSpeciesMetrics(v)
+
         // Keep the IGV section visible after loading tracks
         const igvSection = document.getElementById('igv-section')
         if (igvSection) igvSection.scrollIntoView({block: 'nearest', behavior: 'smooth'})
@@ -800,7 +804,85 @@
             }
         }
 
+        // -------------------------------------------------------------------
+        // BED annotation tracks (species-annotated, from kmer_denovo_filter)
+        // -------------------------------------------------------------------
+        const bedTrackDisplayMode = getBedTrackDisplayMode()
+
+        // Per-variant BED track columns from TSV
+        if (config.bedColumns) {
+            for (const col of config.bedColumns) {
+                const file = variant[col]
+                if (!file) continue
+                const url = file.startsWith('http') ? file : `/data/${file}`
+                const name = col.replace(/_/g, ' ').replace(/bed$/i, '').trim()
+                const bedTrack = {
+                    type: 'annotation',
+                    format: 'bed',
+                    name: name,
+                    url: url,
+                    displayMode: bedTrackDisplayMode,
+                    height: 80,
+                    color: getBedTrackColor(col),
+                    visibilityWindow: -1
+                }
+                const idxCol = col + '_index'
+                const idx = variant[idxCol]
+                if (idx) {
+                    bedTrack.indexURL = idx.startsWith('http') ? idx : `/data/${idx}`
+                }
+                tracks.push(bedTrack)
+            }
+        }
+
+        // Global BED tracks from server config (--bed-tracks CLI)
+        if (config.bedTracks && isBedTracksEnabled()) {
+            for (const bt of config.bedTracks) {
+                const bedTrack = {
+                    type: 'annotation',
+                    format: 'bed',
+                    name: bt.name,
+                    url: bt.url,
+                    displayMode: bedTrackDisplayMode,
+                    height: 80,
+                    color: getBedTrackColor(bt.name),
+                    visibilityWindow: -1
+                }
+                if (bt.indexURL) bedTrack.indexURL = bt.indexURL
+                tracks.push(bedTrack)
+            }
+        }
+
         return tracks
+    }
+
+    /**
+     * Get display mode for BED annotation tracks.
+     * Reads from the BED track display mode selector if present,
+     * otherwise defaults to EXPANDED.
+     */
+    function getBedTrackDisplayMode() {
+        const sel = document.getElementById('bed-display-mode-select')
+        return sel ? sel.value : 'EXPANDED'
+    }
+
+    /**
+     * Check whether BED tracks are enabled via the toggle checkbox.
+     */
+    function isBedTracksEnabled() {
+        const chk = document.getElementById('chk-bed-tracks')
+        return chk ? chk.checked : true
+    }
+
+    /**
+     * Assign colors to BED tracks based on their name/type for visual distinction.
+     */
+    function getBedTrackColor(name) {
+        const lower = (name || '').toLowerCase()
+        if (lower.includes('expanded')) return '#e67e22'   // orange for expanded spans
+        if (lower.includes('span'))     return '#2980b9'   // blue for standard spans
+        if (lower.includes('read'))     return '#27ae60'   // green for per-read detail
+        return '#8e44ad'                                    // purple default
     }
 
     async function loadScript(src) {
@@ -1939,6 +2021,142 @@
                 localStorage.setItem('igv.checkSequenceMD5', chk.checked)
             })
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // BED track controls & species metrics panel
+    // -----------------------------------------------------------------------
+
+    /**
+     * Set up BED track controls: toggle visibility and display mode.
+     * Controls are shown only when BED tracks are configured.
+     */
+    function setupBedTrackControls() {
+        const wrap = document.getElementById('bed-track-controls')
+        if (!wrap) return
+
+        // Show controls only when BED tracks are available
+        const hasBedTracks = (config.bedTracks && config.bedTracks.length > 0) ||
+                             (config.bedColumns && config.bedColumns.length > 0)
+        if (!hasBedTracks) {
+            wrap.style.display = 'none'
+            return
+        }
+        wrap.style.display = ''
+
+        // BED track toggle
+        const chk = document.getElementById('chk-bed-tracks')
+        if (chk) {
+            const stored = localStorage.getItem('igv.bedTracksEnabled')
+            chk.checked = stored !== null ? stored === 'true' : true
+            chk.addEventListener('change', () => {
+                localStorage.setItem('igv.bedTracksEnabled', chk.checked)
+                if (igvBrowser && activeVariantId !== null) {
+                    const v = variants.find(x => x.id === activeVariantId)
+                    if (v) showInIgv(v)
+                }
+            })
+        }
+
+        // BED display mode change
+        const sel = document.getElementById('bed-display-mode-select')
+        if (sel) {
+            sel.addEventListener('change', () => {
+                if (!igvBrowser) return
+                const mode = sel.value
+                const tracks = (igvBrowser.trackViews ?? []).map(tv => tv.track)
+                    .filter(t => t?.type === 'annotation' && t?.format === 'bed')
+                tracks.forEach(t => { t.displayMode = mode })
+                if (igvBrowser.updateViews) igvBrowser.updateViews()
+            })
+        }
+    }
+
+    /**
+     * Fetch and display species metrics for the currently selected variant.
+     * Shows a compact summary of Kraken2 species classifications from BED tracks.
+     */
+    async function loadSpeciesMetrics(variant) {
+        const panel = document.getElementById('species-metrics-panel')
+        if (!panel) return
+
+        const hasBedTracks = (config.bedTracks && config.bedTracks.length > 0) ||
+                             (config.bedColumns && config.bedColumns.length > 0)
+        if (!hasBedTracks) {
+            panel.style.display = 'none'
+            return
+        }
+        panel.style.display = ''
+
+        const body = document.getElementById('species-metrics-body')
+        if (!body) return
+        body.innerHTML = '<span class="hint">Loading species metrics…</span>'
+
+        try {
+            const res = await fetch(`/api/species-metrics?variant_id=${variant.id}`)
+            const data = await res.json()
+
+            if (!data.loaded || !data.metrics) {
+                body.innerHTML = '<span class="hint">No species classification data available for this variant</span>'
+                return
+            }
+
+            const m = data.metrics
+            body.innerHTML = renderSpeciesMetrics(m)
+        } catch (err) {
+            body.innerHTML = `<span class="hint">Failed to load species metrics: ${escapeHtml(err.message)}</span>`
+        }
+    }
+
+    /**
+     * Render species metrics as compact HTML for the summary panel.
+     */
+    function renderSpeciesMetrics(m) {
+        if (m.totalReads === 0) {
+            return '<span class="hint">No informative reads found in BED tracks for this variant</span>'
+        }
+
+        const pct = (m.nonhumanFraction * 100).toFixed(1)
+        const assessClass = `species-${m.assessment.label}`
+
+        // Domain breakdown
+        const domainEntries = Object.entries(m.domainCounts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([d, c]) => `<span class="species-domain species-domain-${d.toLowerCase()}">${escapeHtml(d)}: ${c}</span>`)
+            .join(' ')
+
+        // Top taxa
+        const taxaRows = m.topTaxa.slice(0, 5).map(t =>
+            `<span class="species-taxon">${escapeHtml(t.name)}: ${t.count}</span>`
+        ).join(' ')
+
+        // Guard status summary
+        const guardEntries = Object.entries(m.guardCounts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([g, c]) => `${g}: ${c}`)
+            .join(', ')
+
+        return `
+            <div class="species-summary">
+                <div class="species-assessment ${assessClass}">
+                    <strong>${m.assessment.label.toUpperCase()}</strong>
+                    <span>${m.assessment.description}</span>
+                </div>
+                <div class="species-stats">
+                    <span><strong>Total reads:</strong> ${m.totalReads}</span>
+                    <span><strong>Non-human:</strong> ${m.nonhumanReads} (${pct}%)</span>
+                    <span><strong>DKA/DKU:</strong> ${m.readSetCounts.DKA}/${m.readSetCounts.DKU}</span>
+                    <span><strong>Split reads:</strong> ${m.splitReadCount}</span>
+                    <span><strong>High-clip reads:</strong> ${m.clippingStats.highClipReads}</span>
+                </div>
+                <div class="species-domains">
+                    <strong>Domains:</strong> ${domainEntries || 'none'}
+                </div>
+                ${taxaRows ? `<div class="species-taxa"><strong>Top taxa:</strong> ${taxaRows}</div>` : ''}
+                <div class="species-guards">
+                    <strong>Guard status:</strong> ${guardEntries || 'none'}
+                </div>
+            </div>`
     }
 
     // -----------------------------------------------------------------------
