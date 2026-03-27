@@ -210,6 +210,122 @@ colored dot + badge in the variant table's **QC** column.
 - **XLSX export** – includes a "Sample QC" sheet with styled and
   color-coded status cells
 
+## Trio BED Tracks (Kraken2 Species Annotation)
+
+Species-annotated BED tracks produced by
+[kmer_denovo_filter](https://github.com/jlanej/kmer_denovo_filter) can be
+loaded alongside alignment tracks to visualize per-read Kraken2 classification
+results.  This is useful for **cross-species contamination assessment** during
+clinical variant curation.
+
+### Supported BED Types
+
+| File                                    | Description                                      |
+|-----------------------------------------|--------------------------------------------------|
+| `*.kraken2_spans.bed.gz`                | Aligned genomic span of each classified read     |
+| `*.kraken2_spans_expanded.bed.gz`       | Soft-clip–expanded spans for chimera visualization |
+| `*.kraken2_reads.bed.gz`                | Per-read classification detail                   |
+
+All files follow the 15-column BED format from kmer_denovo_filter, with
+columns for taxon name, domain, guard status, non-human flag, read set
+(DKA/DKU), mapping quality, soft-clip lengths, and split-read indicators.
+Files should be bgzipped and tabix-indexed (`.tbi`) for efficient region
+queries.
+
+### Supplying BED Tracks via CLI
+
+Use `--bed-tracks` to load global BED tracks that apply to all variants.
+The argument accepts `label:path` pairs:
+
+```bash
+node server.js \
+  --variants variants.tsv \
+  --data-dir /path/to/data \
+  --bed-tracks "Kraken2 Spans:/path/to/trio.kraken2_spans.bed.gz" \
+  --bed-tracks "Expanded Spans:/path/to/trio.kraken2_spans_expanded.bed.gz"
+```
+
+Multiple `--bed-tracks` flags can be specified.  Within a single flag value,
+comma-separated entries are also supported:
+
+```bash
+--bed-tracks "Spans:spans.bed.gz,Expanded:expanded.bed.gz"
+```
+
+If the label is omitted, the filename (without extension) is used as the
+track name.  Paths are resolved relative to `--data-dir`.
+
+### Per-Variant BED Tracks via TSV Columns
+
+BED tracks can also be specified per-variant in the TSV file using columns
+that end with `_kraken2_spans_bed`, `_kraken2_expanded_bed`, or
+`_kraken2_reads_bed`:
+
+| Column                      | Description                                  |
+|-----------------------------|----------------------------------------------|
+| `kraken2_spans_bed`         | Path to standard span BED (global)           |
+| `kraken2_expanded_bed`      | Path to expanded span BED (global)           |
+| `kraken2_reads_bed`         | Path to per-read detail BED (global)         |
+| `child_kraken2_spans_bed`   | Path to child-specific span BED              |
+
+Paths follow the same resolution rules as alignment files (relative to
+`--data-dir` or absolute URLs).
+
+### UI Features
+
+- **BED track toggle** – checkbox in the IGV controls header to show/hide
+  BED annotation tracks without removing alignment tracks
+- **BED display mode** – separate dropdown to set BED track display mode
+  (Expanded / Squished / Collapsed) independently from alignment tracks
+- **Color coding** – BED tracks are color-coded by type: blue for standard
+  spans, orange for expanded spans, green for per-read detail
+- **Species metrics panel** – a summary panel below the IGV viewer that
+  displays per-variant contamination assessment:
+  - Overall contamination tier (Clean / Caution / Concern / High)
+  - Read counts (total, non-human, DKA/DKU)
+  - Domain breakdown (Bacteria, Human, Viruses, etc.)
+  - Top taxa (species-level classification)
+  - Guard status distribution (PASS, HHG, HUMAN, etc.)
+  - Clipping statistics (mean soft-clip lengths, high-clip read count)
+
+### Species Metrics API
+
+The server provides a REST API for species metrics:
+
+```
+GET /api/species-metrics
+GET /api/species-metrics?variant_id=<id>
+GET /api/species-metrics?variant_key=<chr:pos:ref:alt>
+```
+
+Returns per-variant or global species composition summaries parsed from the
+configured BED files.
+
+### Contamination Assessment Tiers
+
+The species metrics module classifies the non-human read fraction into tiers:
+
+| Tier        | Non-Human Fraction | Interpretation                              |
+|-------------|-------------------|---------------------------------------------|
+| **Clean**   | ≤ 2%              | Minimal non-human signal – likely background |
+| **Caution** | 2–5%              | Low-level – apply stricter variant filters   |
+| **Concern** | 5–15%             | Moderate – investigate further               |
+| **High**    | ≥ 15%             | High – likely contamination artifact         |
+
+### Docker Usage
+
+BED track files should be mounted alongside alignment files:
+
+```bash
+docker run -p 3000:3000 \
+  -v /scratch/data:/data \
+  igv-variant-review \
+  --variants /data/variants.tsv \
+  --data-dir /data \
+  --bed-tracks "Kraken2 Spans:trio.kraken2_spans.bed.gz" \
+  --bed-tracks "Expanded Spans:trio.kraken2_spans_expanded.bed.gz"
+```
+
 ## CLI Options
 
 | Flag               | Default                            | Description                    |
@@ -223,6 +339,7 @@ colored dot + badge in the variant table's **QC** column.
 | `--log-level`      | `info`                             | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--sample-qc`      | *(none)*                           | Path to sample QC TSV file (see below) |
 | `--check-md5`      | *(off)*                            | Re-enable CRAM MD5 reference checks (see Known Issues) |
+| `--bed-tracks`     | *(none)*                           | Species-annotated BED track files (see below) |
 
 ## HPC Deployment
 

@@ -202,6 +202,18 @@
                             <option value="EXPANDED">Expanded</option>
                             <option value="COLLAPSED">Collapsed</option>
                         </select>
+                        <!-- BED track controls (hidden when no BED tracks configured) -->
+                        <span id="bed-track-controls" style="display:none;">
+                            <label class="settings-item" title="Show/hide species-annotated BED tracks">
+                                <input type="checkbox" id="chk-bed-tracks" checked>
+                                <span>BED tracks</span>
+                            </label>
+                            <select id="bed-display-mode-select" class="btn btn-sm" title="Set display mode for BED annotation tracks">
+                                <option value="EXPANDED" selected>BED: Expanded</option>
+                                <option value="SQUISHED">BED: Squished</option>
+                                <option value="COLLAPSED">BED: Collapsed</option>
+                            </select>
+                        </span>
                         <div id="igv-settings-wrap">
                             <button id="btn-igv-settings" class="btn btn-sm" title="IGV settings">⚙</button>
                             <div id="igv-settings-panel" class="settings-panel" style="display:none;">
@@ -225,6 +237,13 @@
                 </div>
                 <div id="igv-div"></div>
                 <div id="track-load-status"></div>
+                <!-- Species metrics panel (hidden when no BED tracks configured) -->
+                <div id="species-metrics-panel" style="display:none;">
+                    <div id="species-metrics-header">
+                        <h3>🔬 Species Classification Metrics</h3>
+                    </div>
+                    <div id="species-metrics-body"></div>
+                </div>
             </div>
         </main>
     </div>

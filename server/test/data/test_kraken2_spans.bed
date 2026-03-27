@@ -1,0 +1,11 @@
+#chrom	start	end	taxon_name	domain	guard_status	is_nonhuman	read_name	variant	read_set	mapq	softclip_left	softclip_right	is_split	is_supplementary
+chr1	12300	12450	Escherichia_coli	Bacteria	PASS	true	read001	chr1:12344:A:G	DKA	60	0	5	false	false
+chr1	12310	12460	Homo_sapiens	Human	HUMAN	false	read002	chr1:12344:A:G	DKU	60	0	0	false	false
+chr1	12320	12400	Bacteria	Bacteria	HHG	false	read003	chr1:12344:A:G	DKA	25	42	0	true	false
+chr7	50000	50070	Bacteria	Bacteria	HHG	false	read003	chr1:12344:A:G	DKA	0	0	42	true	true
+chr1	12330	12480	Unclassified	Unclassified	UNCLASSIFIED	false	read004	chr1:12344:A:G	DKU	30	0	0	false	false
+chr1	54280	54420	Escherichia_coli	Bacteria	PASS	true	read005	chr1:54320:C:T	DKA	55	10	8	false	false
+chr1	54290	54430	Homo_sapiens	Human	HUMAN	false	read006	chr1:54320:C:T	DKU	60	0	0	false	false
+chr2	98700	98850	Staphylococcus_aureus	Bacteria	PASS	true	read007	chr2:98764:G:A	DKA	58	0	15	false	false
+chr2	98720	98870	Escherichia_coli	Bacteria	PASS	true	read008	chr2:98764:G:A	DKU	50	5	5	false	false
+chr2	98740	98890	Homo_sapiens	Human	HUMAN	false	read009	chr2:98764:G:A	DKU	60	0	0	false	false

@@ -21,6 +21,7 @@ const {generateLollipopSvg} = require('./lollipop')
 const {fetchProteinDomains} = require('./pfam')
 const {fetchGeneAnnotationsBatch} = require('./gene-annotations')
 const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults, filterColumns} = require('./export-config')
+const speciesMetrics = require('./species-metrics')
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -29,6 +30,22 @@ const args = process.argv.slice(2)
 function getArg(name, defaultValue) {
     const idx = args.indexOf(`--${name}`)
     return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : defaultValue
+}
+
+/**
+ * Collect all occurrences of a repeated CLI argument into an array.
+ * E.g. --bed-tracks "label:/path" --bed-tracks "label2:/path2"
+ */
+function getArgAll(name) {
+    const flag = `--${name}`
+    const results = []
+    for (let i = 0; i < args.length; i++) {
+        if (args[i] === flag && i + 1 < args.length) {
+            results.push(args[i + 1])
+            i++ // skip value
+        }
+    }
+    return results
 }
 
 const PORT = parseInt(getArg('port', '3000'), 10)
@@ -46,6 +63,32 @@ const HOST = getArg('host', '127.0.0.1')
 // failures caused by concurrent reference-sequence cache races in igv.js
 // (see Known Issues in README).  Pass --check-md5 to re-enable.
 const ENABLE_CRAM_MD5_CHECK = args.includes('--check-md5')
+
+// ---------------------------------------------------------------------------
+// BED track configuration
+// ---------------------------------------------------------------------------
+// Parse --bed-tracks arguments.  Each value is "label:path" or just "path"
+// (in which case a label is auto-generated from the filename).
+// Multiple --bed-tracks flags are supported.
+const BED_TRACK_CONFIGS = []
+for (const raw of getArgAll('bed-tracks')) {
+    // Support comma-separated entries within a single flag value
+    for (const entry of raw.split(',')) {
+        const trimmed = entry.trim()
+        if (!trimmed) continue
+        const colonIdx = trimmed.indexOf(':')
+        let label, filePath
+        // Check for Windows paths (C:\...) or URLs (http://) – colon at index 1 or in http(s):
+        if (colonIdx > 1 && !trimmed.startsWith('http')) {
+            label = trimmed.slice(0, colonIdx).trim()
+            filePath = trimmed.slice(colonIdx + 1).trim()
+        } else {
+            label = path.basename(trimmed, path.extname(trimmed)).replace(/\.(bed|bed\.gz)$/i, '')
+            filePath = trimmed
+        }
+        BED_TRACK_CONFIGS.push({name: label, path: filePath})
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Data loading
@@ -577,6 +620,33 @@ app.get('/api/config', (_req, res) => {
         }
     }
 
+    // BED track configuration (from --bed-tracks CLI args)
+    if (BED_TRACK_CONFIGS.length > 0) {
+        cfg.bedTracks = BED_TRACK_CONFIGS.map(t => {
+            const fp = t.path
+            const url = fp.startsWith('http') ? fp : `/data/${fp}`
+            const track = {name: t.name, url}
+            // Auto-detect tabix index
+            const idxPath = fp + '.tbi'
+            const idxFull = fp.startsWith('http') ? null : path.join(DATA_DIR, idxPath)
+            if (idxFull && fs.existsSync(idxFull)) {
+                track.indexURL = `/data/${idxPath}`
+            } else if (fp.startsWith('http')) {
+                track.indexURL = url + '.tbi'
+            }
+            return track
+        })
+    }
+
+    // Detect per-variant BED track columns in the TSV
+    const bedColumnSuffixes = ['_kraken2_spans_bed', '_kraken2_expanded_bed', '_kraken2_reads_bed']
+    const detectedBedColumns = headerColumns.filter(c =>
+        bedColumnSuffixes.some(s => c.endsWith(s)) || c === 'kraken2_spans_bed' || c === 'kraken2_expanded_bed' || c === 'kraken2_reads_bed'
+    )
+    if (detectedBedColumns.length > 0) {
+        cfg.bedColumns = detectedBedColumns
+    }
+
     res.json(cfg)
 })
 
@@ -768,6 +838,99 @@ app.get('/api/sample-qc', (_req, res) => {
         thresholds: QC_METRIC_THRESHOLDS,
         trios: sampleQcTrios
     })
+})
+
+// ---------------------------------------------------------------------------
+// Species metrics (Kraken2 BED track analysis)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve BED file paths from CLI --bed-tracks and per-variant TSV columns.
+ * Returns absolute paths for files that exist on disk (for server-side parsing).
+ */
+function resolveBedFilePaths(variant) {
+    const files = []
+
+    // Global BED tracks from CLI
+    for (const t of BED_TRACK_CONFIGS) {
+        const fp = t.path.startsWith('/') ? t.path : path.join(DATA_DIR, t.path)
+        if (fs.existsSync(fp)) files.push(fp)
+    }
+
+    // Per-variant BED file columns
+    if (variant) {
+        const bedCols = headerColumns.filter(c =>
+            c.endsWith('_kraken2_spans_bed') || c.endsWith('_kraken2_expanded_bed') ||
+            c.endsWith('_kraken2_reads_bed') || c === 'kraken2_spans_bed' ||
+            c === 'kraken2_expanded_bed' || c === 'kraken2_reads_bed'
+        )
+        for (const col of bedCols) {
+            const val = variant[col]
+            if (!val) continue
+            const fp = val.startsWith('/') ? val : path.join(DATA_DIR, val)
+            if (fs.existsSync(fp)) files.push(fp)
+        }
+    }
+
+    return files
+}
+
+app.get('/api/species-metrics', (req, res) => {
+    const variantId = req.query.variant_id
+    const variantKey = req.query.variant_key
+
+    // Per-variant metrics
+    if (variantId !== undefined || variantKey) {
+        let variant = null
+        if (variantId !== undefined) {
+            const id = parseInt(variantId, 10)
+            variant = variants.find(v => v.id === id)
+        }
+        if (!variant && variantKey) {
+            variant = variants.find(v => v._key === variantKey)
+        }
+        if (!variant) {
+            return res.status(404).json({error: 'Variant not found'})
+        }
+
+        const bedFiles = resolveBedFilePaths(variant)
+        if (bedFiles.length === 0) {
+            return res.json({
+                loaded: false,
+                message: 'No BED track files available. Use --bed-tracks to load species-annotated BED files.',
+                metrics: null
+            })
+        }
+
+        // Construct the variant key in 0-based format (BED uses 0-based coordinates)
+        const pos0 = parseInt(variant.pos, 10) - 1  // VCF 1-based → BED 0-based
+        const bedVariantKey = `${variant.chrom}:${pos0}:${variant.ref}:${variant.alt}`
+        const metrics = speciesMetrics.getVariantMetrics(bedVariantKey, bedFiles)
+
+        // Also try 1-based key in case BED uses 1-based variant keys
+        if (metrics.totalReads === 0) {
+            const bedVariantKey1 = `${variant.chrom}:${variant.pos}:${variant.ref}:${variant.alt}`
+            const metrics1 = speciesMetrics.getVariantMetrics(bedVariantKey1, bedFiles)
+            if (metrics1.totalReads > 0) {
+                return res.json({loaded: true, variant_key: bedVariantKey1, metrics: metrics1})
+            }
+        }
+
+        return res.json({loaded: true, variant_key: bedVariantKey, metrics})
+    }
+
+    // Global summary across all BED files
+    const bedFiles = resolveBedFilePaths(null)
+    if (bedFiles.length === 0) {
+        return res.json({
+            loaded: false,
+            message: 'No BED track files available. Use --bed-tracks to load species-annotated BED files.',
+            summary: null
+        })
+    }
+
+    const summary = speciesMetrics.getGlobalSummary(bedFiles)
+    res.json({loaded: true, file_count: bedFiles.length, summary})
 })
 
 // Saved filter configuration
@@ -2547,6 +2710,10 @@ if (require.main === module) {
         }
         if (ENABLE_CRAM_MD5_CHECK) {
             log.info(`CRAM MD5:   reference checks enabled (--check-md5)`)
+        }
+        if (BED_TRACK_CONFIGS.length > 0) {
+            log.info(`BED tracks: ${BED_TRACK_CONFIGS.length} track(s) configured`)
+            BED_TRACK_CONFIGS.forEach(t => log.info(`  - ${t.name}: ${t.path}`))
         }
     })
 }

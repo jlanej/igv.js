@@ -3317,3 +3317,184 @@ describe('XLSX export robustness', function () {
         expect(res.body.error).to.include('No variants')
     })
 })
+
+// ---------------------------------------------------------------------------
+// Species Metrics module
+// ---------------------------------------------------------------------------
+const speciesMetrics = require('../species-metrics')
+
+describe('Species Metrics module', function () {
+    const testBedFile = path.join(__dirname, 'data', 'test_kraken2_spans.bed')
+
+    afterEach(function () {
+        speciesMetrics.clearCache()
+    })
+
+    describe('readBedFile', function () {
+        it('reads plain text BED file', function () {
+            const rows = speciesMetrics.readBedFile(testBedFile)
+            expect(rows).to.be.an('array')
+            expect(rows.length).to.equal(10) // 10 data rows
+            expect(rows[0][0]).to.equal('chr1') // chrom of first row
+        })
+
+        it('skips header lines starting with #', function () {
+            const rows = speciesMetrics.readBedFile(testBedFile)
+            // The test file has a #header line – should be excluded
+            rows.forEach(r => expect(r[0]).to.not.match(/^#/))
+        })
+
+        it('returns empty array for non-existent file', function () {
+            const rows = speciesMetrics.readBedFile('/nonexistent/path.bed')
+            expect(rows).to.be.an('array')
+            expect(rows).to.have.length(0)
+        })
+
+        it('returns empty array for null path', function () {
+            const rows = speciesMetrics.readBedFile(null)
+            expect(rows).to.have.length(0)
+        })
+    })
+
+    describe('parseBedByVariant', function () {
+        it('indexes BED rows by variant key', function () {
+            const variantMap = speciesMetrics.parseBedByVariant(testBedFile)
+            expect(variantMap).to.be.instanceOf(Map)
+            expect(variantMap.size).to.be.greaterThan(0)
+
+            // Check that the first variant key has rows
+            const key1 = 'chr1:12344:A:G'
+            expect(variantMap.has(key1)).to.be.true
+            const rows = variantMap.get(key1)
+            expect(rows).to.be.an('array')
+            expect(rows.length).to.equal(5) // 4 primary + 1 supplementary
+        })
+
+        it('caches results for the same file', function () {
+            const map1 = speciesMetrics.parseBedByVariant(testBedFile)
+            const map2 = speciesMetrics.parseBedByVariant(testBedFile)
+            expect(map1).to.equal(map2)
+        })
+
+        it('parses row fields correctly', function () {
+            const variantMap = speciesMetrics.parseBedByVariant(testBedFile)
+            const rows = variantMap.get('chr1:12344:A:G')
+            const r0 = rows[0]
+            expect(r0.chrom).to.equal('chr1')
+            expect(r0.start).to.equal(12300)
+            expect(r0.end).to.equal(12450)
+            expect(r0.taxonName).to.equal('Escherichia_coli')
+            expect(r0.domain).to.equal('Bacteria')
+            expect(r0.guardStatus).to.equal('PASS')
+            expect(r0.isNonhuman).to.be.true
+            expect(r0.readName).to.equal('read001')
+            expect(r0.readSet).to.equal('DKA')
+            expect(r0.mapq).to.equal(60)
+        })
+    })
+
+    describe('computeVariantMetrics', function () {
+        it('computes metrics for a set of rows', function () {
+            const variantMap = speciesMetrics.parseBedByVariant(testBedFile)
+            const rows = variantMap.get('chr1:12344:A:G')
+            const metrics = speciesMetrics.computeVariantMetrics(rows)
+
+            expect(metrics.totalReads).to.equal(4) // 4 primary reads (excludes supplementary)
+            expect(metrics.nonhumanReads).to.equal(1) // only read001 has isNonhuman=true
+            expect(metrics.nonhumanFraction).to.equal(0.25)
+            expect(metrics.assessment.label).to.equal('high') // 25% > 15%
+            expect(metrics.domainCounts).to.have.property('Bacteria')
+            expect(metrics.domainCounts).to.have.property('Human')
+            expect(metrics.topTaxa).to.be.an('array')
+            expect(metrics.readSetCounts.DKA).to.be.greaterThan(0)
+            expect(metrics.splitReadCount).to.equal(1)
+        })
+
+        it('handles empty rows', function () {
+            const metrics = speciesMetrics.computeVariantMetrics([])
+            expect(metrics.totalReads).to.equal(0)
+            expect(metrics.nonhumanFraction).to.equal(0)
+            expect(metrics.assessment.label).to.equal('clean')
+        })
+
+        it('handles null input', function () {
+            const metrics = speciesMetrics.computeVariantMetrics(null)
+            expect(metrics.totalReads).to.equal(0)
+        })
+    })
+
+    describe('classifyContamination', function () {
+        it('classifies clean samples', function () {
+            expect(speciesMetrics.classifyContamination(0).label).to.equal('clean')
+            expect(speciesMetrics.classifyContamination(0.01).label).to.equal('clean')
+        })
+
+        it('classifies caution samples', function () {
+            expect(speciesMetrics.classifyContamination(0.03).label).to.equal('caution')
+        })
+
+        it('classifies concern samples', function () {
+            expect(speciesMetrics.classifyContamination(0.08).label).to.equal('concern')
+        })
+
+        it('classifies high contamination', function () {
+            expect(speciesMetrics.classifyContamination(0.20).label).to.equal('high')
+        })
+    })
+
+    describe('getVariantMetrics', function () {
+        it('returns metrics for a known variant', function () {
+            const metrics = speciesMetrics.getVariantMetrics('chr1:12344:A:G', [testBedFile])
+            expect(metrics.totalReads).to.equal(4)
+            expect(metrics.nonhumanReads).to.equal(1)
+        })
+
+        it('returns empty metrics for unknown variant', function () {
+            const metrics = speciesMetrics.getVariantMetrics('chrX:99999:A:T', [testBedFile])
+            expect(metrics.totalReads).to.equal(0)
+        })
+
+        it('handles non-existent BED file gracefully', function () {
+            const metrics = speciesMetrics.getVariantMetrics('chr1:12344:A:G', ['/nonexistent.bed'])
+            expect(metrics.totalReads).to.equal(0)
+        })
+    })
+
+    describe('getGlobalSummary', function () {
+        it('returns summary across all variants', function () {
+            const summary = speciesMetrics.getGlobalSummary([testBedFile])
+            expect(summary.totalReads).to.be.greaterThan(0)
+            expect(summary.variantCount).to.equal(3) // 3 unique variant keys
+            expect(summary.domainCounts).to.have.property('Bacteria')
+            expect(summary.domainCounts).to.have.property('Human')
+        })
+
+        it('returns empty summary for non-existent files', function () {
+            const summary = speciesMetrics.getGlobalSummary(['/nonexistent.bed'])
+            expect(summary.totalReads).to.equal(0)
+            expect(summary.variantCount).to.equal(0)
+        })
+    })
+})
+
+// ---------------------------------------------------------------------------
+// Species Metrics API
+// ---------------------------------------------------------------------------
+
+describe('API /api/species-metrics', function () {
+    it('returns not-loaded when no BED tracks configured', async function () {
+        const res = await request(app).get('/api/species-metrics').expect(200)
+        expect(res.body).to.have.property('loaded', false)
+        expect(res.body).to.have.property('message').that.includes('BED track')
+    })
+
+    it('returns not-loaded for per-variant request without BED tracks', async function () {
+        const res = await request(app).get('/api/species-metrics?variant_id=0').expect(200)
+        expect(res.body).to.have.property('loaded', false)
+    })
+
+    it('returns 404 for non-existent variant', async function () {
+        const res = await request(app).get('/api/species-metrics?variant_id=9999').expect(404)
+        expect(res.body).to.have.property('error')
+    })
+})
