@@ -3608,4 +3608,29 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(joined).to.contain('Gene Summary')
         expect(joined).to.contain('Impact counts')
     })
+
+    it('xlsx includes a Gene Analysis convergence sheet (offline dims)', async function () {
+        this.timeout(10000)
+        // constraint + ClinVar only (offline); domain off + MyGene columns off ⇒ no network.
+        const exportConfig = {
+            geneAnnotations: {
+                enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false,
+                gnomadConstraint: {enabled: true}, clinvar: {enabled: true}, geneLists: {enabled: false}
+            },
+            geneAnalysis: {enabled: true, domain: false}
+        }
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4], exportConfig})
+            .buffer(true).parse(binaryParser).expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        const ga = wb.getWorksheet('Gene Analysis')
+        expect(ga, 'Gene Analysis sheet present').to.not.be.undefined
+        const text = []
+        ga.eachRow(r => r.eachCell(c => { if (c.value != null) text.push(String(c.value)) }))
+        const joined = text.join(' | ')
+        expect(joined).to.contain('DISTINCT INDIVIDUALS')   // the independent-signal method note
+        expect(joined).to.contain('Gene set per cell')
+    })
 })

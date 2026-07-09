@@ -21,6 +21,7 @@ const {generateLollipopSvg} = require('./lollipop')
 const {fetchProteinDomains} = require('./pfam')
 const {fetchGeneAnnotationsBatch} = require('./gene-annotations')
 const annotationRegistry = require('./annotation-registry')
+const {computeConvergence, geneTermsFor} = require('./gene-analysis')
 const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults, filterColumns} = require('./export-config')
 const speciesMetrics = require('./species-metrics')
 
@@ -1266,6 +1267,7 @@ function buildReadmeSheet(workbook, opts) {
     row('Read Me', 'This guide: worksheet overview, column dictionary, and data sources.')
     row('Variants', 'One row per exported variant. Rows are colour-coded by curation status (Pass/Fail/Uncertain/Pending).')
     if (hasGene && exportCfg.sheets.geneSummary) row('Gene Summary', 'One row per gene: curation counts, impact-passing counts, and gene-level annotations. See the column dictionary below.')
+    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis', 'Convergence: which shared attributes (constraint tier, ClinVar history, protein domain) your genes stack up on — counted by distinct individuals. See the dictionary below.')
     if (exportCfg.sheets.sampleSummary) row('Sample Summary', 'Per-sample variant counts by impact group and frequency threshold, with cohort mean/median.')
     if (hasSampleQc && exportCfg.sheets.sampleQc) row('Sample QC', 'Per-sample sequencing QC metrics with threshold-based pass/warn/fail assessment.')
     if (exportCfg.sheets.appliedFilters) row('Applied Filters', 'The filters and export settings used to produce this report (self-documenting).')
@@ -1316,6 +1318,17 @@ function buildReadmeSheet(workbook, opts) {
         }
     }
 
+    // --- Gene Analysis dictionary ---
+    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) {
+        section('Gene Analysis — how to read it')
+        row('Purpose', 'For each grouping dimension, shows which shared attributes (terms) your genes converge on — the signal when de novo hits are singletons scattered across genes.')
+        row('Counts = INDIVIDUALS', 'Each cell is the number of DISTINCT INDIVIDUALS (probands) with a qualifying variant in a gene carrying that term — NOT the number of variants. One proband with several de novo hits in the group counts once, so a single hypermutated proband cannot look like convergence.', 'impact × curation × sample')
+        row('# genes / Genes', 'Distinct genes contributing (locus heterogeneity), and their symbols. So single-proband exports still surface gene-level convergence.')
+        row('Columns (cells)', 'Curation status {pass, all} × cumulative impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW}. A term is shown only if ≥2 individuals OR ≥2 genes share it. Bold rows recur across ≥2 individuals.')
+        row('Dimensions', 'Constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9) and ClinVar P/LP history are offline; protein domain (InterPro) comes from MyGene (blank if the network is unavailable).', 'gnomAD / ClinVar / MyGene')
+        row('Method', 'Transparent shared-attribute counting — NOT enrichment p-values, which are unreliable at small gene counts. Hypothesis-generating, not diagnostic.')
+    }
+
     // --- Data sources & licensing ---
     section('Data sources & licensing')
     row('gnomAD', 'Gene constraint (pLI, LOEUF, missense Z), bundled offline from gnomAD v4 (GRCh38); live API fallback for GRCh37/hg19.', 'gnomad.broadinstitute.org', 'CC0 (attrib. requested)')
@@ -1331,6 +1344,112 @@ function buildReadmeSheet(workbook, opts) {
 
     ws.autoFilter = {from: 'A1', to: {row: 1, column: 4}}
     ws.views = [{state: 'frozen', ySplit: 1}]
+}
+
+/**
+ * Build the "Gene Analysis" worksheet: gene convergence on shared attributes,
+ * counted by DISTINCT INDIVIDUALS (probands), stratified by curation x impact
+ * tier. `conv` is the output of computeConvergence(). Wrapped by the caller in
+ * try/catch — must never break the export.
+ */
+function buildGeneAnalysisSheet(workbook, conv, styles) {
+    const {headerFill, headerFont, borderThin} = styles
+    const ws = workbook.addWorksheet('Gene Analysis')
+    const cells = conv.cells
+    const nCols = 1 + cells.length + 2   // Group + cell columns + (#genes) + (Genes)
+
+    const mergeAcross = (rowIdx) => ws.mergeCells(rowIdx, 1, rowIdx, nCols)
+    let r = 0
+    const addBanner = (text, font) => {
+        r++
+        const row = ws.addRow([text])
+        mergeAcross(r)
+        row.getCell(1).font = font
+        row.getCell(1).alignment = {wrapText: true, vertical: 'top'}
+        return row
+    }
+
+    addBanner('Gene Analysis — do the scattered single-hit genes converge?', {bold: true, size: 14, color: {argb: 'FF2C3E50'}})
+    addBanner('Counts are DISTINCT INDIVIDUALS (probands), not variants: one proband with several de novo hits in a group counts once. Shared-attribute counting — terms shared by ≥2 individuals or genes. Hypothesis-generating, not diagnostic.',
+        {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+
+    // Per-cell gene-set / individual sizes
+    const sizeStr = cells.map(c => `${c.label}: ${c.genes}g/${c.individuals}i`).join('   ')
+    addBanner(`Gene set per cell (genes/individuals) — ${sizeStr}`, {size: 10, color: {argb: 'FF47586A'}})
+
+    // Convergence headline: strongest group per dimension in the broadest passing cell
+    const headCellKey = 'pass|HIGH_MOD_LOW'
+    const headBits = []
+    for (const sec of conv.sections) {
+        if (!sec.groups.length) continue
+        let best = null
+        for (const g of sec.groups) {
+            const cc = g.cells[headCellKey] || {individuals: 0, genes: 0}
+            if (!best || cc.individuals > best.cc.individuals || (cc.individuals === best.cc.individuals && cc.genes > best.cc.genes)) best = {g, cc}
+        }
+        if (best && (best.cc.individuals >= 2 || best.cc.genes >= 2)) {
+            headBits.push(`${sec.label}: ${best.cc.individuals}i/${best.cc.genes}g share "${best.g.term}" (${best.g.genes.slice(0, 5).join(', ')})`)
+        }
+    }
+    addBanner(headBits.length ? `Top convergence (pass · all tiers) — ${headBits.join(';  ')}` : 'No attribute is shared by ≥2 passing individuals or genes yet.',
+        {bold: true, size: 11, color: {argb: 'FF2C3E50'}})
+    r++; ws.addRow([])   // spacer
+
+    // Column header row
+    const headerLabels = ['Group', ...cells.map(c => c.label), '# genes', 'Genes']
+    r++
+    const hdr = ws.addRow(headerLabels)
+    hdr.eachCell(cell => {
+        cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin
+        cell.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true}
+    })
+    hdr.height = 26
+    const headerRowIdx = r
+    ws.getColumn(1).width = 34
+    for (let i = 0; i < cells.length; i++) ws.getColumn(2 + i).width = 12
+    ws.getColumn(2 + cells.length).width = 9
+    ws.getColumn(3 + cells.length).width = 50
+
+    let anyGroups = false
+    for (const sec of conv.sections) {
+        if (!sec.groups.length) continue
+        anyGroups = true
+        r++
+        const secRow = ws.addRow([sec.label])
+        mergeAcross(r)
+        secRow.getCell(1).font = {bold: true, color: {argb: 'FF2C3E50'}}
+        for (let c = 1; c <= nCols; c++) secRow.getCell(c).fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFD6EAF8'}}
+        secRow.getCell(1).border = borderThin
+
+        sec.groups.forEach((g, idx) => {
+            const genesStr = g.genes.length > 16 ? g.genes.slice(0, 16).join(', ') + ` +${g.genes.length - 16}` : g.genes.join(', ')
+            const rowVals = [g.term]
+            for (const c of cells) {
+                const cc = g.cells[c.key] || {individuals: 0}
+                rowVals.push(cc.individuals || '')   // blank for 0 to reduce clutter
+            }
+            rowVals.push(g.refGenes)
+            rowVals.push(genesStr)
+            r++
+            const row = ws.addRow(rowVals)
+            row.eachCell(cell => {
+                cell.border = borderThin
+                if (idx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
+            })
+            for (let i = 0; i < cells.length; i++) row.getCell(2 + i).alignment = {horizontal: 'center'}
+            row.getCell(2 + cells.length).alignment = {horizontal: 'center'}
+            // Emphasise rows with independent recurrence (≥2 individuals anywhere)
+            if (g.refIndividuals >= 2) row.getCell(1).font = {bold: true}
+        })
+    }
+
+    if (!anyGroups) {
+        r++
+        ws.addRow(['No convergence found — no attribute is shared by ≥2 individuals or genes in the current export.'])
+        mergeAcross(r)
+    }
+
+    ws.views = [{state: 'frozen', ySplit: headerRowIdx}]
 }
 
 // -------------------------------------------------------------------------
@@ -1522,8 +1641,35 @@ app.post('/api/export/xlsx', async (req, res) => {
             ws.autoFilter = {from: 'A1', to: {row: 1, column: mainCols.length}}
         }
 
-        // --- Gene Summary worksheet -----------------------------------------
+        // --- Gene annotations (fetched once, shared by Gene Summary + Gene Analysis) --
         const xlsSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
+        const gaCfg = exportCfg.geneAnalysis || {}
+        const gaOn = !!(geneCol && exportCfg.sheets.geneAnalysis && gaCfg.enabled)
+        let geneAnnotations = new Map()
+        let providerByGene = new Map()   // gene -> {[providerId]: obj|null}
+        if (geneCol && (exportCfg.sheets.geneSummary || gaOn) && exportCfg.geneAnnotations.enabled) {
+            const geneNames = [...new Set(filtered.map(v => v[geneCol]).filter(Boolean))]
+            if (geneNames.length > 0) {
+                const ga = exportCfg.geneAnnotations
+                // Hit MyGene if a MyGene column is requested, or Gene Analysis needs domains.
+                const wantMyGene = ga.geneName || ga.summary || ga.omim || ga.pathways || ga.geneType || (gaOn && gaCfg.domain)
+                const tasks = []
+                if (wantMyGene) {
+                    tasks.push(fetchGeneAnnotationsBatch(geneNames)
+                        .then(m => { geneAnnotations = m })
+                        .catch(err => annotationErrors.push({source: 'MyGene.info', error: err.message})))
+                }
+                tasks.push(annotationRegistry.annotate(geneNames, exportCfg)
+                    .then(prov => {
+                        providerByGene = prov.byGene
+                        for (const e of prov.errors) annotationErrors.push({source: e.source, gene: e.gene, error: e.error})
+                    })
+                    .catch(err => annotationErrors.push({source: 'annotations', error: err.message})))
+                await Promise.all(tasks)
+            }
+        }
+
+        // --- Gene Summary worksheet -----------------------------------------
         try {
         if (geneCol && exportCfg.sheets.geneSummary) {
             // Local impact-column lookup (the handler-level `impactCol` is
@@ -1553,31 +1699,6 @@ app.post('/api/export/xlsx', async (req, res) => {
                 delete g._samples
                 return g
             }).sort((a, b) => b.total - a.total)
-
-            // Fetch gene annotations if enabled
-            let geneAnnotations = new Map()
-            let providerByGene = new Map()   // gene -> {[providerId]: obj|null}
-            if (exportCfg.geneAnnotations.enabled && geneSummary.length > 0) {
-                const geneNames = geneSummary.map(g => g.gene)
-                // Only hit MyGene.info if at least one MyGene-sourced column is requested.
-                const ga = exportCfg.geneAnnotations
-                const wantMyGene = ga.geneName || ga.summary || ga.omim || ga.pathways || ga.geneType
-                // Run MyGene and the registry providers concurrently to minimise
-                // export-time latency (each fails independently and gracefully).
-                const tasks = []
-                if (wantMyGene) {
-                    tasks.push(fetchGeneAnnotationsBatch(geneNames)
-                        .then(m => { geneAnnotations = m })
-                        .catch(err => annotationErrors.push({source: 'MyGene.info', error: err.message})))
-                }
-                tasks.push(annotationRegistry.annotate(geneNames, exportCfg)
-                    .then(prov => {
-                        providerByGene = prov.byGene
-                        for (const e of prov.errors) annotationErrors.push({source: e.source, gene: e.gene, error: e.error})
-                    })
-                    .catch(err => annotationErrors.push({source: 'annotations', error: err.message})))
-                await Promise.all(tasks)
-            }
 
             if (geneSummary.length > 0) {
                 const gws = workbook.addWorksheet('Gene Summary', {views: [{state: 'frozen', ySplit: 1}]})
@@ -1649,6 +1770,30 @@ app.post('/api/export/xlsx', async (req, res) => {
         } catch (sectionErr) {
             log.warn('Gene Summary worksheet failed:', sectionErr.message)
             exportErrors.push({section: 'Gene Summary', error: sectionErr.message})
+        }
+
+        // --- Gene Analysis (convergence) worksheet --------------------------
+        if (gaOn) {
+            try {
+                const gaImpactCol = headerColumns.includes('impact') ? 'impact' : null
+                const gaGenes = [...new Set(filtered.map(v => v[geneCol]).filter(Boolean))]
+                const geneTerms = new Map()
+                for (const gene of gaGenes) {
+                    const terms = geneTermsFor(gene, providerByGene.get(gene), geneAnnotations.get(gene))
+                    if (!gaCfg.constraint) terms.constraint = []
+                    if (!gaCfg.clinvar) terms.clinvar = []
+                    if (!gaCfg.domain) terms.domain = []
+                    geneTerms.set(String(gene).toUpperCase(), terms)
+                }
+                const conv = computeConvergence(filtered, {
+                    geneCol, impactCol: gaImpactCol, sampleCol: xlsSampleCol,
+                    geneTerms, minCount: gaCfg.minCount || 2
+                })
+                buildGeneAnalysisSheet(workbook, conv, {headerFill, headerFont, borderThin})
+            } catch (sectionErr) {
+                log.warn('Gene Analysis worksheet failed:', sectionErr.message)
+                exportErrors.push({section: 'Gene Analysis', error: sectionErr.message})
+            }
         }
 
         // --- Sample Summary worksheet ---------------------------------------

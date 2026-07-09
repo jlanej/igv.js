@@ -20,10 +20,23 @@ const DEFAULT_EXPORT_CONFIG = {
         variants: true,           // Main variants sheet (always true)
         dataDictionary: true,     // "Read Me" guide + per-tab column dictionary
         geneSummary: true,        // Gene summary tab
+        geneAnalysis: true,       // Gene convergence analysis tab
         sampleSummary: true,      // Sample summary tab
         sampleQc: true,           // Sample QC tab (if data exists)
         appliedFilters: true,     // Applied filters tab
         annotationStatus: true    // Annotation status / failure tracking
+    },
+
+    // Gene Analysis (convergence) tab. Groups genes by shared attribute and
+    // counts DISTINCT INDIVIDUALS (probands) — not variants — so one proband
+    // with several de novo hits in a group counts once. Stratified by curation
+    // (pass/all) x cumulative impact tier.
+    geneAnalysis: {
+        enabled: true,
+        minCount: 2,              // keep terms shared by >= this many individuals OR genes
+        constraint: true,         // gnomAD constraint-tail convergence (offline)
+        clinvar: true,            // ClinVar P/LP gene-history convergence (offline)
+        domain: true              // InterPro protein-domain convergence (via MyGene)
     },
 
     // Per-gene impact counts on the Gene Summary tab (curation-derived, not
@@ -137,6 +150,7 @@ function mergeWithDefaults(partial) {
     merged.sheets = {...DEFAULT_EXPORT_CONFIG.sheets, ...(partial.sheets || {})}
     merged.variantColumns = {...DEFAULT_EXPORT_CONFIG.variantColumns, ...(partial.variantColumns || {})}
     merged.impactCounts = {...DEFAULT_EXPORT_CONFIG.impactCounts, ...(partial.impactCounts || {})}
+    merged.geneAnalysis = {...DEFAULT_EXPORT_CONFIG.geneAnalysis, ...(partial.geneAnalysis || {})}
 
     // geneAnnotations mixes flat flags with nested provider objects. A shallow
     // spread would let a partial that sets a single nested sub-flag (e.g.

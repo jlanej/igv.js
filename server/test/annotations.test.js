@@ -18,6 +18,7 @@ const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults} = require('../export-config')
 const clinvar = require('../providers/clinvar-provider')
 const gnomad = require('../providers/gnomad-provider')
 const geneLists = require('../providers/genelist-provider')
+const {computeConvergence, geneTermsFor} = require('../gene-analysis')
 const registry = require('../annotation-registry')
 
 describe('export-config: nested deep-merge', function () {
@@ -211,5 +212,51 @@ describe('annotation-registry', function () {
     it('produces no columns when the master toggle is off', function () {
         const cfg = mergeWithDefaults({geneAnnotations: {enabled: false}})
         expect(registry.columns(cfg)).to.have.length(0)
+    })
+})
+
+describe('gene-analysis convergence (independent signals)', function () {
+    // Individual X: two de novo hits in two different genes (G1, G2), both
+    // carrying domain D1, both HIGH/pass. Individual Y: one hit in G3 (D1),
+    // MODERATE/pass. The point: X's two DNMs must count as ONE individual.
+    const variants = [
+        {gene: 'G1', s: 'X', impact: 'HIGH', curation_status: 'pass'},
+        {gene: 'G2', s: 'X', impact: 'HIGH', curation_status: 'pass'},
+        {gene: 'G3', s: 'Y', impact: 'MODERATE', curation_status: 'pass'}
+    ]
+    const geneTerms = new Map([
+        ['G1', {constraint: ['LOEUF < 0.6 (LoF-constrained)'], clinvar: [], domain: ['D1']}],
+        ['G2', {constraint: [], clinvar: [], domain: ['D1']}],
+        ['G3', {constraint: ['LOEUF < 0.6 (LoF-constrained)'], clinvar: [], domain: ['D1']}]
+    ])
+    const opts = {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', geneTerms}
+
+    it('counts distinct individuals, not variants (one proband with 2 DNMs = 1)', function () {
+        const conv = computeConvergence(variants, opts)
+        const d1 = conv.sections.find(s => s.id === 'domain').groups.find(g => g.term === 'D1')
+        expect(d1.refIndividuals).to.equal(2)   // X (once, not twice) + Y
+        expect(d1.refGenes).to.equal(3)
+        expect(d1.cells['pass|HIGH']).to.deep.equal({individuals: 1, genes: 2})       // X only
+        expect(d1.cells['pass|HIGH_MOD']).to.deep.equal({individuals: 2, genes: 3})   // X + Y
+    })
+
+    it('falls back to gene-level convergence for a single proband', function () {
+        const single = variants.filter(v => v.s === 'X')  // one individual, two genes share D1
+        const conv = computeConvergence(single, opts)
+        const d1 = conv.sections.find(s => s.id === 'domain').groups.find(g => g.term === 'D1')
+        expect(d1.refIndividuals).to.equal(1)
+        expect(d1.refGenes).to.equal(2)   // kept via ≥2 genes
+    })
+
+    it('drops attributes shared by <2 individuals and <2 genes', function () {
+        const conv = computeConvergence([{gene: 'G3', s: 'Z', impact: 'HIGH', curation_status: 'pass'}], opts)
+        expect(conv.sections.find(s => s.id === 'domain').groups).to.have.length(0)
+    })
+
+    it('geneTermsFor derives dimension terms from provider + MyGene annotations', function () {
+        const terms = geneTermsFor('TSC1', {gnomad: {loeuf: 0.23, pli: 1.0}, clinvar: {plp: 782}}, {domains: ['Hamartin']})
+        expect(terms.constraint).to.include.members(['LOEUF < 0.6 (LoF-constrained)', 'pLI ≥ 0.9'])
+        expect(terms.clinvar).to.deep.equal(['Has ClinVar P/LP'])
+        expect(terms.domain).to.deep.equal(['Hamartin'])
     })
 })

@@ -19,13 +19,13 @@ const MYGENE_BASE = 'https://mygene.info/v3'
 const MAX_PATHWAYS = 10
 
 // Fields we request – kept minimal to reduce payload & latency.
-// Covers: gene summary, genomic location, OMIM/MIM, ClinVar counts,
-// gnomAD constraint (pLI, LOEUF).
+// Covers: gene summary, genomic location, OMIM/MIM, KEGG pathways, and
+// InterPro protein domains (used by the Gene Analysis convergence tab).
 const QUERY_FIELDS = [
     'symbol', 'name', 'summary', 'type_of_gene',
     'genomic_pos', 'genomic_pos_hg19',
     'MIM', 'generif',
-    'pathway.kegg'
+    'pathway.kegg', 'interpro'
 ].join(',')
 
 // In-memory cache: gene → {data, fetchedAt}
@@ -178,6 +178,7 @@ function parseHit(hit, gene) {
         mim: hit.MIM || null,
         genomicPos: null,
         pathways: [],
+        domains: [],
         error: null
     }
 
@@ -193,6 +194,12 @@ function parseHit(hit, gene) {
     if (hit.pathway && hit.pathway.kegg) {
         const kegg = Array.isArray(hit.pathway.kegg) ? hit.pathway.kegg : [hit.pathway.kegg]
         result.pathways = kegg.map(p => ({id: p.id, name: p.name})).slice(0, MAX_PATHWAYS)
+    }
+
+    // InterPro protein domains (names) — for the Gene Analysis convergence tab
+    if (hit.interpro) {
+        const ip = Array.isArray(hit.interpro) ? hit.interpro : [hit.interpro]
+        result.domains = [...new Set(ip.map(d => d && d.desc).filter(Boolean))]
     }
 
     return result
