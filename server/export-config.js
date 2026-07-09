@@ -59,12 +59,14 @@ const DEFAULT_EXPORT_CONFIG = {
             constrainedFlag: true, // derived Yes/No LoF-constrained flag
             misZ: false           // missense Z-score
         },
-        clinvar: {                // ClinVar gene-level P/LP (bundled file)
+        clinvar: {                // ClinVar gene-level counts (bundled file)
             enabled: true,
-            plp: true,            // count of Pathogenic/Likely-pathogenic alleles
-            hasPlp: true,         // Yes/No has any P/LP
-            vus: false,           // count of uncertain-significance alleles
-            conflicts: false      // count with conflicting interpretations
+            p: true,              // count of Pathogenic variants
+            lp: true,             // count of Likely-pathogenic variants
+            plp: false,           // combined P+LP count (off; P and LP shown separately)
+            hasPlp: true,         // Yes/No has any P or LP
+            vus: false,           // count of uncertain-significance variants
+            conflicts: false      // count with conflicting classifications
         },
         geneLists: {              // Gene-list membership flags (bundled lists)
             enabled: true         // e.g. COSMIC / panel membership — see data/gene-lists

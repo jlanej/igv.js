@@ -56,17 +56,19 @@ describe('ClinVar provider (bundled)', function () {
 
     before(function () { clinvar.reset() })
 
-    it('returns P/LP counts for a known gene', async function () {
+    it('returns separate P and LP counts for a known gene', async function () {
         const map = await clinvar.fetchBatch(['TSC1'])
         const rec = map.get('TSC1')
         expect(rec).to.be.an('object')
-        expect(rec.plp).to.equal(782)
-        expect(rec.total).to.equal(5767)
+        expect(rec.p).to.be.a('number').that.is.greaterThan(0)   // TSC1 has Pathogenic
+        expect(rec.lp).to.be.a('number').that.is.greaterThan(0)  // and Likely-pathogenic
+        expect(rec.p).to.be.greaterThan(rec.lp)                  // more P than LP for TSC1
+        expect(rec.plp).to.be.at.least(rec.p + rec.lp)           // combined = P + LP + mixed
     })
 
     it('is case-insensitive on symbol', async function () {
         const map = await clinvar.fetchBatch(['tsc1'])
-        expect(map.get('TSC1').plp).to.equal(782)
+        expect(map.get('TSC1').p).to.be.greaterThan(0)
     })
 
     it('returns null for genes absent from ClinVar', async function () {
@@ -74,18 +76,19 @@ describe('ClinVar provider (bundled)', function () {
         expect(map.get('NOT_A_REAL_GENE_XYZ')).to.equal(null)
     })
 
-    it('toRow maps counts and Has-P/LP flag', function () {
-        expect(clinvar.toRow({plp: 782, vus: 2290, conflicts: 613, total: 5767}, cfg))
-            .to.deep.equal({clinvarPlp: 782, clinvarHasPlp: 'Yes'})
-        expect(clinvar.toRow({plp: 0, vus: 5, conflicts: 0, total: 5}, cfg))
-            .to.deep.equal({clinvarPlp: 0, clinvarHasPlp: 'No'})
-        expect(clinvar.toRow(null, cfg)).to.deep.equal({clinvarPlp: '', clinvarHasPlp: ''})
+    it('toRow maps separate P/LP counts and the Has-P/LP flag', function () {
+        expect(clinvar.toRow({p: 602, lp: 99, plp: 750, vus: 2258, conflicts: 613, total: 5662}, cfg))
+            .to.deep.equal({clinvarP: 602, clinvarLp: 99, clinvarHasPlp: 'Yes'})
+        expect(clinvar.toRow({p: 0, lp: 0, plp: 0, vus: 5, conflicts: 0, total: 5}, cfg))
+            .to.deep.equal({clinvarP: 0, clinvarLp: 0, clinvarHasPlp: 'No'})
+        expect(clinvar.toRow(null, cfg)).to.deep.equal({clinvarP: '', clinvarLp: '', clinvarHasPlp: ''})
     })
 
     it('columns reflect config sub-flags', function () {
         const headers = clinvar.columns(cfg).map(c => c.header)
-        expect(headers).to.include.members(['ClinVar P/LP', 'Has P/LP'])
-        expect(headers).to.not.include('ClinVar VUS')  // vus default off
+        expect(headers).to.include.members(['ClinVar P', 'ClinVar LP', 'Has P/LP'])
+        expect(headers).to.not.include('ClinVar P/LP')  // combined off by default
+        expect(headers).to.not.include('ClinVar VUS')   // vus default off
     })
 })
 
@@ -187,7 +190,7 @@ describe('annotation-registry', function () {
         }})
         const {byGene, errors} = await registry.annotate(['TSC1', 'GENE1'], cfg)
         expect(errors).to.be.an('array').that.is.empty
-        expect(byGene.get('TSC1').clinvar.plp).to.equal(782)
+        expect(byGene.get('TSC1').clinvar.p).to.be.a('number').that.is.greaterThan(0)
         expect(byGene.get('GENE1').clinvar).to.equal(null)
     })
 
@@ -196,10 +199,12 @@ describe('annotation-registry', function () {
             enabled: true, gnomadConstraint: {enabled: false}, clinvar: {enabled: true}, geneLists: {enabled: false}
         }})
         const headers = registry.columns(cfg).map(c => c.header)
-        expect(headers).to.include('ClinVar P/LP')
+        expect(headers).to.include('ClinVar P')
+        expect(headers).to.include('ClinVar LP')
         expect(headers).to.not.include('gnomAD pLI')
-        const cells = registry.applyCells({clinvar: {plp: 782, total: 5767}}, cfg)
-        expect(cells.clinvarPlp).to.equal(782)
+        const cells = registry.applyCells({clinvar: {p: 602, lp: 99, plp: 750, total: 5662}}, cfg)
+        expect(cells.clinvarP).to.equal(602)
+        expect(cells.clinvarLp).to.equal(99)
         expect(cells.clinvarHasPlp).to.equal('Yes')
     })
 

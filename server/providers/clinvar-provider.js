@@ -68,7 +68,9 @@ async function fetchBatch(geneList /*, cfg */) {
 function columns(cfg) {
     const c = providerCfg(cfg)
     const cols = []
-    if (c.plp !== false) cols.push({header: 'ClinVar P/LP', key: 'clinvarPlp', width: 12})
+    if (c.p !== false) cols.push({header: 'ClinVar P', key: 'clinvarP', width: 11})
+    if (c.lp !== false) cols.push({header: 'ClinVar LP', key: 'clinvarLp', width: 11})
+    if (c.plp) cols.push({header: 'ClinVar P/LP', key: 'clinvarPlp', width: 12})
     if (c.hasPlp !== false) cols.push({header: 'Has P/LP', key: 'clinvarHasPlp', width: 10})
     if (c.vus) cols.push({header: 'ClinVar VUS', key: 'clinvarVus', width: 12})
     if (c.conflicts) cols.push({header: 'ClinVar Conflicts', key: 'clinvarConflicts', width: 16})
@@ -79,7 +81,9 @@ function toRow(obj, cfg) {
     const c = providerCfg(cfg)
     const has = obj && !obj.error
     const cells = {}
-    if (c.plp !== false) cells.clinvarPlp = has ? obj.plp : ''
+    if (c.p !== false) cells.clinvarP = has ? obj.p : ''
+    if (c.lp !== false) cells.clinvarLp = has ? obj.lp : ''
+    if (c.plp) cells.clinvarPlp = has ? obj.plp : ''
     if (c.hasPlp !== false) cells.clinvarHasPlp = has ? (obj.plp > 0 ? 'Yes' : 'No') : ''
     if (c.vus) cells.clinvarVus = has ? obj.vus : ''
     if (c.conflicts) cells.clinvarConflicts = has ? obj.conflicts : ''
@@ -91,6 +95,6 @@ function reset() { genes = null; loadAttempted = false }
 
 module.exports = {
     id: 'clinvar',
-    attribution: 'NCBI ClinVar gene summary (P/LP counts), public domain — https://www.ncbi.nlm.nih.gov/clinvar',
+    attribution: 'NCBI ClinVar per-gene Pathogenic / Likely-pathogenic counts (GRCh38), public domain — https://www.ncbi.nlm.nih.gov/clinvar',
     isEnabled, fetchBatch, columns, toRow, load, reset, DATA_FILE
 }

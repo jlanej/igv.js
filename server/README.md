@@ -535,7 +535,7 @@ Annotation Status tab, never a failed export.
 |------------|---------|--------|---------|
 | **Impact passing review** | Pass HIGH / MODERATE / LOW | curation × impact | n/a |
 | **gnomAD constraint** | gnomAD LOEUF, pLI, LoF-constrained | bundled v4 (GRCh38); live API fallback for hg19 | CC0 |
-| **ClinVar** | ClinVar P/LP, Has P/LP | bundled `data/annotations/*` | public domain |
+| **ClinVar** | ClinVar P, ClinVar LP, Has P/LP | bundled `data/annotations/*` | public domain |
 | **Gene-list membership** | one Yes/No column per list | `data/gene-lists/*.txt` | membership only |
 | **MyGene.info** | Gene Name, Type, OMIM, Pathways, Summary | MyGene.info (live) | per source |
 

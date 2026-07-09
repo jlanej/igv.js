@@ -3586,7 +3586,7 @@ describe('Gene Summary impact counts and annotations', function () {
         const wb = new ExcelJS.Workbook()
         await wb.xlsx.load(res.body)
         const header = wb.getWorksheet('Gene Summary').getRow(1).values
-        expect(header).to.include.members(['ClinVar P/LP', 'Has P/LP'])
+        expect(header).to.include.members(['ClinVar P', 'ClinVar LP', 'Has P/LP'])
         expect(header).to.not.include('Gene Name')
         expect(header).to.not.include('gnomAD pLI')
     })

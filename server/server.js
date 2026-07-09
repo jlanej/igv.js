@@ -1299,10 +1299,12 @@ function buildReadmeSheet(workbook, opts) {
                 gnomadPli: ['Probability of loss-of-function intolerance (pLI). ≥0.9 = LoF-intolerant.', 'gnomAD', 'CC0'],
                 gnomadConstrained: ['Derived flag: Yes if pLI≥0.9 or LOEUF<0.35.', 'gnomAD (derived)', 'CC0'],
                 gnomadMisZ: ['Missense constraint Z-score. ≥3.09 = missense-constrained.', 'gnomAD', 'CC0'],
-                clinvarPlp: ['Count of Pathogenic/Likely-pathogenic alleles reported in ClinVar for this gene.', 'ClinVar', 'public domain'],
-                clinvarHasPlp: ['Yes if the gene has ≥1 Pathogenic/Likely-pathogenic allele in ClinVar.', 'ClinVar', 'public domain'],
-                clinvarVus: ['Count of uncertain-significance alleles in ClinVar.', 'ClinVar', 'public domain'],
-                clinvarConflicts: ['Count of alleles with conflicting interpretations in ClinVar.', 'ClinVar', 'public domain']
+                clinvarP: ['Count of ClinVar variants classified Pathogenic for this gene (GRCh38).', 'ClinVar', 'public domain'],
+                clinvarLp: ['Count of ClinVar variants classified Likely pathogenic for this gene (GRCh38).', 'ClinVar', 'public domain'],
+                clinvarPlp: ['Combined count of Pathogenic + Likely-pathogenic (+ Pathogenic/Likely-pathogenic) variants.', 'ClinVar', 'public domain'],
+                clinvarHasPlp: ['Yes if the gene has ≥1 Pathogenic or Likely-pathogenic variant in ClinVar.', 'ClinVar', 'public domain'],
+                clinvarVus: ['Count of uncertain-significance variants in ClinVar.', 'ClinVar', 'public domain'],
+                clinvarConflicts: ['Count of variants with conflicting classifications in ClinVar.', 'ClinVar', 'public domain']
             }
             for (const col of annotationRegistry.columns(exportCfg)) {
                 if (keyDesc[col.key]) {
@@ -1317,7 +1319,7 @@ function buildReadmeSheet(workbook, opts) {
     // --- Data sources & licensing ---
     section('Data sources & licensing')
     row('gnomAD', 'Gene constraint (pLI, LOEUF, missense Z), bundled offline from gnomAD v4 (GRCh38); live API fallback for GRCh37/hg19.', 'gnomad.broadinstitute.org', 'CC0 (attrib. requested)')
-    row('ClinVar', 'Aggregate per-gene Pathogenic/Likely-pathogenic allele counts.', 'ncbi.nlm.nih.gov/clinvar', 'public domain')
+    row('ClinVar', 'Per-gene counts of Pathogenic and Likely-pathogenic variants (separately), plus VUS/conflicts, from the GRCh38 variant summary.', 'ncbi.nlm.nih.gov/clinvar', 'public domain')
     row('MyGene.info', 'Gene name, type, OMIM MIM number, KEGG pathways, function summary.', 'mygene.info', 'per source')
     row('Gene-list membership', 'Yes/No membership derived from user-supplied symbol lists. Used for licence-restricted sources (e.g. COSMIC): only membership is embedded, not the licensed content.', 'user-supplied', 'membership only')
 
