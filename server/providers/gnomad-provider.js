@@ -23,7 +23,9 @@ const log = require('../logger')
 
 const GNOMAD_API = 'https://gnomad.broadinstitute.org/api'
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000  // 24 hours
-const CHUNK_SIZE = 75                       // genes per aliased GraphQL request
+// gnomAD's GraphQL endpoint rejects large aliased queries with HTTP 400 (query
+// complexity limit ~25-30 genes). Stay well under it so real exports don't fail.
+const CHUNK_SIZE = 20                       // genes per aliased GraphQL request
 const TIMEOUT_MS = 8000
 
 // In-memory cache: `${build}:${SYMBOL}` → {data, fetchedAt}
