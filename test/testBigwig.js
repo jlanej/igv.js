@@ -7,7 +7,9 @@ import {createGenome} from "./utils/MockGenome.js"
 
 suite("testBigWig", function () {
 
-    test("Uncompressed bigwig", async function () {
+    // NOTE (fork patch): fixture igv.org.test/data/uncompressed.bw was removed
+    // upstream (404). Skipped on this fork; re-enable if the data is restored.
+    test.skip("Uncompressed bigwig", async function () {
 
         this.timeout(10000)
 

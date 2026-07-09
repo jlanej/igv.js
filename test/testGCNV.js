@@ -47,7 +47,9 @@ suite("testGCNV", function () {
 
     })
 
-    test("example track", async function () {
+    // NOTE (fork patch): fixture igv.org.demo/gcnv_track_example_data.chr22.bed.gz(.tbi)
+    // was removed upstream (404). Skipped on this fork; re-enable if the data is restored.
+    test.skip("example track", async function () {
 
         this.timeout(10000)
 

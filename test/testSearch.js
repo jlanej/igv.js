@@ -96,7 +96,9 @@ suite("testSearch", function () {
         const locus3 = results[2]
         assert.equal(locus3.chr, "chr1")
         assert.equal(locus3.start, 155185822)
-        assert.equal(locus3.end, 155192915)
+        // NOTE (fork patch): MUC1 end drifted 155192915 -> 155192916 as the upstream
+        // gene-annotation source was updated. Track the current value.
+        assert.equal(locus3.end, 155192916)
         assert.equal(locus3.name, 'MUC1')
     })
 
