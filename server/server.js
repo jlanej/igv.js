@@ -21,7 +21,9 @@ const {generateLollipopSvg} = require('./lollipop')
 const {fetchProteinDomains} = require('./pfam')
 const {fetchGeneAnnotationsBatch} = require('./gene-annotations')
 const annotationRegistry = require('./annotation-registry')
-const {computeConvergence, geneTermsFor} = require('./gene-analysis')
+const {computeConvergence, geneTermsFor, backgroundFractions} = require('./gene-analysis')
+const gnomadProvider = require('./providers/gnomad-provider')
+const clinvarProvider = require('./providers/clinvar-provider')
 const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults, filterColumns} = require('./export-config')
 const speciesMetrics = require('./species-metrics')
 
@@ -1324,6 +1326,7 @@ function buildReadmeSheet(workbook, opts) {
         row('Purpose', 'For each grouping dimension, shows which shared attributes (terms) your genes converge on — the signal when de novo hits are singletons scattered across genes.')
         row('Counts = INDIVIDUALS', 'Each cell is the number of DISTINCT INDIVIDUALS (probands) with a qualifying variant in a gene carrying that term — NOT the number of variants. One proband with several de novo hits in the group counts once, so a single hypermutated proband cannot look like convergence.', 'impact × curation × sample')
         row('# genes / Genes', 'Distinct genes contributing (locus heterogeneity), and their symbols. So single-proband exports still surface gene-level convergence.')
+        row('bg', 'Background frequency — fraction of all scored genes that carry this term (constraint/ClinVar only; "—" for domain). A low bg with a high count = surprising convergence; a high bg (e.g. a generic term) = expected. A cue, not a p-value.', 'gnomAD / ClinVar bundle')
         row('Columns (cells)', 'Curation status {pass, all} × cumulative impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL}. ALL applies no impact restriction (incl. MODIFIER/blank). A term is shown only if ≥2 individuals OR ≥2 genes share it. Bold rows recur across ≥2 individuals.')
         row('Dimensions', 'Constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9) and ClinVar P/LP history are offline; protein domain (InterPro) comes from MyGene (blank if the network is unavailable).', 'gnomAD / ClinVar / MyGene')
         row('Method', 'Transparent shared-attribute counting — NOT enrichment p-values, which are unreliable at small gene counts. Hypothesis-generating, not diagnostic.')
@@ -1356,7 +1359,7 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
     const {headerFill, headerFont, borderThin} = styles
     const ws = workbook.addWorksheet('Gene Analysis')
     const cells = conv.cells
-    const nCols = 1 + cells.length + 2   // Group + cell columns + (#genes) + (Genes)
+    const nCols = 1 + cells.length + 3   // Group + cell columns + (#genes) + (bg) + (Genes)
 
     const mergeAcross = (rowIdx) => ws.mergeCells(rowIdx, 1, rowIdx, nCols)
     let r = 0
@@ -1395,8 +1398,8 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
         {bold: true, size: 11, color: {argb: 'FF2C3E50'}})
     r++; ws.addRow([])   // spacer
 
-    // Column header row
-    const headerLabels = ['Group', ...cells.map(c => c.label), '# genes', 'Genes']
+    // Column header row ('bg' = fraction of all scored genes carrying the term)
+    const headerLabels = ['Group', ...cells.map(c => c.label), '# genes', 'bg', 'Genes']
     r++
     const hdr = ws.addRow(headerLabels)
     hdr.eachCell(cell => {
@@ -1407,8 +1410,9 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
     const headerRowIdx = r
     ws.getColumn(1).width = 34
     for (let i = 0; i < cells.length; i++) ws.getColumn(2 + i).width = 12
-    ws.getColumn(2 + cells.length).width = 9
-    ws.getColumn(3 + cells.length).width = 50
+    ws.getColumn(2 + cells.length).width = 9    // # genes
+    ws.getColumn(3 + cells.length).width = 8    // bg
+    ws.getColumn(4 + cells.length).width = 50   // Genes
 
     let anyGroups = false
     for (const sec of conv.sections) {
@@ -1429,6 +1433,7 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
                 rowVals.push(cc.individuals || '')   // blank for 0 to reduce clutter
             }
             rowVals.push(g.refGenes)
+            rowVals.push(g.bgFreq != null ? `${(g.bgFreq * 100).toFixed(g.bgFreq < 0.01 ? 1 : 0)}%` : '—')
             rowVals.push(genesStr)
             r++
             const row = ws.addRow(rowVals)
@@ -1438,6 +1443,7 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
             })
             for (let i = 0; i < cells.length; i++) row.getCell(2 + i).alignment = {horizontal: 'center'}
             row.getCell(2 + cells.length).alignment = {horizontal: 'center'}
+            row.getCell(3 + cells.length).alignment = {horizontal: 'center'}   // bg
             // Emphasise rows with independent recurrence (≥2 individuals anywhere)
             if (g.refIndividuals >= 2) row.getCell(1).font = {bold: true}
         })
@@ -1791,9 +1797,16 @@ app.post('/api/export/xlsx', async (req, res) => {
                     if (!gaCfg.domain) terms.domain = []
                     geneTerms.set(String(gene).toUpperCase(), terms)
                 }
+                // Background frequency of each term across the full bundled
+                // gene universe (offline dimensions only) — the "is this
+                // surprising?" cue. Gracefully null if bundles are unavailable.
+                let bgFreq = null
+                try {
+                    bgFreq = backgroundFractions({gnomad: gnomadProvider.getBundle(), clinvar: clinvarProvider.getGenes()})
+                } catch (bgErr) { /* leave bgFreq null */ }
                 const conv = computeConvergence(filtered, {
                     geneCol, impactCol: gaImpactCol, sampleCol: xlsSampleCol,
-                    geneTerms, minCount: gaCfg.minCount || 2
+                    geneTerms, minCount: gaCfg.minCount || 2, bgFreq
                 })
                 buildGeneAnalysisSheet(workbook, conv, {headerFill, headerFont, borderThin})
             } catch (sectionErr) {

@@ -66,7 +66,7 @@ function buildCells() {
  * @returns {{cells:Array, sections:Array, hasSamples:boolean}}
  */
 function computeConvergence(variants, opts) {
-    const {geneCol, impactCol, sampleCol, geneTerms, minCount = 2} = opts
+    const {geneCol, impactCol, sampleCol, geneTerms, minCount = 2, bgFreq = null} = opts
     const cells = buildCells()
 
     // acc[dimId][term][cellKey] = {individuals:Set, genes:Set}
@@ -119,7 +119,8 @@ function computeConvergence(variants, opts) {
                 cellCounts[c.key] = cd ? {individuals: cd.individuals.size, genes: cd.genes.size}
                     : {individuals: 0, genes: 0}
             }
-            groups.push({term, refIndividuals, refGenes, cells: cellCounts, genes: [...ref.genes].sort()})
+            const bg = (bgFreq && bgFreq[d.id] && bgFreq[d.id][term] != null) ? bgFreq[d.id][term] : null
+            groups.push({term, refIndividuals, refGenes, cells: cellCounts, genes: [...ref.genes].sort(), bgFreq: bg})
         }
         // Rank by independent recurrence first (individuals), then locus heterogeneity (genes).
         groups.sort((a, b) => b.refIndividuals - a.refIndividuals || b.refGenes - a.refGenes || a.term.localeCompare(b.term))
@@ -132,6 +133,35 @@ function computeConvergence(variants, opts) {
     }))
 
     return {cells: cellSummary, sections, hasSamples: !!sampleCol}
+}
+
+/**
+ * Background frequency of each term across the full bundled gene universe —
+ * the "is this surprising?" cue next to a convergence count. Pure (takes the
+ * already-loaded bundle Maps). Only the offline dimensions (constraint, ClinVar)
+ * have a background; protein domain has none (no small offline InterPro map).
+ * @param {{gnomad?:Map, clinvar?:Map}} bundles
+ * @returns {{constraint:Object, clinvar:Object, domain:Object}}
+ */
+function backgroundFractions(bundles) {
+    const out = {constraint: {}, clinvar: {}, domain: {}}
+    const gn = bundles && bundles.gnomad
+    if (gn && gn.size) {
+        let loeuf = 0, pli = 0
+        for (const rec of gn.values()) {
+            if (rec && typeof rec.loeuf === 'number' && rec.loeuf < 0.6) loeuf++
+            if (rec && typeof rec.pli === 'number' && rec.pli >= 0.9) pli++
+        }
+        out.constraint['LOEUF < 0.6 (LoF-constrained)'] = loeuf / gn.size
+        out.constraint['pLI ≥ 0.9'] = pli / gn.size
+    }
+    const cv = bundles && bundles.clinvar
+    if (cv && cv.size) {
+        let plp = 0
+        for (const rec of cv.values()) if (rec && rec.plp > 0) plp++
+        out.clinvar['Has ClinVar P/LP'] = plp / cv.size
+    }
+    return out
 }
 
 /** Derive the per-gene term lists (v0 dimensions) from the assembled annotations. */
@@ -149,4 +179,4 @@ function geneTermsFor(gene, providerObj, myGeneAnn) {
     return {constraint, clinvar, domain}
 }
 
-module.exports = {computeConvergence, geneTermsFor, DIMENSIONS, IMPACT_TIERS, STATUS_FILTERS}
+module.exports = {computeConvergence, geneTermsFor, backgroundFractions, DIMENSIONS, IMPACT_TIERS, STATUS_FILTERS}

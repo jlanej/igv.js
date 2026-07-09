@@ -90,11 +90,14 @@ function toRow(obj, cfg) {
     return cells
 }
 
+/** The loaded ClinVar gene Map (for background-frequency stats). */
+function getGenes() { load(); return genes }
+
 /** Force a reload on next use (testing helper). */
 function reset() { genes = null; loadAttempted = false }
 
 module.exports = {
     id: 'clinvar',
     attribution: 'NCBI ClinVar per-gene Pathogenic / Likely-pathogenic counts (GRCh38), public domain — https://www.ncbi.nlm.nih.gov/clinvar',
-    isEnabled, fetchBatch, columns, toRow, load, reset, DATA_FILE
+    isEnabled, fetchBatch, columns, toRow, load, reset, getGenes, DATA_FILE
 }

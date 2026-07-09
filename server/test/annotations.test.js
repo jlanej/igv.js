@@ -18,7 +18,7 @@ const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults} = require('../export-config')
 const clinvar = require('../providers/clinvar-provider')
 const gnomad = require('../providers/gnomad-provider')
 const geneLists = require('../providers/genelist-provider')
-const {computeConvergence, geneTermsFor} = require('../gene-analysis')
+const {computeConvergence, geneTermsFor, backgroundFractions} = require('../gene-analysis')
 const registry = require('../annotation-registry')
 
 describe('export-config: nested deep-merge', function () {
@@ -275,5 +275,23 @@ describe('gene-analysis convergence (independent signals)', function () {
         const d = conv.sections.find(s => s.id === 'domain').groups.find(g => g.term === 'D')
         expect(d.cells['pass|HIGH_MOD_LOW'].individuals).to.equal(1)   // HIGH only
         expect(d.cells['pass|ALL'].individuals).to.equal(3)           // + MODIFIER + blank
+    })
+
+    it('backgroundFractions computes term prevalence and attaches it to groups', function () {
+        const gn = new Map([['A', {loeuf: 0.2, pli: 1.0}], ['B', {loeuf: 0.5, pli: 0.5}],
+            ['C', {loeuf: 1.2, pli: 0.0}], ['D', {loeuf: 0.7, pli: 0.95}]])
+        const cv = new Map([['A', {plp: 5}], ['B', {plp: 0}], ['C', {plp: 2}], ['D', {plp: 0}]])
+        const bg = backgroundFractions({gnomad: gn, clinvar: cv})
+        expect(bg.constraint['LOEUF < 0.6 (LoF-constrained)']).to.equal(0.5)  // A,B
+        expect(bg.clinvar['Has ClinVar P/LP']).to.equal(0.5)                  // A,C
+        expect(bg.domain).to.deep.equal({})                                   // no offline background
+
+        const conv = computeConvergence(
+            [{gene: 'A', s: 'X', impact: 'HIGH', curation_status: 'pass'}, {gene: 'C', s: 'Y', impact: 'HIGH', curation_status: 'pass'}],
+            {geneCol: 'gene', impactCol: 'impact', sampleCol: 's',
+                geneTerms: new Map([['A', {constraint: [], clinvar: ['Has ClinVar P/LP'], domain: ['Dom']}], ['C', {constraint: [], clinvar: ['Has ClinVar P/LP'], domain: ['Dom']}]]),
+                bgFreq: bg})
+        expect(conv.sections.find(s => s.id === 'clinvar').groups[0].bgFreq).to.equal(0.5)
+        expect(conv.sections.find(s => s.id === 'domain').groups[0].bgFreq).to.equal(null)
     })
 })

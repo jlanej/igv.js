@@ -205,6 +205,9 @@ function toRow(obj, cfg) {
     return cells
 }
 
+/** The loaded constraint bundle Map (for background-frequency stats). */
+function getBundle() { loadBundle(); return bundle }
+
 /** Clear caches / force reload (testing helper). */
 function reset() { cache.clear(); bundle = null; bundleAvailable = false; bundleLoadAttempted = false }
 
@@ -212,5 +215,5 @@ module.exports = {
     id: 'gnomad',
     attribution: 'gnomAD v4 gene constraint (LOEUF/pLI), bundled offline, CC0 — https://gnomad.broadinstitute.org',
     isEnabled, fetchBatch, columns, toRow,
-    parseConstraint, isConstrained, refGenome, reset, BUNDLE_FILE
+    parseConstraint, isConstrained, refGenome, reset, getBundle, BUNDLE_FILE
 }
