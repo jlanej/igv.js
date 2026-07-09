@@ -92,7 +92,18 @@ class SegTrack extends TrackBase {
         this._initialAltColor = this.altColor || this.constructor.defaultColor
 
         this.didTrackDragEnd = undefined
-        this.browser.on('trackdragend', () => this.didTrackDragEnd = true)
+        // Keep a reference so dispose() can remove this handler; the arrow
+        // closure captures `this`, otherwise pinning the track in the browser
+        // event map for the life of the browser after removeAllTracks.
+        this._onTrackDragEnd = () => this.didTrackDragEnd = true
+        this.browser.on('trackdragend', this._onTrackDragEnd)
+    }
+
+    dispose() {
+        if (this._onTrackDragEnd && this.browser && this.browser.off) {
+            this.browser.off('trackdragend', this._onTrackDragEnd)
+        }
+        super.dispose()
     }
 
     menuItemList() {

@@ -824,7 +824,11 @@
                     displayMode: bedTrackDisplayMode,
                     height: 80,
                     color: getBedTrackColor(col),
-                    visibilityWindow: -1
+                    visibilityWindow: -1,
+                    // Cache only the viewed region, not the whole chromosome:
+                    // visibilityWindow:-1 alone makes textFeatureSource read the
+                    // entire chromosome, which bloats memory during the export loop.
+                    expandQuery: false
                 }
                 const idxCol = col + '_index'
                 const idx = variant[idxCol]
@@ -846,7 +850,10 @@
                     displayMode: bedTrackDisplayMode,
                     height: 80,
                     color: getBedTrackColor(bt.name),
-                    visibilityWindow: -1
+                    visibilityWindow: -1,
+                    // Cache only the viewed region, not the whole chromosome
+                    // (see per-variant BED track above).
+                    expandQuery: false
                 }
                 if (bt.indexURL) bedTrack.indexURL = bt.indexURL
                 tracks.push(bedTrack)

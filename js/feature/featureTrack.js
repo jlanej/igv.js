@@ -548,6 +548,15 @@ class FeatureTrack extends TrackBase {
      * Called when the track is removed.  Do any needed cleanup here
      */
     dispose() {
+        // Remove the 'trackdragend' listener registered by monitorTrackDrag.
+        // Its closure captures this track (-> featureSource -> feature cache);
+        // without removing it the track leaks into browser.eventHandlers for the
+        // life of the browser on every removeAllTracks/reload cycle.
+        if (this._onTrackDragEnd && this.browser && this.browser.off) {
+            this.browser.off('trackdragend', this._onTrackDragEnd)
+            this._onTrackDragEnd = undefined
+        }
+        this.featureSource = undefined
         this.trackView = undefined
     }
 }
@@ -567,6 +576,9 @@ function monitorTrackDrag(track) {
 
     if (track.browser.on) {
         track.browser.on('trackdragend', onDragEnd)
+        // Keep a reference so dispose() can remove this handler (its closure
+        // captures `track`, otherwise pinning it in the browser event map).
+        track._onTrackDragEnd = onDragEnd
     }
 
 
