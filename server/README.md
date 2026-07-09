@@ -24,8 +24,13 @@ OpenDemand desktop access).
 - **Gene annotations** – pluggable gene-level annotations on the Gene Summary
   sheet: MyGene.info (name, summary, OMIM, pathways, type), gnomAD constraint
   (LOEUF/pLI), ClinVar P/LP counts, and Yes/No gene-list membership (e.g. COSMIC)
-- **Impact counts** – per-gene counts of HIGH/MODERATE/LOW-impact variants
+- **Impact counts** – per-gene counts of HIGH/MODERATE/LOW/ALL-impact variants
   passing review, on the Gene Summary sheet
+- **Gene convergence** – a Gene Analysis tab showing whether singleton genes
+  stack up on a shared constraint tier, ClinVar history, or protein domain,
+  counted by distinct individuals and stratified by curation × impact tier
+- **Contamination metrics** – per-variant kraken2 species/contamination summary
+  in the Variants sheet and above each per-variant IGV screenshot
 - **Sample QC** – load a per-sample QC file (e.g. VerifyBamID freemix) to
   display trio-aggregated metrics and color-coded warnings in the variant table
 - **Sample summary** – per-sample variant counts by impact and frequency
@@ -472,10 +477,17 @@ The **Export XLSX** button generates a publication-ready workbook containing:
   is the first tab so reviewers can orient before reading the data.
 - **Variants** sheet – styled table of filtered variants with curation status,
   auto-filters, frozen header row, and full-row coloring by curation status.
-  Gene names link to their lollipop plot worksheets when available.
+  Gene names link to their lollipop plot worksheets when available. When
+  `--bed-tracks` (kraken2 species BEDs) are configured, adds per-variant
+  **contamination columns** (assessment, nonhuman %, read counts, top taxa).
 - **Gene Summary** sheet – gene-level statistics (total, samples, pass/fail/
   uncertain/pending), **impact counts passing review** (Pass HIGH / MODERATE /
-  LOW), and gene-level annotations (see *Gene annotations* below).
+  LOW / ALL), and gene-level annotations (see *Gene annotations* below).
+- **Gene Analysis** sheet – gene *convergence*: which shared attributes
+  (constraint tier, ClinVar history, protein domain) the review's genes stack
+  up on, counted by **distinct individuals** (not variants), stratified by
+  curation {pass, all} × impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL}, with
+  a background-frequency "is this surprising?" cue. See *Gene convergence* below.
 - **Sample Summary** sheet – per-sample variant counts by impact group and
   frequency threshold, plus cohort statistics (mean, median, std dev)
 - **Sample QC** sheet – trio-aggregated QC metrics (if QC data is loaded)
@@ -486,8 +498,10 @@ The **Export XLSX** button generates a publication-ready workbook containing:
   domain overlays, variant counts, and back-links to the Variants sheet
 - **Per-variant Screenshot tabs** – one worksheet per variant with the IGV
   alignment view embedded as a PNG image, variant metadata (gene, sample,
-  impact, inheritance, frequency, quality, AD, GQ, DKA), and a back-link
-  to the main Variants sheet
+  impact, inheritance, frequency, quality, AD, GQ, DKA), a **contamination /
+  species panel** above the image when `--bed-tracks` are configured
+  (assessment, nonhuman fraction, top taxa, read sets, split/clip counts), and
+  a back-link to the main Variants sheet
 - **Cross-sheet hyperlinks** – the Variants sheet includes "📷 View" links
   to screenshot tabs and gene name links to lollipop plot tabs
 
@@ -517,8 +531,10 @@ from disk.
 |----------|---------|
 | **Visual Elements** | IGV Screenshots, Lollipop Plots, Protein Domains |
 | **Gene Annotations** | Enable/Disable, Gene Name, Summary, OMIM, Pathways, Gene Type; gnomAD constraint; ClinVar P/LP; gene-list membership |
-| **Impact Counts** | Pass HIGH/MODERATE/LOW (on), HIGH/MODERATE/LOW totals (off) |
-| **Worksheets** | Read Me, Gene Summary, Sample Summary, Sample QC, Applied Filters, Annotation Status |
+| **Impact Counts** | Pass HIGH/MODERATE/LOW/ALL (on), HIGH/MODERATE/LOW/ALL totals (off) |
+| **Gene Analysis** | Convergence dimensions (constraint/ClinVar/domain), min-count |
+| **Contamination** | Per-variant species columns + screenshot panel (when `--bed-tracks` set) |
+| **Worksheets** | Read Me, Gene Summary, Gene Analysis, Sample Summary, Sample QC, Applied Filters, Annotation Status |
 | **Variant Columns** | Core (chrom/pos/ref/alt), Gene Info, Frequency, Quality, Genotypes, Allelic Depth, Genotype Quality, Sample Info, File Paths, Other Annotations |
 
 Most options default to **enabled**.  The variant column categories allow
@@ -551,7 +567,27 @@ Annotation Status tab, never a failed export.
   licence-restricted and is not embedded).
 
 The bundled ClinVar and gnomAD snapshots are regenerated with `npm run build-annotation-data`
-(re-downloads NCBI's public-domain `gene_specific_summary.txt` and slims it).
+(streams NCBI's public-domain ClinVar `variant_summary.txt.gz` and the gnomAD
+v4 constraint table, and slims each to a per-gene JSON).
+
+### Gene convergence (Gene Analysis tab)
+
+When de novo hits are singletons scattered across many genes, the **Gene
+Analysis** tab shows whether they *converge* on a shared attribute. For each
+grouping dimension it inverts `term → genes` and reports the shared terms:
+
+- **Independent signals** – the primary count is **distinct individuals
+  (probands)**, not variants: one proband with several hits in a group counts
+  once, so a single hypermutated proband can't look like convergence. Distinct
+  genes are shown alongside (so single-proband exports still see gene-level
+  convergence). A term is shown only if ≥2 individuals **or** ≥2 genes share it.
+- **Dimensions (v0)** – constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9) and ClinVar
+  P/LP history are **offline**; protein domain (InterPro) comes from MyGene.
+- **Stratification** – curation {pass, all} × cumulative impact tier {HIGH,
+  HIGH+MOD, HIGH+MOD+LOW, ALL}.
+- **Method** – transparent shared-attribute counting (not enrichment p-values,
+  which mislead at small gene counts), with a background-frequency column ("is
+  this surprising?"). Hypothesis-generating, not diagnostic.
 
 If IGV has not yet been loaded (no variant clicked), exports are generated
 with data sheets only (no screenshots).

@@ -885,6 +885,23 @@ function resolveBedFilePaths(variant) {
     return files
 }
 
+/**
+ * Per-variant species/contamination metrics for the export (mirrors the
+ * /api/species-metrics per-variant logic). Returns the metrics object, or null
+ * when no BED tracks are configured or the variant has no informative reads.
+ */
+function getVariantSpeciesMetrics(variant) {
+    const bedFiles = resolveBedFilePaths(variant)
+    if (bedFiles.length === 0) return null
+    const pos0 = parseInt(variant.pos, 10) - 1  // VCF 1-based → BED 0-based
+    let metrics = speciesMetrics.getVariantMetrics(`${variant.chrom}:${pos0}:${variant.ref}:${variant.alt}`, bedFiles)
+    if (metrics.totalReads === 0) {
+        const m1 = speciesMetrics.getVariantMetrics(`${variant.chrom}:${variant.pos}:${variant.ref}:${variant.alt}`, bedFiles)
+        if (m1.totalReads > 0) metrics = m1
+    }
+    return metrics.totalReads > 0 ? metrics : null
+}
+
 app.get('/api/species-metrics', (req, res) => {
     const variantId = req.query.variant_id
     const variantKey = req.query.variant_key
@@ -1267,7 +1284,7 @@ function buildReadmeSheet(workbook, opts) {
     // --- Worksheet overview ---
     section('Worksheets in this report')
     row('Read Me', 'This guide: worksheet overview, column dictionary, and data sources.')
-    row('Variants', 'One row per exported variant. Rows are colour-coded by curation status (Pass/Fail/Uncertain/Pending).')
+    row('Variants', 'One row per exported variant. Rows are colour-coded by curation status (Pass/Fail/Uncertain/Pending). When --bed-tracks (kraken2 species BEDs) are configured, adds contamination columns: Contamination (assessment), Nonhuman %, Contam Reads, Nonhuman Reads, Top Taxa.')
     if (hasGene && exportCfg.sheets.geneSummary) row('Gene Summary', 'One row per gene: curation counts, impact-passing counts, and gene-level annotations. See the column dictionary below.')
     if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis', 'Convergence: which shared attributes (constraint tier, ClinVar history, protein domain) your genes stack up on — counted by distinct individuals. See the dictionary below.')
     if (exportCfg.sheets.sampleSummary) row('Sample Summary', 'Per-sample variant counts by impact group and frequency threshold, with cohort mean/median.')
@@ -1548,16 +1565,38 @@ app.post('/api/export/xlsx', async (req, res) => {
             }
         }
 
+        // Per-variant species/contamination metrics (only when --bed-tracks are
+        // configured and the variant has informative reads).
+        const contamOn = !!(exportCfg.contamination && exportCfg.contamination.enabled)
+        const speciesByVariant = new Map()
+        let hasSpecies = false
+        if (contamOn) {
+            for (const v of filtered) {
+                try {
+                    const m = getVariantSpeciesMetrics(v)
+                    if (m) { speciesByVariant.set(v.id, m); hasSpecies = true }
+                } catch (_) { /* skip this variant's metrics */ }
+            }
+        }
+        const CONTAM_COLS = [
+            {header: 'Contamination', key: '_contamAssess', width: 13},
+            {header: 'Nonhuman %', key: '_contamNonhuman', width: 12},
+            {header: 'Contam Reads', key: '_contamTotalReads', width: 12},
+            {header: 'Nonhuman Reads', key: '_contamNonhumanReads', width: 14},
+            {header: 'Top Taxa', key: '_contamTopTaxa', width: 32}
+        ]
+
         const ws = workbook.addWorksheet('Variants', {
             views: [{state: 'frozen', ySplit: 1}]
         })
 
-        // Column definitions
-        ws.columns = mainCols.map(col => ({
+        // Column definitions (+ contamination columns when species data exists)
+        const dataColDefs = mainCols.map(col => ({
             header: col.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
             key: col,
             width: col === 'curation_note' ? 30 : col === 'Screenshot' ? 14 : Math.max(12, col.length + 4)
         }))
+        ws.columns = hasSpecies ? [...dataColDefs, ...CONTAM_COLS] : dataColDefs
 
         // Style the header row
         const headerRow = ws.getRow(1)
@@ -1588,6 +1627,18 @@ app.post('/api/export/xlsx', async (req, res) => {
                 row['Screenshot'] = sheetName
             } else if (hasScreenshots) {
                 row['Screenshot'] = ''
+            }
+
+            // Contamination / species metrics columns
+            if (hasSpecies) {
+                const m = speciesByVariant.get(v.id)
+                if (m) {
+                    row._contamAssess = m.assessment ? m.assessment.label : ''
+                    row._contamNonhuman = `${(m.nonhumanFraction * 100).toFixed(1)}%`
+                    row._contamTotalReads = m.totalReads
+                    row._contamNonhumanReads = m.nonhumanReads
+                    row._contamTopTaxa = (m.topTaxa || []).slice(0, 3).map(t => `${t.name} (${t.count})`).join('; ')
+                }
             }
 
             const dataRow = ws.addRow(row)
@@ -2333,6 +2384,33 @@ app.post('/api/export/xlsx', async (req, res) => {
                     sws.getCell(`A${infoRow}`).value = 'Note:'
                     sws.getCell(`A${infoRow}`).font = {bold: true}
                     sws.getCell(`B${infoRow}`).value = v.curation_note
+                }
+
+                // Contamination / species panel (above the screenshot)
+                if (contamOn) {
+                    const m = speciesByVariant.get(vid)
+                    if (m) {
+                        const contamColors = {clean: 'FF27AE60', caution: 'FFF39C12', concern: 'FFE67E22', high: 'FFE74C3C'}
+                        infoRow += 2   // spacer
+                        sws.getCell(`A${infoRow}`).value = 'Contamination / species'
+                        sws.getCell(`A${infoRow}`).font = {bold: true, size: 12, color: {argb: 'FF2C3E50'}}
+                        const contamRow = (label, value, font) => {
+                            infoRow++
+                            sws.getCell(`A${infoRow}`).value = label
+                            sws.getCell(`A${infoRow}`).font = {bold: true}
+                            sws.getCell(`B${infoRow}`).value = value
+                            if (font) sws.getCell(`B${infoRow}`).font = font
+                        }
+                        const label = m.assessment ? m.assessment.label : 'unknown'
+                        contamRow('Assessment:', m.assessment ? `${m.assessment.label} — ${m.assessment.description}` : 'unknown',
+                            {bold: true, color: {argb: contamColors[label] || 'FF7F8C8D'}})
+                        contamRow('Nonhuman:', `${(m.nonhumanFraction * 100).toFixed(1)}%  (${m.nonhumanReads}/${m.totalReads} reads)`)
+                        if (m.topTaxa && m.topTaxa.length) {
+                            contamRow('Top taxa:', m.topTaxa.slice(0, 5).map(t => `${t.name} (${t.count})`).join('; '))
+                        }
+                        contamRow('Read sets:', `DKA ${m.readSetCounts.DKA}, DKU ${m.readSetCounts.DKU}`)
+                        contamRow('Split / clip:', `${m.splitReadCount} split, ${m.clippingStats.highClipReads} high-clip`)
+                    }
                 }
 
                 // Back-link to the Variants sheet

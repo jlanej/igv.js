@@ -3609,6 +3609,20 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(joined).to.contain('Impact counts')
     })
 
+    it('xlsx omits contamination columns when no --bed-tracks are configured', async function () {
+        this.timeout(10000)
+        // The example data has no kraken2 BED tracks, so contamination is a no-op.
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2], exportConfig: {geneAnnotations: {enabled: false}}})
+            .buffer(true).parse(binaryParser).expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        const header = wb.getWorksheet('Variants').getRow(1).values
+        expect(header).to.not.include('Contamination')
+        expect(header).to.not.include('Nonhuman %')
+    })
+
     it('xlsx includes a Gene Analysis convergence sheet (offline dims)', async function () {
         this.timeout(10000)
         // constraint + ClinVar only (offline); domain off + MyGene columns off ⇒ no network.

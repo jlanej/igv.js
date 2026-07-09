@@ -54,6 +54,10 @@ const DEFAULT_EXPORT_CONFIG = {
     lollipopPlots: true,          // Generate & embed lollipop plots
     proteinDomains: true,         // Fetch protein domains for lollipop plots
 
+    // Species / contamination metrics (from --bed-tracks kraken2 BED files):
+    // per-variant columns on the Variants sheet + a panel on each screenshot tab.
+    contamination: {enabled: true},
+
     // Gene annotations. Legacy flat flags below are MyGene.info fields; the
     // nested objects are pluggable providers registered in annotation-registry.js.
     geneAnnotations: {
@@ -151,6 +155,7 @@ function mergeWithDefaults(partial) {
     merged.variantColumns = {...DEFAULT_EXPORT_CONFIG.variantColumns, ...(partial.variantColumns || {})}
     merged.impactCounts = {...DEFAULT_EXPORT_CONFIG.impactCounts, ...(partial.impactCounts || {})}
     merged.geneAnalysis = {...DEFAULT_EXPORT_CONFIG.geneAnalysis, ...(partial.geneAnalysis || {})}
+    merged.contamination = {...DEFAULT_EXPORT_CONFIG.contamination, ...(partial.contamination || {})}
 
     // geneAnnotations mixes flat flags with nested provider objects. A shallow
     // spread would let a partial that sets a single nested sub-flag (e.g.
