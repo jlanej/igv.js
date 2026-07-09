@@ -20,8 +20,9 @@ WORKDIR /app/server
 COPY server/package.json ./
 RUN npm install --omit=dev
 
-# Copy server source
-COPY server/server.js server/logger.js server/lollipop.js server/pfam.js server/gene-annotations.js server/export-config.js server/species-metrics.js server/annotation-registry.js ./
+# Copy server source. Glob all top-level modules (not an explicit list) so a
+# newly added module can't be silently left out of the image.
+COPY server/*.js ./
 COPY server/providers/ ./providers/
 COPY server/data/ ./data/
 COPY server/public/ ./public/
@@ -29,6 +30,11 @@ COPY server/example_data/ ./example_data/
 
 # Copy built igv.js dist from build stage
 COPY --from=build /app/dist/ /app/dist/
+
+# Guard: fail the build now (not at container start) if server.js can't resolve
+# every module it requires. server.js is safe to load here — it only calls
+# app.listen() under `require.main === module`.
+RUN node -e "require('./server.js')" && echo "server module graph OK"
 
 EXPOSE 3000
 
