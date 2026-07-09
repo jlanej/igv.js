@@ -21,7 +21,9 @@ COPY server/package.json ./
 RUN npm install --omit=dev
 
 # Copy server source
-COPY server/server.js server/logger.js server/lollipop.js server/pfam.js server/gene-annotations.js server/export-config.js server/species-metrics.js ./
+COPY server/server.js server/logger.js server/lollipop.js server/pfam.js server/gene-annotations.js server/export-config.js server/species-metrics.js server/annotation-registry.js ./
+COPY server/providers/ ./providers/
+COPY server/data/ ./data/
 COPY server/public/ ./public/
 COPY server/example_data/ ./example_data/
 
