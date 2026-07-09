@@ -2216,6 +2216,10 @@ app.post('/api/export/xlsx', async (req, res) => {
                     log.warn(`Screenshot worksheet failed for variant ${vid}:`, ssErr.message)
                     exportErrors.push({section: `Screenshot: variant ${vid}`, error: ssErr.message})
                 }
+                // Drop the decoded base64 now that it is embedded so V8 can GC it
+                // during the (potentially long) per-variant embed loop, instead of
+                // holding every screenshot's string until the handler returns.
+                screenshots[String(vid)] = null
             }
         }
         } catch (sectionErr) {
@@ -2261,7 +2265,12 @@ app.post('/api/export/xlsx', async (req, res) => {
         // --- Send workbook as download --------------------------------------
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         res.setHeader('Content-Disposition', 'attachment; filename="variants_export.xlsx"')
-        await workbook.xlsx.write(res)
+        // Store (no DEFLATE) at finalize: the embedded images (PNG/JPEG) are already
+        // compressed, so re-deflating them at the default level is wasted CPU for ~0
+        // size gain. Trade-off: sheet XML is no longer compressed, so image-free
+        // exports get larger — switch to {zip: {compressionOptions: {level: 1}}} if
+        // that matters. exceljs forwards options.zip to the underlying zip writer.
+        await workbook.xlsx.write(res, {zip: {compression: 'STORE'}})
         res.end()
     } catch (err) {
         log.error('XLSX export error:', err.message, err.stack)

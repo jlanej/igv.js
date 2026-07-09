@@ -1852,7 +1852,15 @@
         // toSVG() reads from featureCache (already populated above)
         // but getBoundingClientRect() in renderSVGContext needs
         // accurate layout.
-        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+        // Race against a 100ms fallback: requestAnimationFrame is paused in
+        // hidden/backgrounded tabs, so without this the whole sequential export
+        // loop hangs indefinitely if the user switches away mid-export.
+        await new Promise(r => {
+            let done = false
+            const finish = () => { if (!done) { done = true; r() } }
+            requestAnimationFrame(() => requestAnimationFrame(finish))
+            setTimeout(finish, 100)
+        })
     }
 
     async function captureIgvScreenshot() {
@@ -1871,7 +1879,17 @@
                 img.onload = () => {
                     const dims = igvBrowser.columnContainer.getBoundingClientRect()
                     const dpr = window.devicePixelRatio || 1
-                    const scale = dpr * 2  // 2x for high-res export screenshots
+                    // Cap the capture to a WIDTH budget. The image is embedded at a
+                    // fixed 1800px wide (see server.js ext:{width:1800}), so any
+                    // resolution above the budget is silently downscaled by Excel —
+                    // pure payload/RAM waste (on a retina display the old dpr*2 = 4x
+                    // scale meant 16x the pixel area). 2400 keeps ~1.33x zoom/print
+                    // headroom while ~4x shrinking retina captures; lower to 1800 for
+                    // max savings (display-exact) or raise to 3600 for 2x headroom.
+                    // Budget by target WIDTH (not dpr) so narrow containers are not
+                    // undersampled. Output stays lossless PNG (no format change).
+                    const TARGET_W = 2400
+                    const scale = dims.width > 0 ? Math.min(dpr * 2, TARGET_W / dims.width) : 1
                     const canvas = document.createElement('canvas')
                     canvas.width = dims.width * scale
                     canvas.height = dims.height * scale
