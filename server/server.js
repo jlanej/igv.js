@@ -24,6 +24,7 @@ const annotationRegistry = require('./annotation-registry')
 const {computeConvergence, geneTermsFor, backgroundFractions} = require('./gene-analysis')
 const gnomadProvider = require('./providers/gnomad-provider')
 const clinvarProvider = require('./providers/clinvar-provider')
+const genccProvider = require('./providers/gencc-provider')
 const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults, filterColumns} = require('./export-config')
 const speciesMetrics = require('./species-metrics')
 
@@ -1325,7 +1326,9 @@ function buildReadmeSheet(workbook, opts) {
                 clinvarPlp: ['Combined count of Pathogenic + Likely-pathogenic (+ Pathogenic/Likely-pathogenic) variants.', 'ClinVar', 'public domain'],
                 clinvarHasPlp: ['Yes if the gene has ≥1 Pathogenic or Likely-pathogenic variant in ClinVar.', 'ClinVar', 'public domain'],
                 clinvarVus: ['Count of uncertain-significance variants in ClinVar.', 'ClinVar', 'public domain'],
-                clinvarConflicts: ['Count of variants with conflicting classifications in ClinVar.', 'ClinVar', 'public domain']
+                clinvarConflicts: ['Count of variants with conflicting classifications in ClinVar.', 'ClinVar', 'public domain'],
+                genccMoi: ['Mode(s) of Inheritance (AD/AR/XL…) for the gene, from established-evidence GenCC submissions. AD/monoallelic ⇒ one de novo hit can be causal.', 'GenCC', 'CC0'],
+                genccValidity: ['Highest gene-disease validity classification (Definitive→Refuted) across GenCC submitters.', 'GenCC', 'CC0']
             }
             for (const col of annotationRegistry.columns(exportCfg)) {
                 if (keyDesc[col.key]) {
@@ -1345,7 +1348,7 @@ function buildReadmeSheet(workbook, opts) {
         row('# genes / Genes', 'Distinct genes contributing (locus heterogeneity), and their symbols. So single-proband exports still surface gene-level convergence.')
         row('bg', 'Background frequency — fraction of all scored genes that carry this term (constraint/ClinVar only; "—" for domain). A low bg with a high count = surprising convergence; a high bg (e.g. a generic term) = expected. A cue, not a p-value.', 'gnomAD / ClinVar bundle')
         row('Columns (cells)', 'Curation status {pass, all} × cumulative impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL}. ALL applies no impact restriction (incl. MODIFIER/blank). A term is shown only if ≥2 individuals OR ≥2 genes share it. Bold rows recur across ≥2 individuals.')
-        row('Dimensions', 'Constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9) and ClinVar P/LP history are offline; protein domain (InterPro) comes from MyGene (blank if the network is unavailable).', 'gnomAD / ClinVar / MyGene')
+        row('Dimensions', 'Constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9), ClinVar P/LP history, and GenCC Mode-of-Inheritance are offline; protein domain (InterPro) comes from MyGene (blank if the network is unavailable).', 'gnomAD / ClinVar / GenCC / MyGene')
         row('Method', 'Transparent shared-attribute counting — NOT enrichment p-values, which are unreliable at small gene counts. Hypothesis-generating, not diagnostic.')
     }
 
@@ -1353,6 +1356,7 @@ function buildReadmeSheet(workbook, opts) {
     section('Data sources & licensing')
     row('gnomAD', 'Gene constraint (pLI, LOEUF, missense Z), bundled offline from gnomAD v4 (GRCh38); live API fallback for GRCh37/hg19.', 'gnomad.broadinstitute.org', 'CC0 (attrib. requested)')
     row('ClinVar', 'Per-gene counts of Pathogenic and Likely-pathogenic variants (separately), plus VUS/conflicts, from the GRCh38 variant summary.', 'ncbi.nlm.nih.gov/clinvar', 'public domain')
+    row('GenCC', 'Harmonised gene-disease validity + Mode of Inheritance (aggregates ClinGen, DDG2P, PanelApp, Orphanet). Bundled offline; highest validity + established-evidence MOIs per gene.', 'thegencc.org', 'CC0')
     row('MyGene.info', 'Gene name, type, OMIM MIM number, KEGG pathways, function summary.', 'mygene.info', 'per source')
     row('Gene-list membership', 'Yes/No membership derived from user-supplied symbol lists. Used for licence-restricted sources (e.g. COSMIC): only membership is embedded, not the licensed content.', 'user-supplied', 'membership only')
 
@@ -1846,6 +1850,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                     if (!gaCfg.constraint) terms.constraint = []
                     if (!gaCfg.clinvar) terms.clinvar = []
                     if (!gaCfg.domain) terms.domain = []
+                    if (!gaCfg.gencc) terms.gencc = []
                     geneTerms.set(String(gene).toUpperCase(), terms)
                 }
                 // Background frequency of each term across the full bundled
@@ -1853,7 +1858,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                 // surprising?" cue. Gracefully null if bundles are unavailable.
                 let bgFreq = null
                 try {
-                    bgFreq = backgroundFractions({gnomad: gnomadProvider.getBundle(), clinvar: clinvarProvider.getGenes()})
+                    bgFreq = backgroundFractions({gnomad: gnomadProvider.getBundle(), clinvar: clinvarProvider.getGenes(), gencc: genccProvider.getGenes()})
                 } catch (bgErr) { /* leave bgFreq null */ }
                 const conv = computeConvergence(filtered, {
                     geneCol, impactCol: gaImpactCol, sampleCol: xlsSampleCol,

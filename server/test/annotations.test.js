@@ -17,6 +17,7 @@ const path = require('path')
 const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults} = require('../export-config')
 const clinvar = require('../providers/clinvar-provider')
 const gnomad = require('../providers/gnomad-provider')
+const gencc = require('../providers/gencc-provider')
 const geneLists = require('../providers/genelist-provider')
 const {computeConvergence, geneTermsFor, backgroundFractions} = require('../gene-analysis')
 const registry = require('../annotation-registry')
@@ -140,6 +141,43 @@ describe('gnomAD provider (pure logic)', function () {
         expect(tsc1.pli).to.be.a('number')
         expect(gnomad.toRow(tsc1, cfg).gnomadConstrained).to.equal('Yes')  // TSC1 pLI ~1.0
         expect(map.get('NOT_A_REAL_GENE_XYZ')).to.equal(null)
+    })
+})
+
+describe('GenCC provider (bundled)', function () {
+    const cfg = mergeWithDefaults({})
+    before(function () { gencc.reset() })
+
+    it('returns Mode of Inheritance + validity for a known gene', async function () {
+        const map = await gencc.fetchBatch(['TSC1'])
+        const rec = map.get('TSC1')
+        expect(rec).to.be.an('object')
+        expect(rec.moi).to.include('Autosomal dominant')   // AD ⇒ de novo can be causal
+        expect(rec.validity).to.be.a('string').that.is.not.empty
+    })
+
+    it('returns null for genes absent from GenCC', async function () {
+        const map = await gencc.fetchBatch(['NOT_A_REAL_GENE_XYZ'])
+        expect(map.get('NOT_A_REAL_GENE_XYZ')).to.equal(null)
+    })
+
+    it('toRow / columns emit GenCC MOI + Validity', function () {
+        expect(gencc.toRow({moi: ['Autosomal dominant', 'Autosomal recessive'], validity: 'Definitive'}, cfg))
+            .to.deep.equal({genccMoi: 'Autosomal dominant; Autosomal recessive', genccValidity: 'Definitive'})
+        expect(gencc.columns(cfg).map(c => c.header)).to.deep.equal(['GenCC MOI', 'GenCC Validity'])
+    })
+
+    it('is a convergence dimension: genes sharing a mode of inheritance stack up', function () {
+        const gt = new Map([
+            ['A', {constraint: [], clinvar: [], domain: [], gencc: ['Autosomal dominant']}],
+            ['B', {constraint: [], clinvar: [], domain: [], gencc: ['Autosomal dominant']}]
+        ])
+        const conv = computeConvergence(
+            [{gene: 'A', s: 'X', impact: 'HIGH', curation_status: 'pass'}, {gene: 'B', s: 'Y', impact: 'HIGH', curation_status: 'pass'}],
+            {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', geneTerms: gt})
+        const g = conv.sections.find(s => s.id === 'gencc').groups.find(x => x.term === 'Autosomal dominant')
+        expect(g.refIndividuals).to.equal(2)
+        expect(g.refGenes).to.equal(2)
     })
 })
 

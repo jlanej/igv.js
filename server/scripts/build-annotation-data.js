@@ -143,10 +143,53 @@ async function buildGnomad() {
     process.stdout.write(`Wrote ${GNOMAD_OUT}\n  genes: ${Object.keys(genes).length}\n  size: ${(gz.length / 1024).toFixed(0)} KiB (gz)\n`)
 }
 
+const GENCC_URL = 'https://thegencc.org/download/action/submissions-export-tsv'
+const GENCC_OUT = path.join(OUT_DIR, 'gencc.json.gz')
+const GENCC_RANK = {Definitive: 6, Strong: 5, Moderate: 4, Limited: 3, Supportive: 2,
+    'Disputed Evidence': 1, 'Refuted Evidence': 0, 'Animal Model Only': 0, 'No Known Disease Relationship': 0}
+const GENCC_ESTABLISHED = new Set(['Definitive', 'Strong', 'Moderate', 'Limited', 'Supportive'])
+
+async function buildGencc() {
+    process.stdout.write(`Fetching ${GENCC_URL} …\n`)
+    const resp = await fetch(GENCC_URL)
+    if (!resp.ok) throw new Error(`GenCC HTTP ${resp.status}`)
+    const lines = (await resp.text()).split('\n')
+    const h = lines[0].split('\t')
+    const idx = {}
+    h.forEach((n, i) => { idx[n] = i })
+    const cSym = idx['gene_symbol'], cCls = idx['classification_title'], cMoi = idx['moi_title']
+
+    const byGene = {}
+    for (let i = 1; i < lines.length; i++) {
+        const c = lines[i].split('\t')
+        if (c.length <= Math.max(cSym, cCls, cMoi)) continue
+        const sym = (c[cSym] || '').trim().toUpperCase()
+        if (!sym) continue
+        const cls = (c[cCls] || '').trim(), moi = (c[cMoi] || '').trim()
+        const g = byGene[sym] || (byGene[sym] = {best: '', bestRank: -1, moi: new Set()})
+        const rk = GENCC_RANK[cls] != null ? GENCC_RANK[cls] : 0
+        if (rk > g.bestRank) { g.bestRank = rk; g.best = cls }        // highest validity per gene
+        if (GENCC_ESTABLISHED.has(cls) && moi) g.moi.add(moi)         // MOI from established evidence only
+    }
+    const genes = {}
+    for (const sym of Object.keys(byGene)) genes[sym] = {validity: byGene[sym].best || '', moi: [...byGene[sym].moi].sort()}
+
+    const payload = {
+        meta: {_source: 'GenCC submissions (thegencc.org)', _license: 'CC0',
+            _fields: {validity: 'highest gene-disease classification', moi: 'union of Mode-of-Inheritance for established-evidence submissions'}},
+        genes
+    }
+    fs.mkdirSync(OUT_DIR, {recursive: true})
+    const gz = zlib.gzipSync(Buffer.from(JSON.stringify(payload)), {level: 9})
+    fs.writeFileSync(GENCC_OUT, gz)
+    process.stdout.write(`Wrote ${GENCC_OUT}\n  genes: ${Object.keys(genes).length}\n  size: ${(gz.length / 1024).toFixed(0)} KiB (gz)\n`)
+}
+
 async function main() {
     try {
         await buildClinvar()
         await buildGnomad()
+        await buildGencc()
         process.stdout.write('Done.\n')
     } catch (err) {
         process.stderr.write(`Build failed: ${err.message}\n`)

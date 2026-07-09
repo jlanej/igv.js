@@ -36,7 +36,8 @@ const DEFAULT_EXPORT_CONFIG = {
         minCount: 2,              // keep terms shared by >= this many individuals OR genes
         constraint: true,         // gnomAD constraint-tail convergence (offline)
         clinvar: true,            // ClinVar P/LP gene-history convergence (offline)
-        domain: true              // InterPro protein-domain convergence (via MyGene)
+        domain: true,             // InterPro protein-domain convergence (via MyGene)
+        gencc: true               // GenCC Mode-of-Inheritance convergence (offline)
     },
 
     // Per-gene impact counts on the Gene Summary tab (curation-derived, not
@@ -84,6 +85,11 @@ const DEFAULT_EXPORT_CONFIG = {
             hasPlp: true,         // Yes/No has any P or LP
             vus: false,           // count of uncertain-significance variants
             conflicts: false      // count with conflicting classifications
+        },
+        gencc: {                  // GenCC gene-disease validity + Mode of Inheritance (bundled)
+            enabled: true,
+            moi: true,            // Mode of Inheritance (AD/AR/XL…) — key for de novo
+            validity: true        // highest gene-disease validity classification
         },
         geneLists: {              // Gene-list membership flags (bundled lists)
             enabled: true         // e.g. COSMIC / panel membership — see data/gene-lists
@@ -163,7 +169,7 @@ function mergeWithDefaults(partial) {
     // (including `enabled`), so each nested provider object is merged in turn.
     merged.geneAnnotations = {...DEFAULT_EXPORT_CONFIG.geneAnnotations, ...(partial.geneAnnotations || {})}
     const pGA = partial.geneAnnotations || {}
-    for (const key of ['gnomadConstraint', 'clinvar', 'geneLists']) {
+    for (const key of ['gnomadConstraint', 'clinvar', 'gencc', 'geneLists']) {
         const base = DEFAULT_EXPORT_CONFIG.geneAnnotations[key] || {}
         const over = (pGA[key] && typeof pGA[key] === 'object') ? pGA[key] : {}
         merged.geneAnnotations[key] = {...base, ...over}

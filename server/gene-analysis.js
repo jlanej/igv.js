@@ -38,7 +38,8 @@ const STATUS_FILTERS = [
 const DIMENSIONS = [
     {id: 'constraint', label: 'Constraint tail (gnomAD)'},
     {id: 'clinvar', label: 'ClinVar gene history'},
-    {id: 'domain', label: 'Protein domain (InterPro)'}
+    {id: 'domain', label: 'Protein domain (InterPro)'},
+    {id: 'gencc', label: 'Mode of inheritance (GenCC)'}
 ]
 
 // Broadest cell (superset of all others) — used to decide which terms to show.
@@ -144,7 +145,7 @@ function computeConvergence(variants, opts) {
  * @returns {{constraint:Object, clinvar:Object, domain:Object}}
  */
 function backgroundFractions(bundles) {
-    const out = {constraint: {}, clinvar: {}, domain: {}}
+    const out = {constraint: {}, clinvar: {}, domain: {}, gencc: {}}
     const gn = bundles && bundles.gnomad
     if (gn && gn.size) {
         let loeuf = 0, pli = 0
@@ -161,6 +162,14 @@ function backgroundFractions(bundles) {
         for (const rec of cv.values()) if (rec && rec.plp > 0) plp++
         out.clinvar['Has ClinVar P/LP'] = plp / cv.size
     }
+    const gc = bundles && bundles.gencc
+    if (gc && gc.size) {
+        const counts = {}
+        for (const rec of gc.values()) {
+            if (rec && Array.isArray(rec.moi)) for (const m of rec.moi) counts[m] = (counts[m] || 0) + 1
+        }
+        for (const m of Object.keys(counts)) out.gencc[m] = counts[m] / gc.size
+    }
     return out
 }
 
@@ -176,7 +185,9 @@ function geneTermsFor(gene, providerObj, myGeneAnn) {
     const c = providerObj && providerObj.clinvar
     if (c && !c.error && c.plp > 0) clinvar.push('Has ClinVar P/LP')
     const domain = (myGeneAnn && !myGeneAnn.error && Array.isArray(myGeneAnn.domains)) ? myGeneAnn.domains : []
-    return {constraint, clinvar, domain}
+    const gc = providerObj && providerObj.gencc
+    const gencc = (gc && !gc.error && Array.isArray(gc.moi)) ? gc.moi.slice() : []
+    return {constraint, clinvar, domain, gencc}
 }
 
 module.exports = {computeConvergence, geneTermsFor, backgroundFractions, DIMENSIONS, IMPACT_TIERS, STATUS_FILTERS}

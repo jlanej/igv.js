@@ -26,11 +26,12 @@
 
 const gnomad = require('./providers/gnomad-provider')
 const clinvar = require('./providers/clinvar-provider')
+const gencc = require('./providers/gencc-provider')
 const geneLists = require('./providers/genelist-provider')
 const log = require('./logger')
 
 // Column order in the Gene Summary sheet follows this array order.
-const PROVIDERS = [gnomad, clinvar, geneLists]
+const PROVIDERS = [gnomad, clinvar, gencc, geneLists]
 
 function activeProviders(cfg) {
     return PROVIDERS.filter(p => {

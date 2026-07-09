@@ -530,7 +530,7 @@ from disk.
 | Category | Options |
 |----------|---------|
 | **Visual Elements** | IGV Screenshots, Lollipop Plots, Protein Domains |
-| **Gene Annotations** | Enable/Disable, Gene Name, Summary, OMIM, Pathways, Gene Type; gnomAD constraint; ClinVar P/LP; gene-list membership |
+| **Gene Annotations** | Enable/Disable, Gene Name, Summary, OMIM, Pathways, Gene Type; gnomAD constraint; ClinVar P/LP; GenCC MOI + validity; gene-list membership |
 | **Impact Counts** | Pass HIGH/MODERATE/LOW/ALL (on), HIGH/MODERATE/LOW/ALL totals (off) |
 | **Gene Analysis** | Convergence dimensions (constraint/ClinVar/domain), min-count |
 | **Contamination** | Per-variant species columns + screenshot panel (when `--bed-tracks` set) |
@@ -549,9 +549,10 @@ Annotation Status tab, never a failed export.
 
 | Annotation | Columns | Source | Licence |
 |------------|---------|--------|---------|
-| **Impact passing review** | Pass HIGH / MODERATE / LOW | curation × impact | n/a |
+| **Impact passing review** | Pass HIGH / MODERATE / LOW / ALL | curation × impact | n/a |
 | **gnomAD constraint** | gnomAD LOEUF, pLI, LoF-constrained | bundled v4 (GRCh38); live API fallback for hg19 | CC0 |
 | **ClinVar** | ClinVar P, ClinVar LP, Has P/LP | bundled `data/annotations/*` | public domain |
+| **GenCC** | GenCC MOI (mode of inheritance), GenCC Validity | bundled `data/annotations/*` | CC0 |
 | **Gene-list membership** | one Yes/No column per list | `data/gene-lists/*.txt` | membership only |
 | **MyGene.info** | Gene Name, Type, OMIM, Pathways, Summary | MyGene.info (live) | per source |
 
@@ -566,9 +567,10 @@ Annotation Status tab, never a failed export.
 - **OMIM** is included as the numeric MIM identifier only (disease-title text is
   licence-restricted and is not embedded).
 
-The bundled ClinVar and gnomAD snapshots are regenerated with `npm run build-annotation-data`
-(streams NCBI's public-domain ClinVar `variant_summary.txt.gz` and the gnomAD
-v4 constraint table, and slims each to a per-gene JSON).
+The bundled ClinVar, gnomAD, and GenCC snapshots are regenerated with
+`npm run build-annotation-data` (streams NCBI's public-domain ClinVar
+`variant_summary.txt.gz`, the gnomAD v4 constraint table, and the GenCC
+submissions export, and slims each to a per-gene JSON).
 
 ### Gene convergence (Gene Analysis tab)
 
@@ -581,8 +583,10 @@ grouping dimension it inverts `term → genes` and reports the shared terms:
   once, so a single hypermutated proband can't look like convergence. Distinct
   genes are shown alongside (so single-proband exports still see gene-level
   convergence). A term is shown only if ≥2 individuals **or** ≥2 genes share it.
-- **Dimensions (v0)** – constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9) and ClinVar
-  P/LP history are **offline**; protein domain (InterPro) comes from MyGene.
+- **Dimensions** – constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9), ClinVar P/LP
+  history, and **GenCC Mode of Inheritance** are **offline**; protein domain
+  (InterPro) comes from MyGene. (MOI convergence — e.g. "5 of my genes are known
+  autosomal-dominant disease genes" — is a strong de novo signal.)
 - **Stratification** – curation {pass, all} × cumulative impact tier {HIGH,
   HIGH+MOD, HIGH+MOD+LOW, ALL}.
 - **Method** – transparent shared-attribute counting (not enrichment p-values,
