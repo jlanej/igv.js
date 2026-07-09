@@ -1316,7 +1316,7 @@ function buildReadmeSheet(workbook, opts) {
 
     // --- Data sources & licensing ---
     section('Data sources & licensing')
-    row('gnomAD', 'Gene constraint (pLI, LOEUF, missense Z). Genome build selects v4 (GRCh38) or v2.1.1 (GRCh37).', 'gnomad.broadinstitute.org', 'CC0 (attrib. requested)')
+    row('gnomAD', 'Gene constraint (pLI, LOEUF, missense Z), bundled offline from gnomAD v4 (GRCh38); live API fallback for GRCh37/hg19.', 'gnomad.broadinstitute.org', 'CC0 (attrib. requested)')
     row('ClinVar', 'Aggregate per-gene Pathogenic/Likely-pathogenic allele counts.', 'ncbi.nlm.nih.gov/clinvar', 'public domain')
     row('MyGene.info', 'Gene name, type, OMIM MIM number, KEGG pathways, function summary.', 'mygene.info', 'per source')
     row('Gene-list membership', 'Yes/No membership derived from user-supplied symbol lists. Used for licence-restricted sources (e.g. COSMIC): only membership is embedded, not the licensed content.', 'user-supplied', 'membership only')

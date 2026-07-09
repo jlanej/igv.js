@@ -1,35 +1,70 @@
 /**
  * gnomAD Constraint Provider
  *
- * Fetches gene-level loss-of-function / missense constraint from the public
- * gnomAD GraphQL API (https://gnomad.broadinstitute.org/api, no API key).
- * Multiple genes are batched into a single aliased GraphQL query.
+ * Provides gene-level loss-of-function / missense constraint (LOEUF, pLI,
+ * missense Z) for the Gene Summary tab.
  *
- * Data licence: gnomAD constraint metrics are released openly (CC0 / "free of
- * restrictions"; attribution requested) and are safe to embed in exported
- * reports. See https://gnomad.broadinstitute.org/policies.
+ * PRIMARY (offline): a bundled, slimmed snapshot of gnomAD v4.1 constraint
+ * (MANE Select transcripts) at data/annotations/gnomad_constraint.json.gz,
+ * built by scripts/build-annotation-data.js. This is used for GRCh38/hg38 and
+ * needs no network at export time — mirroring the ClinVar provider.
  *
- * Genome build → dataset: hg38/GRCh38 ⇒ gnomAD v4 constraint; hg19/GRCh37 ⇒
- * v2.1.1 (LOEUF runs systematically lower on v2 — the column header records
- * which version was used).
+ * FALLBACK (live API): the public gnomAD GraphQL API is used only when the
+ * bundled file is missing, or for GRCh37/hg19 (which the bundle does not
+ * cover). The API rejects large aliased batches with HTTP 400, so queries are
+ * chunked well under that limit.
  *
- * Graceful fallback: any network/parse failure yields blank cells plus an
- * error entry for the Annotation Status sheet; the export never hard-fails.
+ * Data licence: gnomAD constraint is released openly (CC0 / "free of
+ * restrictions"; attribution requested) — safe to embed in exported reports.
+ *
+ * Graceful fallback: any missing data / network failure yields blank cells
+ * plus an Annotation Status entry; the export never hard-fails.
  */
 
 'use strict'
 
+const fs = require('fs')
+const zlib = require('zlib')
+const path = require('path')
 const log = require('../logger')
 
 const GNOMAD_API = 'https://gnomad.broadinstitute.org/api'
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000  // 24 hours
 // gnomAD's GraphQL endpoint rejects large aliased queries with HTTP 400 (query
-// complexity limit ~25-30 genes). Stay well under it so real exports don't fail.
+// complexity limit ~25-30 genes). Stay well under it so live-fallback works.
 const CHUNK_SIZE = 20                       // genes per aliased GraphQL request
 const TIMEOUT_MS = 8000
 
-// In-memory cache: `${build}:${SYMBOL}` → {data, fetchedAt}
+const BUNDLE_FILE = path.join(__dirname, '..', 'data', 'annotations', 'gnomad_constraint.json.gz')
+
+// Bundled (offline) constraint: Map<UPPER_SYMBOL, {loeuf, pli, misZ}>
+let bundle = null
+let bundleAvailable = false
+let bundleLoadAttempted = false
+
+// In-memory cache for the live fallback: `${build}:${SYMBOL}` → {data, fetchedAt}
 const cache = new Map()
+
+function loadBundle() {
+    if (bundleLoadAttempted) return
+    bundleLoadAttempted = true
+    try {
+        if (!fs.existsSync(BUNDLE_FILE)) {
+            log.warn(`gnomAD bundle not found, will use live API fallback: ${BUNDLE_FILE}`)
+            bundle = new Map()
+            bundleAvailable = false
+            return
+        }
+        const raw = zlib.gunzipSync(fs.readFileSync(BUNDLE_FILE)).toString('utf-8')
+        const payload = JSON.parse(raw)
+        bundle = new Map(Object.entries(payload.genes || {}))
+        bundleAvailable = bundle.size > 0
+    } catch (err) {
+        log.warn(`Failed to load gnomAD bundle, will use live API fallback: ${err.message}`)
+        bundle = new Map()
+        bundleAvailable = false
+    }
+}
 
 /** Map an export genome build to a gnomAD reference_genome enum. */
 function refGenome(cfg) {
@@ -48,22 +83,24 @@ function isEnabled(cfg) {
     return !!(ga && ga.enabled && c && c.enabled)
 }
 
-/**
- * Convert a raw gnomad_constraint object into our flat annotation.
- * Returns null when no constraint is available for the gene.
- */
+/** Convert a raw gnomad_constraint object (live API) into our flat annotation. */
 function parseConstraint(gc) {
     if (!gc) return null
     const loeuf = typeof gc.oe_lof_upper === 'number' ? gc.oe_lof_upper : null
     const pli = typeof gc.pLI === 'number' ? gc.pLI : null
     const misZ = typeof gc.mis_z === 'number' ? gc.mis_z : null
-    // "LoF-constrained" flag: conservative union of the two classic signals.
-    // pLI >= 0.9 (LoF-intolerant) OR LOEUF < 0.35 (upper CI of observed/expected).
-    const constrained = (pli != null && pli >= 0.9) || (loeuf != null && loeuf < 0.35)
-    return {loeuf, pli, misZ, constrained}
+    if (loeuf === null && pli === null && misZ === null) return null
+    return {loeuf, pli, misZ}
 }
 
-/** Fetch one chunk of genes; returns Map<UPPER_SYMBOL, parsed|{error}>. */
+/** LoF-constrained flag: pLI >= 0.9 OR LOEUF < 0.35 (single source of truth). */
+function isConstrained(obj) {
+    return (obj.pli != null && obj.pli >= 0.9) || (obj.loeuf != null && obj.loeuf < 0.35)
+}
+
+// -------------------------------------------------------------------------
+// Live API fallback
+// -------------------------------------------------------------------------
 async function fetchChunk(genes, build) {
     const out = new Map()
     const aliases = genes.map((g, i) =>
@@ -100,11 +137,10 @@ async function fetchChunk(genes, build) {
     }
 }
 
-async function fetchBatch(genes, cfg) {
+async function fetchBatchLive(genes, cfg) {
     const build = refGenome(cfg)
     const result = new Map()
     const toFetch = []
-
     for (const g of genes) {
         const up = String(g).toUpperCase()
         const cached = cache.get(`${build}:${up}`)
@@ -114,7 +150,6 @@ async function fetchBatch(genes, cfg) {
             toFetch.push(g)
         }
     }
-
     for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
         const chunk = toFetch.slice(i, i + CHUNK_SIZE)
         const map = await fetchChunk(chunk, build)
@@ -122,11 +157,28 @@ async function fetchBatch(genes, cfg) {
             const up = String(g).toUpperCase()
             const data = map.get(up)
             result.set(up, data)
-            // Cache successes and confirmed "no data" (null); never cache errors.
             if (!(data && data.error)) cache.set(`${build}:${up}`, {data: data || null, fetchedAt: Date.now()})
         }
     }
     return result
+}
+
+// -------------------------------------------------------------------------
+// Public: bundled-first, live fallback
+// -------------------------------------------------------------------------
+async function fetchBatch(genes, cfg) {
+    const build = refGenome(cfg)
+    // Offline path: the bundle covers GRCh38 (gnomAD v4). Use it when present.
+    if (build === 'GRCh38') {
+        loadBundle()
+        if (bundleAvailable) {
+            const out = new Map()
+            for (const g of genes) out.set(String(g).toUpperCase(), bundle.get(String(g).toUpperCase()) || null)
+            return out
+        }
+    }
+    // Fallback: live API (GRCh37 always; GRCh38 only if the bundle is missing).
+    return fetchBatchLive(genes, cfg)
 }
 
 function columns(cfg) {
@@ -148,17 +200,17 @@ function toRow(obj, cfg) {
     const cells = {}
     if (c.loeuf !== false) cells.gnomadLoeuf = (has && obj.loeuf != null) ? round(obj.loeuf, 2) : ''
     if (c.pli !== false) cells.gnomadPli = (has && obj.pli != null) ? round(obj.pli, 2) : ''
-    if (c.constrainedFlag !== false) cells.gnomadConstrained = has ? (obj.constrained ? 'Yes' : 'No') : ''
+    if (c.constrainedFlag !== false) cells.gnomadConstrained = has ? (isConstrained(obj) ? 'Yes' : 'No') : ''
     if (c.misZ) cells.gnomadMisZ = (has && obj.misZ != null) ? round(obj.misZ, 2) : ''
     return cells
 }
 
-/** Clear the constraint cache (testing helper). */
-function clearCache() { cache.clear() }
+/** Clear caches / force reload (testing helper). */
+function reset() { cache.clear(); bundle = null; bundleAvailable = false; bundleLoadAttempted = false }
 
 module.exports = {
     id: 'gnomad',
-    attribution: 'gnomAD gene constraint (pLI/LOEUF), CC0 — https://gnomad.broadinstitute.org',
+    attribution: 'gnomAD v4 gene constraint (LOEUF/pLI), bundled offline, CC0 — https://gnomad.broadinstitute.org',
     isEnabled, fetchBatch, columns, toRow,
-    parseConstraint, refGenome, clearCache
+    parseConstraint, isConstrained, refGenome, reset, BUNDLE_FILE
 }

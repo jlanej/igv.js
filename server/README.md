@@ -534,7 +534,7 @@ Annotation Status tab, never a failed export.
 | Annotation | Columns | Source | Licence |
 |------------|---------|--------|---------|
 | **Impact passing review** | Pass HIGH / MODERATE / LOW | curation × impact | n/a |
-| **gnomAD constraint** | gnomAD LOEUF, pLI, LoF-constrained | gnomAD GraphQL API (live) | CC0 |
+| **gnomAD constraint** | gnomAD LOEUF, pLI, LoF-constrained | bundled v4 (GRCh38); live API fallback for hg19 | CC0 |
 | **ClinVar** | ClinVar P/LP, Has P/LP | bundled `data/annotations/*` | public domain |
 | **Gene-list membership** | one Yes/No column per list | `data/gene-lists/*.txt` | membership only |
 | **MyGene.info** | Gene Name, Type, OMIM, Pathways, Summary | MyGene.info (live) | per source |
@@ -550,7 +550,7 @@ Annotation Status tab, never a failed export.
 - **OMIM** is included as the numeric MIM identifier only (disease-title text is
   licence-restricted and is not embedded).
 
-The bundled ClinVar snapshot is regenerated with `npm run build-annotation-data`
+The bundled ClinVar and gnomAD snapshots are regenerated with `npm run build-annotation-data`
 (re-downloads NCBI's public-domain `gene_specific_summary.txt` and slims it).
 
 If IGV has not yet been loaded (no variant clicked), exports are generated

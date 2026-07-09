@@ -80,9 +80,64 @@ async function buildClinvar() {
     process.stdout.write(`Wrote ${OUT_FILE}\n  genes: ${Object.keys(genes).length}\n  dated: ${dated || 'n/a'}\n  size: ${(gz.length / 1024).toFixed(0)} KiB (gz)\n`)
 }
 
+const GNOMAD_URL = 'https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/constraint/gnomad.v4.1.constraint_metrics.tsv'
+const GNOMAD_OUT = path.join(OUT_DIR, 'gnomad_constraint.json.gz')
+
+function fnum(x) {
+    const t = String(x).trim()
+    if (t === '' || t === 'NA' || t === 'NaN') return null
+    const v = parseFloat(t)
+    return Number.isFinite(v) ? Math.round(v * 10000) / 10000 : null
+}
+
+async function buildGnomad() {
+    process.stdout.write(`Fetching ${GNOMAD_URL} (~95 MB) …\n`)
+    const resp = await fetch(GNOMAD_URL, {headers: {'Accept': 'text/tab-separated-values'}})
+    if (!resp.ok) throw new Error(`gnomAD HTTP ${resp.status}`)
+    const text = await resp.text()
+
+    const lines = text.split('\n')
+    const header = lines[0].split('\t')
+    const idx = {}
+    header.forEach((name, i) => { idx[name] = i })
+    // Columns resolved by name (robust to position): MANE Select transcripts only.
+    const cGene = idx['gene'], cMane = idx['mane_select']
+    const cLoeuf = idx['lof.oe_ci.upper'], cPli = idx['lof.pLI'], cMisz = idx['mis.z_score']
+
+    const genes = {}
+    for (let i = 1; i < lines.length; i++) {
+        const c = lines[i].split('\t')
+        if (c.length <= cMisz) continue
+        if (String(c[cMane]).trim().toLowerCase() !== 'true') continue
+        const sym = c[cGene].trim()
+        if (!sym) continue
+        const rec = {}
+        const loeuf = fnum(c[cLoeuf]), pli = fnum(c[cPli]), misZ = fnum(c[cMisz])
+        if (loeuf !== null) rec.loeuf = loeuf
+        if (pli !== null) rec.pli = pli
+        if (misZ !== null) rec.misZ = misZ
+        if (Object.keys(rec).length > 0) genes[sym.toUpperCase()] = rec  // MANE is unique per gene
+    }
+
+    const payload = {
+        meta: {
+            _source: 'gnomAD v4.1 constraint_metrics.tsv (MANE Select transcripts)',
+            _license: 'CC0 (attribution requested)',
+            _build: 'GRCh38',
+            _fields: {loeuf: 'lof.oe_ci.upper', pli: 'lof.pLI', misZ: 'mis.z_score'}
+        },
+        genes
+    }
+    fs.mkdirSync(OUT_DIR, {recursive: true})
+    const gz = zlib.gzipSync(Buffer.from(JSON.stringify(payload)), {level: 9})
+    fs.writeFileSync(GNOMAD_OUT, gz)
+    process.stdout.write(`Wrote ${GNOMAD_OUT}\n  genes: ${Object.keys(genes).length}\n  size: ${(gz.length / 1024).toFixed(0)} KiB (gz)\n`)
+}
+
 async function main() {
     try {
         await buildClinvar()
+        await buildGnomad()
         process.stdout.write('Done.\n')
     } catch (err) {
         process.stderr.write(`Build failed: ${err.message}\n`)

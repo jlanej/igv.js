@@ -92,17 +92,18 @@ describe('ClinVar provider (bundled)', function () {
 describe('gnomAD provider (pure logic)', function () {
     const cfg = mergeWithDefaults({})
 
-    it('parseConstraint maps fields and flags constrained genes', function () {
+    it('parseConstraint maps the API fields', function () {
         expect(gnomad.parseConstraint({pLI: 1, oe_lof_upper: 0.234, mis_z: 3.64}))
-            .to.deep.equal({loeuf: 0.234, pli: 1, misZ: 3.64, constrained: true})
+            .to.deep.equal({loeuf: 0.234, pli: 1, misZ: 3.64})
     })
 
-    it('flags constrained on LOEUF < 0.35 even with low pLI', function () {
-        expect(gnomad.parseConstraint({pLI: 0.2, oe_lof_upper: 0.30}).constrained).to.equal(true)
+    it('flags constrained on pLI >= 0.9 or LOEUF < 0.35', function () {
+        expect(gnomad.isConstrained({pli: 0.2, loeuf: 0.30})).to.equal(true)   // LOEUF < 0.35
+        expect(gnomad.isConstrained({pli: 0.95, loeuf: 1.0})).to.equal(true)   // pLI >= 0.9
     })
 
     it('is not constrained for tolerant genes', function () {
-        expect(gnomad.parseConstraint({pLI: 0.001, oe_lof_upper: 1.15, mis_z: 0.3}).constrained).to.equal(false)
+        expect(gnomad.isConstrained({pli: 0.001, loeuf: 1.15})).to.equal(false)
     })
 
     it('returns null when no constraint object', function () {
@@ -124,6 +125,17 @@ describe('gnomAD provider (pure logic)', function () {
     it('column header records the dataset version for the build', function () {
         expect(gnomad.columns(mergeWithDefaults({genomeBuild: 'hg38'}))[0].header).to.contain('v4')
         expect(gnomad.columns(mergeWithDefaults({genomeBuild: 'hg19'}))[0].header).to.contain('v2.1.1')
+    })
+
+    it('reads constraint from the bundled file offline (GRCh38, no network)', async function () {
+        gnomad.reset()
+        const map = await gnomad.fetchBatch(['TSC1', 'NOT_A_REAL_GENE_XYZ'], mergeWithDefaults({genomeBuild: 'hg38'}))
+        const tsc1 = map.get('TSC1')
+        expect(tsc1).to.be.an('object')
+        expect(tsc1.loeuf).to.be.a('number')
+        expect(tsc1.pli).to.be.a('number')
+        expect(gnomad.toRow(tsc1, cfg).gnomadConstrained).to.equal('Yes')  // TSC1 pLI ~1.0
+        expect(map.get('NOT_A_REAL_GENE_XYZ')).to.equal(null)
     })
 })
 
