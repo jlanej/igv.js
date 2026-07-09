@@ -3557,7 +3557,7 @@ describe('Gene Summary impact counts and annotations', function () {
         const wb = new ExcelJS.Workbook()
         await wb.xlsx.load(res.body)
         const header = wb.getWorksheet('Gene Summary').getRow(1).values
-        expect(header).to.include.members(['Pass HIGH', 'Pass MODERATE', 'Pass LOW'])
+        expect(header).to.include.members(['Pass HIGH', 'Pass MODERATE', 'Pass LOW', 'Pass ALL'])
     })
 
     it('xlsx omits impact columns when passByImpact is off', async function () {

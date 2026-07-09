@@ -21,7 +21,10 @@
 const IMPACT_TIERS = [
     {key: 'HIGH', label: 'HIGH', impacts: ['HIGH']},
     {key: 'HIGH_MOD', label: 'HIGH+MOD', impacts: ['HIGH', 'MODERATE']},
-    {key: 'HIGH_MOD_LOW', label: 'HIGH+MOD+LOW', impacts: ['HIGH', 'MODERATE', 'LOW']}
+    {key: 'HIGH_MOD_LOW', label: 'HIGH+MOD+LOW', impacts: ['HIGH', 'MODERATE', 'LOW']},
+    // ALL: no impact restriction — includes MODIFIER, blank, and any other
+    // impact value, so convergence is not limited to the HIGH/MOD/LOW set.
+    {key: 'ALL', label: 'ALL', impacts: null}
 ]
 
 // Curation strata.
@@ -39,7 +42,7 @@ const DIMENSIONS = [
 ]
 
 // Broadest cell (superset of all others) — used to decide which terms to show.
-const REF_CELL = 'all|HIGH_MOD_LOW'
+const REF_CELL = 'all|ALL'
 
 function buildCells() {
     const cells = []
@@ -86,7 +89,8 @@ function computeConvergence(variants, opts) {
 
         for (const c of cells) {
             if (!c.st.match(status)) continue
-            if (impactCol && !c.tier.impacts.includes(impact)) continue
+            // tier.impacts === null (ALL) means no impact restriction.
+            if (impactCol && c.tier.impacts && !c.tier.impacts.includes(impact)) continue
             cellGenes[c.key].add(upper)
             cellInds[c.key].add(individual)
             for (const d of DIMENSIONS) {

@@ -1283,7 +1283,7 @@ function buildReadmeSheet(workbook, opts) {
         row('Samples', 'Distinct samples/trios harbouring a variant in this gene.')
         row('Pass / Fail / Uncertain / Pending', 'Per-gene counts of variants by reviewer curation status.', 'Reviewer curation')
         if (hasImpact && exportCfg.impactCounts && exportCfg.impactCounts.passByImpact) {
-            row('Pass HIGH / Pass MODERATE / Pass LOW', 'Count of HIGH/MODERATE/LOW-impact variants in this gene that PASS review. MODIFIER and blank impacts are excluded, so these need not sum to Pass.', 'impact × curation')
+            row('Pass HIGH / Pass MODERATE / Pass LOW / Pass ALL', 'Count of HIGH/MODERATE/LOW-impact variants in this gene that PASS review; Pass ALL = passing variants of ANY impact (incl. MODIFIER/blank), i.e. not limited to HIGH/MOD/LOW.', 'impact × curation')
         }
         if (hasImpact && exportCfg.impactCounts && exportCfg.impactCounts.totalByImpact) {
             row('HIGH / MODERATE / LOW', 'Count of HIGH/MODERATE/LOW-impact variants in this gene regardless of review status.', 'impact column')
@@ -1324,7 +1324,7 @@ function buildReadmeSheet(workbook, opts) {
         row('Purpose', 'For each grouping dimension, shows which shared attributes (terms) your genes converge on — the signal when de novo hits are singletons scattered across genes.')
         row('Counts = INDIVIDUALS', 'Each cell is the number of DISTINCT INDIVIDUALS (probands) with a qualifying variant in a gene carrying that term — NOT the number of variants. One proband with several de novo hits in the group counts once, so a single hypermutated proband cannot look like convergence.', 'impact × curation × sample')
         row('# genes / Genes', 'Distinct genes contributing (locus heterogeneity), and their symbols. So single-proband exports still surface gene-level convergence.')
-        row('Columns (cells)', 'Curation status {pass, all} × cumulative impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW}. A term is shown only if ≥2 individuals OR ≥2 genes share it. Bold rows recur across ≥2 individuals.')
+        row('Columns (cells)', 'Curation status {pass, all} × cumulative impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL}. ALL applies no impact restriction (incl. MODIFIER/blank). A term is shown only if ≥2 individuals OR ≥2 genes share it. Bold rows recur across ≥2 individuals.')
         row('Dimensions', 'Constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9) and ClinVar P/LP history are offline; protein domain (InterPro) comes from MyGene (blank if the network is unavailable).', 'gnomAD / ClinVar / MyGene')
         row('Method', 'Transparent shared-attribute counting — NOT enrichment p-values, which are unreliable at small gene counts. Hypothesis-generating, not diagnostic.')
     }
@@ -1378,7 +1378,7 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
     addBanner(`Gene set per cell (genes/individuals) — ${sizeStr}`, {size: 10, color: {argb: 'FF47586A'}})
 
     // Convergence headline: strongest group per dimension in the broadest passing cell
-    const headCellKey = 'pass|HIGH_MOD_LOW'
+    const headCellKey = 'pass|ALL'
     const headBits = []
     for (const sec of conv.sections) {
         if (!sec.groups.length) continue
@@ -1391,7 +1391,7 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
             headBits.push(`${sec.label}: ${best.cc.individuals}i/${best.cc.genes}g share "${best.g.term}" (${best.g.genes.slice(0, 5).join(', ')})`)
         }
     }
-    addBanner(headBits.length ? `Top convergence (pass · all tiers) — ${headBits.join(';  ')}` : 'No attribute is shared by ≥2 passing individuals or genes yet.',
+    addBanner(headBits.length ? `Top convergence (pass · ALL impacts) — ${headBits.join(';  ')}` : 'No attribute is shared by ≥2 passing individuals or genes yet.',
         {bold: true, size: 11, color: {argb: 'FF2C3E50'}})
     r++; ws.addRow([])   // spacer
 
@@ -1697,6 +1697,10 @@ app.post('/api/export/xlsx', async (req, res) => {
             const geneSummary = Object.values(geneMap).map(g => {
                 g.samples = g._samples.size
                 delete g._samples
+                // "ALL" impact counts: passing / total regardless of impact
+                // (includes MODIFIER/blank), i.e. not limited to HIGH/MOD/LOW.
+                g.passAll = g.pass
+                g.impactAll = g.total
                 return g
             }).sort((a, b) => b.total - a.total)
 
@@ -1712,16 +1716,18 @@ app.post('/api/export/xlsx', async (req, res) => {
                     {header: 'Pending', key: 'pending', width: 10}
                 ]
 
-                // Impact counts passing review (HIGH/MODERATE/LOW), then optional totals
+                // Impact counts passing review (HIGH/MODERATE/LOW + ALL), then optional totals
                 if (exportCfg.impactCounts && exportCfg.impactCounts.passByImpact) {
                     gsCols.push({header: 'Pass HIGH', key: 'passHigh', width: 10})
                     gsCols.push({header: 'Pass MODERATE', key: 'passMod', width: 14})
                     gsCols.push({header: 'Pass LOW', key: 'passLow', width: 10})
+                    gsCols.push({header: 'Pass ALL', key: 'passAll', width: 10})
                 }
                 if (exportCfg.impactCounts && exportCfg.impactCounts.totalByImpact) {
                     gsCols.push({header: 'HIGH', key: 'high', width: 8})
                     gsCols.push({header: 'MODERATE', key: 'mod', width: 10})
                     gsCols.push({header: 'LOW', key: 'low', width: 8})
+                    gsCols.push({header: 'ALL', key: 'impactAll', width: 8})
                 }
 
                 // Add annotation columns based on config

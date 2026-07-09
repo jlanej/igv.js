@@ -259,4 +259,21 @@ describe('gene-analysis convergence (independent signals)', function () {
         expect(terms.clinvar).to.deep.equal(['Has ClinVar P/LP'])
         expect(terms.domain).to.deep.equal(['Hamartin'])
     })
+
+    it('the ALL impact tier includes MODIFIER/blank; HIGH+MOD+LOW excludes them', function () {
+        const vs = [
+            {gene: 'G1', s: 'X', impact: 'HIGH', curation_status: 'pass'},
+            {gene: 'G2', s: 'Y', impact: 'MODIFIER', curation_status: 'pass'},
+            {gene: 'G3', s: 'Z', impact: '', curation_status: 'pass'}
+        ]
+        const gt = new Map([
+            ['G1', {constraint: [], clinvar: [], domain: ['D']}],
+            ['G2', {constraint: [], clinvar: [], domain: ['D']}],
+            ['G3', {constraint: [], clinvar: [], domain: ['D']}]
+        ])
+        const conv = computeConvergence(vs, {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', geneTerms: gt})
+        const d = conv.sections.find(s => s.id === 'domain').groups.find(g => g.term === 'D')
+        expect(d.cells['pass|HIGH_MOD_LOW'].individuals).to.equal(1)   // HIGH only
+        expect(d.cells['pass|ALL'].individuals).to.equal(3)           // + MODIFIER + blank
+    })
 })
