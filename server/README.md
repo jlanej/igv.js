@@ -27,8 +27,13 @@ OpenDemand desktop access).
 - **Impact counts** – per-gene counts of HIGH/MODERATE/LOW/ALL-impact variants
   passing review, on the Gene Summary sheet
 - **Gene convergence** – a Gene Analysis tab showing whether singleton genes
-  stack up on a shared constraint tier, ClinVar history, or protein domain,
-  counted by distinct individuals and stratified by curation × impact tier
+  stack up on a shared attribute across **eight dimensions** (gnomAD constraint
+  tier, ClinVar history, GenCC inheritance, protein domain, plus Reactome &
+  WikiPathways pathways, HGNC gene families, and MSigDB Hallmark processes),
+  counted by distinct individuals and stratified by curation × impact tier. Each
+  term carries a **hypergeometric enrichment p-value + Benjamini-Hochberg FDR q**
+  against the cohort's own eligible-gene background, so you can tell real
+  convergence from chance
 - **Contamination metrics** – per-variant kraken2 species/contamination summary
   in the Variants sheet and above each per-variant IGV screenshot
 - **Sample QC** – load a per-sample QC file (e.g. VerifyBamID freemix) to
@@ -483,11 +488,14 @@ The **Export XLSX** button generates a publication-ready workbook containing:
 - **Gene Summary** sheet – gene-level statistics (total, samples, pass/fail/
   uncertain/pending), **impact counts passing review** (Pass HIGH / MODERATE /
   LOW / ALL), and gene-level annotations (see *Gene annotations* below).
-- **Gene Analysis** sheet – gene *convergence*: which shared attributes
-  (constraint tier, ClinVar history, protein domain) the review's genes stack
-  up on, counted by **distinct individuals** (not variants), stratified by
-  curation {pass, all} × impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL}, with
-  a background-frequency "is this surprising?" cue. See *Gene convergence* below.
+- **Gene Analysis** sheet – gene *convergence*: which shared attributes (gnomAD
+  constraint, ClinVar history, GenCC inheritance, protein domain; Reactome &
+  WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes) the
+  review's genes stack up on, counted by **distinct individuals** (not variants),
+  stratified by curation {pass, all} × impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW,
+  ALL}. Each term shows a background rate plus a **hypergeometric enrichment
+  p-value and Benjamini-Hochberg FDR q** vs the cohort background, to separate
+  signal from chance. See *Gene convergence* below.
 - **Sample Summary** sheet – per-sample variant counts by impact group and
   frequency threshold, plus cohort statistics (mean, median, std dev)
 - **Sample QC** sheet – trio-aggregated QC metrics (if QC data is loaded)
@@ -532,7 +540,7 @@ from disk.
 | **Visual Elements** | IGV Screenshots, Lollipop Plots, Protein Domains |
 | **Gene Annotations** | Enable/Disable, Gene Name, Summary, OMIM, Pathways, Gene Type; gnomAD constraint; ClinVar P/LP; GenCC MOI + validity; gene-list membership |
 | **Impact Counts** | Pass HIGH/MODERATE/LOW/ALL (on), HIGH/MODERATE/LOW/ALL totals (off) |
-| **Gene Analysis** | Convergence dimensions (constraint/ClinVar/domain), min-count |
+| **Gene Analysis** | Convergence dimensions (constraint/ClinVar/GenCC/domain + Reactome/WikiPathways/HGNC-family/MSigDB-Hallmark), enrichment p + FDR q, min-count |
 | **Contamination** | Per-variant species columns + screenshot panel (when `--bed-tracks` set) |
 | **Worksheets** | Read Me, Gene Summary, Gene Analysis, Sample Summary, Sample QC, Applied Filters, Annotation Status |
 | **Variant Columns** | Core (chrom/pos/ref/alt), Gene Info, Frequency, Quality, Genotypes, Allelic Depth, Genotype Quality, Sample Info, File Paths, Other Annotations |
@@ -567,10 +575,29 @@ Annotation Status tab, never a failed export.
 - **OMIM** is included as the numeric MIM identifier only (disease-title text is
   licence-restricted and is not embedded).
 
-The bundled ClinVar, gnomAD, and GenCC snapshots are regenerated with
+The bundled ClinVar, gnomAD, GenCC, and gene-set snapshots are regenerated with
 `npm run build-annotation-data` (streams NCBI's public-domain ClinVar
-`variant_summary.txt.gz`, the gnomAD v4 constraint table, and the GenCC
-submissions export, and slims each to a per-gene JSON).
+`variant_summary.txt.gz`, the gnomAD v4 constraint table, the GenCC
+submissions export, and the gene-set GMT/TSV sources, and slims each to a
+per-gene JSON). Build individual groups with e.g. `node scripts/build-annotation-data.js genesets`.
+
+#### Gene-set libraries (Gene Analysis convergence dimensions)
+
+These bundled libraries (`data/genesets/*.json.gz`, `gene → [set names]`) add
+convergence dimensions only — they are **not** per-gene Gene Summary columns (a
+gene belongs to many pathways). All are offline and cleanly licensed:
+
+| Library | Adds | Source | Licence |
+|---------|------|--------|---------|
+| **Reactome** | curated pathways | `ReactomePathways.gmt` (Homo sapiens) | CC0 1.0 |
+| **WikiPathways** | community pathways | WikiPathways GMT (Entrez→symbol via HGNC) | CC0 1.0 |
+| **HGNC gene families** | curated gene families/superfamilies | HGNC `gene_group` | attribution |
+| **MSigDB Hallmark** | 50 broad, well-separated processes | MSigDB `h.all` (symbols) | CC BY 4.0 |
+
+Pathway sets are capped at ≤500 genes at build time (generic mega-pathways add
+noise, not signal). KEGG and BioCarta are deliberately excluded (encumbered
+licences); a test asserts none leak into the Hallmark bundle. Complex Portal,
+GO-slim, and HPO are candidate future additions.
 
 ### Gene convergence (Gene Analysis tab)
 
@@ -583,15 +610,28 @@ grouping dimension it inverts `term → genes` and reports the shared terms:
   once, so a single hypermutated proband can't look like convergence. Distinct
   genes are shown alongside (so single-proband exports still see gene-level
   convergence). A term is shown only if ≥2 individuals **or** ≥2 genes share it.
-- **Dimensions** – constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9), ClinVar P/LP
-  history, and **GenCC Mode of Inheritance** are **offline**; protein domain
-  (InterPro) comes from MyGene. (MOI convergence — e.g. "5 of my genes are known
-  autosomal-dominant disease genes" — is a strong de novo signal.)
+- **Dimensions (8)** – **offline**: constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9),
+  ClinVar P/LP history, **GenCC Mode of Inheritance**, **Reactome** &
+  **WikiPathways** pathways, **HGNC gene families**, **MSigDB Hallmark**
+  processes; **online**: protein domain (InterPro via MyGene). (MOI convergence —
+  e.g. "5 of my genes are known autosomal-dominant disease genes" — and pathway
+  convergence are strong de novo signals.)
 - **Stratification** – curation {pass, all} × cumulative impact tier {HIGH,
   HIGH+MOD, HIGH+MOD+LOW, ALL}.
-- **Method** – transparent shared-attribute counting (not enrichment p-values,
-  which mislead at small gene counts), with a background-frequency column ("is
-  this surprising?"). Hypothesis-generating, not diagnostic.
+- **Signal vs chance** – alongside the counts, each term carries `bg` (the
+  fraction of the cohort's eligible genes carrying it — the chance rate), an
+  **Enrich p** (one-tailed hypergeometric/Fisher test that the exported genes
+  over-represent the term versus the *whole loaded cohort* — the
+  de-novo-appropriate background, **not** the genome), and an **FDR q**
+  (Benjamini-Hochberg across every term). `q < 0.05` (green) is more than chance.
+  This is a **gene-level over-representation test**, not a de-novo mutation-rate
+  model — treat it as hypothesis-generating, and expect little to clear FDR at
+  small N (that is honest). Pathway dimensions overlap heavily, so only the top
+  25 terms per dimension are shown (the rest is noted, never silently dropped).
+- **Method** – distinct-individual counting is the primary, always-faithful
+  signal; the hypergeometric p/q is the "enrichment or chance?" backstop. A
+  de-novo mutation-rate model (e.g. **denovolyzeR**, run at build time) is the
+  principled next step once a multi-proband cohort accrues.
 
 If IGV has not yet been loaded (no variant clicked), exports are generated
 with data sheets only (no screenshots).

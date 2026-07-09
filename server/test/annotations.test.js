@@ -19,7 +19,8 @@ const clinvar = require('../providers/clinvar-provider')
 const gnomad = require('../providers/gnomad-provider')
 const gencc = require('../providers/gencc-provider')
 const geneLists = require('../providers/genelist-provider')
-const {computeConvergence, geneTermsFor, backgroundFractions} = require('../gene-analysis')
+const {computeConvergence, geneTermsFor, universeTermCounts, hypergeomUpperTail, benjaminiHochberg} = require('../gene-analysis')
+const geneSets = require('../genesets')
 const registry = require('../annotation-registry')
 
 describe('export-config: nested deep-merge', function () {
@@ -315,21 +316,79 @@ describe('gene-analysis convergence (independent signals)', function () {
         expect(d.cells['pass|ALL'].individuals).to.equal(3)           // + MODIFIER + blank
     })
 
-    it('backgroundFractions computes term prevalence and attaches it to groups', function () {
-        const gn = new Map([['A', {loeuf: 0.2, pli: 1.0}], ['B', {loeuf: 0.5, pli: 0.5}],
-            ['C', {loeuf: 1.2, pli: 0.0}], ['D', {loeuf: 0.7, pli: 0.95}]])
-        const cv = new Map([['A', {plp: 5}], ['B', {plp: 0}], ['C', {plp: 2}], ['D', {plp: 0}]])
-        const bg = backgroundFractions({gnomad: gn, clinvar: cv})
-        expect(bg.constraint['LOEUF < 0.6 (LoF-constrained)']).to.equal(0.5)  // A,B
-        expect(bg.clinvar['Has ClinVar P/LP']).to.equal(0.5)                  // A,C
-        expect(bg.domain).to.deep.equal({})                                   // no offline background
+    it('hypergeomUpperTail returns exact upper-tail probabilities', function () {
+        expect(hypergeomUpperTail(0, 10, 5, 5)).to.equal(1)                 // k<=0
+        expect(hypergeomUpperTail(5, 10, 5, 5)).to.be.closeTo(1 / 252, 1e-9)
+        expect(hypergeomUpperTail(3, 10, 5, 5)).to.be.closeTo(0.5, 1e-9)
+        expect(hypergeomUpperTail(4, 10, 3, 3)).to.equal(0)                 // k>min(K,n)
+        expect(hypergeomUpperTail(1, 0, 0, 0)).to.equal(null)              // degenerate
+        expect(hypergeomUpperTail(3, 20000, 400, 50)).to.be.a('number').and.be.greaterThan(0)  // large-N stable
+    })
 
+    it('benjaminiHochberg controls the FDR and skips nulls', function () {
+        expect(benjaminiHochberg([0.01, 0.02, 0.03, 0.04, 0.05]).every(q => Math.abs(q - 0.05) < 1e-12)).to.equal(true)
+        const q = benjaminiHochberg([0.001, null, 0.5])
+        expect(q[0]).to.be.closeTo(0.002, 1e-12)   // m=2 (nulls excluded)
+        expect(q[1]).to.equal(null)
+        expect(q[2]).to.be.closeTo(0.5, 1e-12)
+    })
+
+    it('universe-based bg + hypergeometric enrichment attach to convergence groups', function () {
+        // Universe of 10 genes; term T carried by 3 (A,B,C). Export selects A,B.
+        const universe = new Map()
+        for (const g of ['A', 'B', 'C']) universe.set(g, {fam: ['T']})
+        for (const g of ['D', 'E', 'F', 'G', 'H', 'I', 'J']) universe.set(g, {fam: []})
+        const utc = universeTermCounts(universe)
+        expect(utc.size).to.equal(10)
+        expect(utc.counts.fam.T).to.equal(3)
         const conv = computeConvergence(
-            [{gene: 'A', s: 'X', impact: 'HIGH', curation_status: 'pass'}, {gene: 'C', s: 'Y', impact: 'HIGH', curation_status: 'pass'}],
-            {geneCol: 'gene', impactCol: 'impact', sampleCol: 's',
-                geneTerms: new Map([['A', {constraint: [], clinvar: ['Has ClinVar P/LP'], domain: ['Dom']}], ['C', {constraint: [], clinvar: ['Has ClinVar P/LP'], domain: ['Dom']}]]),
-                bgFreq: bg})
-        expect(conv.sections.find(s => s.id === 'clinvar').groups[0].bgFreq).to.equal(0.5)
-        expect(conv.sections.find(s => s.id === 'domain').groups[0].bgFreq).to.equal(null)
+            [{gene: 'A', s: 'X', impact: 'HIGH', curation_status: 'pass'},
+             {gene: 'B', s: 'Y', impact: 'HIGH', curation_status: 'pass'}],
+            {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 2,
+                geneTerms: new Map([['A', {fam: ['T']}], ['B', {fam: ['T']}]]),
+                dimensions: [{id: 'fam', label: 'Family'}], universeTermCounts: utc, selectedSize: 2})
+        const grp = conv.sections.find(s => s.id === 'fam').groups.find(g => g.term === 'T')
+        expect(grp.refGenes).to.equal(2)
+        expect(grp.bgFreq).to.be.closeTo(0.3, 1e-9)          // 3/10
+        expect(grp.enrichP).to.be.closeTo(3 / 45, 1e-9)      // C(3,2)C(7,0)/C(10,2)
+        expect(grp.enrichQ).to.be.closeTo(3 / 45, 1e-9)      // single test
+    })
+
+    it('a dimension with no universe term data gets null bg/enrichment', function () {
+        const utc = universeTermCounts(new Map([['A', {domain: []}], ['B', {domain: []}]]))
+        const conv = computeConvergence(
+            [{gene: 'A', s: 'X', impact: 'HIGH', curation_status: 'pass'},
+             {gene: 'B', s: 'Y', impact: 'HIGH', curation_status: 'pass'}],
+            {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 2,
+                geneTerms: new Map([['A', {domain: ['Dom']}], ['B', {domain: ['Dom']}]]),
+                dimensions: [{id: 'domain', label: 'Domain'}], universeTermCounts: utc, selectedSize: 2})
+        const grp = conv.sections.find(s => s.id === 'domain').groups[0]
+        expect(grp.bgFreq).to.equal(null)
+        expect(grp.enrichP).to.equal(null)
+        expect(grp.enrichQ).to.equal(null)
+    })
+})
+
+describe('gene-set libraries (convergence dimensions)', function () {
+    it('bundles load with clean licences and non-empty gene maps', function () {
+        const avail = geneSets.available()
+        expect(avail.map(a => a.id)).to.include.members(['reactome', 'wikipathways', 'hgncFamily', 'msigdbHallmark'])
+        for (const a of avail) {
+            expect(a.meta.license, a.id).to.be.a('string').and.not.equal('')
+            expect(a.meta.geneCount, a.id).to.be.greaterThan(0)
+        }
+    })
+
+    it('geneTermsFor adds gene-set memberships (TSC1 is in Reactome mTOR pathways)', function () {
+        const terms = geneTermsFor('TSC1', {}, null, {reactome: geneSets.libMap('reactome')})
+        expect(terms.reactome).to.be.an('array').with.length.greaterThan(0)
+        expect(terms.reactome.join(' ')).to.match(/MTOR|mTOR|TSC/i)
+    })
+
+    it('MSigDB Hallmark carries no KEGG/BioCarta sets (encumbered licences excluded)', function () {
+        const hm = geneSets.libMap('msigdbHallmark')
+        const terms = new Set()
+        for (const ts of hm.values()) for (const t of ts) terms.add(t)
+        for (const t of terms) expect(t).to.not.match(/^KEGG_|^BIOCARTA_/i)
     })
 })

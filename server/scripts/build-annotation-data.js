@@ -185,11 +185,151 @@ async function buildGencc() {
     process.stdout.write(`Wrote ${GENCC_OUT}\n  genes: ${Object.keys(genes).length}\n  size: ${(gz.length / 1024).toFixed(0)} KiB (gz)\n`)
 }
 
+// -------------------------------------------------------------------------
+// Gene-set libraries (convergence dimensions): gene -> [set names].
+// Reactome + WikiPathways pathways (CC0), HGNC gene families (attribution),
+// MSigDB Hallmark processes (CC BY). Written to data/genesets/*.json.gz.
+// -------------------------------------------------------------------------
+const GENESETS_DIR = path.join(__dirname, '..', 'data', 'genesets')
+const GS_HGNC_URL = 'https://storage.googleapis.com/public-download-files/hgnc/tsv/tsv/hgnc_complete_set.txt'
+const GS_REACTOME_URL = 'https://reactome.org/download/current/ReactomePathways.gmt.zip'
+const GS_WIKIPATHWAYS_URL = 'https://data.wikipathways.org/current/gmt/'
+const GS_HALLMARK_URL = 'https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/h.all.v2024.1.Hs.symbols.gmt'
+const GS_PATHWAY_MAX_GENES = 500   // drop generic mega-pathways; enrichment handles the rest
+
+const crypto = require('crypto')
+
+/** Extract the first (single) file from a ZIP buffer — stored or deflated. */
+function unzipFirst(buf) {
+    if (buf.readUInt32LE(0) !== 0x04034b50) throw new Error('not a zip file')
+    const method = buf.readUInt16LE(8)
+    const csize = buf.readUInt32LE(18)
+    const nameLen = buf.readUInt16LE(26)
+    const extraLen = buf.readUInt16LE(28)
+    const start = 30 + nameLen + extraLen
+    const comp = csize > 0 ? buf.slice(start, start + csize) : buf.slice(start)
+    if (method === 0) return comp
+    if (method === 8) return zlib.inflateRawSync(comp)
+    throw new Error(`unsupported zip compression method ${method}`)
+}
+
+/** Parse a GMT: `setName<TAB>desc<TAB>gene<TAB>gene…` → {UPPER_SYMBOL:[term,…]}. */
+function parseGmt(text, nameFn, geneMap, maxGenes) {
+    const gt = {}
+    for (const line of text.split('\n')) {
+        const cols = line.replace(/\r$/, '').split('\t')
+        if (cols.length < 3) continue
+        const term = nameFn(cols)
+        let syms = cols.slice(2).map(g => g.trim()).filter(Boolean)
+        syms = geneMap ? syms.map(g => geneMap[g]).filter(Boolean) : syms.map(g => g.toUpperCase())
+        syms = [...new Set(syms)]
+        if (!syms.length || (maxGenes && syms.length > maxGenes)) continue
+        for (const s of syms) (gt[s] || (gt[s] = [])).push(term)
+    }
+    return gt
+}
+
+function writeGeneSet(fileId, meta, geneTerms) {
+    const genes = {}
+    for (const g of Object.keys(geneTerms)) {
+        const terms = [...new Set(geneTerms[g])].sort()
+        if (terms.length) genes[g] = terms
+    }
+    const termCount = new Set(Object.values(genes).flat()).size
+    const payload = {meta: {...meta, geneCount: Object.keys(genes).length, termCount}, genes}
+    payload.meta.sha256 = crypto.createHash('sha256')
+        .update(JSON.stringify(payload)).digest('hex').slice(0, 16)
+    fs.mkdirSync(GENESETS_DIR, {recursive: true})
+    const out = path.join(GENESETS_DIR, fileId + '.json.gz')
+    const gz = zlib.gzipSync(Buffer.from(JSON.stringify(payload)), {level: 9})
+    fs.writeFileSync(out, gz)
+    process.stdout.write(`Wrote ${out}\n  genes: ${payload.meta.geneCount}  terms: ${termCount}  size: ${(gz.length / 1024).toFixed(0)} KiB (gz)\n`)
+}
+
+async function buildGeneSets() {
+    // HGNC: entrez→symbol map (for WikiPathways) + gene families. TSV quotes any
+    // field containing the '|' multi-value separator, so strip outer quotes.
+    process.stdout.write(`Fetching ${GS_HGNC_URL} …\n`)
+    const hgncResp = await fetch(GS_HGNC_URL)
+    if (!hgncResp.ok) throw new Error(`HGNC HTTP ${hgncResp.status}`)
+    const hgncLines = (await hgncResp.text()).split('\n')
+    const hh = hgncLines[0].split('\t')
+    const hi = {sym: hh.indexOf('symbol'), grp: hh.indexOf('gene_group'), ent: hh.indexOf('entrez_id')}
+    const entrez2sym = {}, hgncFamily = {}
+    for (let i = 1; i < hgncLines.length; i++) {
+        const c = hgncLines[i].split('\t')
+        const sym = (c[hi.sym] || '').trim()
+        if (!sym) continue
+        const up = sym.toUpperCase()
+        const ent = (c[hi.ent] || '').trim()
+        if (ent) entrez2sym[ent] = up
+        const grp = (c[hi.grp] || '').trim().replace(/^"|"$/g, '')
+        if (grp) for (const g of grp.split('|')) { const t = g.trim(); if (t) (hgncFamily[up] || (hgncFamily[up] = [])).push(t) }
+    }
+    writeGeneSet('hgnc_family', {
+        id: 'hgncFamily', label: 'Gene family (HGNC)', source: 'HGNC gene groups',
+        version: 'hgnc_complete_set', url: 'https://www.genenames.org/download/statistics-and-files/',
+        license: 'Custom — no restrictions on use; attribution requested',
+        licenseUrl: 'https://www.genenames.org/about/', builtWith: 'build-annotation-data.js buildGeneSets',
+    }, hgncFamily)
+
+    // Reactome (symbols; zipped GMT, Homo sapiens R-HSA rows).
+    process.stdout.write(`Fetching ${GS_REACTOME_URL} …\n`)
+    const rResp = await fetch(GS_REACTOME_URL)
+    if (!rResp.ok) throw new Error(`Reactome HTTP ${rResp.status}`)
+    const reactText = unzipFirst(Buffer.from(await rResp.arrayBuffer())).toString('utf-8')
+    writeGeneSet('reactome', {
+        id: 'reactome', label: 'Pathway (Reactome)', source: 'Reactome ReactomePathways.gmt (Homo sapiens)',
+        version: 'current', url: 'https://reactome.org/download-data', license: 'CC0 1.0',
+        licenseUrl: 'https://reactome.org/license', note: `pathways with <= ${GS_PATHWAY_MAX_GENES} genes`,
+        builtWith: 'build-annotation-data.js buildGeneSets',
+    }, parseGmt(reactText, c => c[0].trim(), null, GS_PATHWAY_MAX_GENES))
+
+    // WikiPathways (Entrez → symbol; latest dated GMT for Homo sapiens).
+    const wpIndex = await (await fetch(GS_WIKIPATHWAYS_URL)).text()
+    const wpFile = (wpIndex.match(/wikipathways-\d+-gmt-Homo_sapiens\.gmt/g) || []).sort().pop()
+    if (!wpFile) throw new Error('WikiPathways GMT not found in index')
+    process.stdout.write(`Fetching ${GS_WIKIPATHWAYS_URL}${wpFile} …\n`)
+    const wpText = await (await fetch(GS_WIKIPATHWAYS_URL + wpFile)).text()
+    const wpName = (cols) => {
+        const parts = cols[0].split('%')
+        const wp = parts.find(p => /^WP\d/.test(p)) || ''
+        return wp ? `${parts[0].trim()} (${wp})` : parts[0].trim()
+    }
+    writeGeneSet('wikipathways', {
+        id: 'wikipathways', label: 'Pathway (WikiPathways)',
+        source: 'WikiPathways GMT (Homo sapiens, Entrez→symbol via HGNC)',
+        version: (wpFile.match(/\d+/) || [''])[0], url: GS_WIKIPATHWAYS_URL, license: 'CC0 1.0',
+        licenseUrl: 'https://www.wikipathways.org/terms.html', note: `pathways with <= ${GS_PATHWAY_MAX_GENES} genes`,
+        builtWith: 'build-annotation-data.js buildGeneSets',
+    }, parseGmt(wpText, wpName, entrez2sym, GS_PATHWAY_MAX_GENES))
+
+    // MSigDB Hallmark (50 broad, well-separated processes; symbols).
+    process.stdout.write(`Fetching ${GS_HALLMARK_URL} …\n`)
+    const hmResp = await fetch(GS_HALLMARK_URL)
+    if (!hmResp.ok) throw new Error(`MSigDB HTTP ${hmResp.status}`)
+    const hmText = await hmResp.text()
+    const hmName = (cols) => {
+        let n = cols[0]
+        if (n.startsWith('HALLMARK_')) n = n.slice('HALLMARK_'.length)
+        return n.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase())
+    }
+    writeGeneSet('msigdb_hallmark', {
+        id: 'msigdbHallmark', label: 'Hallmark process (MSigDB)', source: 'MSigDB Hallmark (h.all, symbols)',
+        version: 'v2024.1.Hs', url: 'https://www.gsea-msigdb.org/gsea/msigdb/', license: 'CC BY 4.0',
+        licenseUrl: 'https://www.gsea-msigdb.org/gsea/msigdb/license_terms_list.jsp',
+        builtWith: 'build-annotation-data.js buildGeneSets',
+    }, parseGmt(hmText, hmName, null, null))
+}
+
+// Named build steps — run all, or only those named on the CLI.
+const STEPS = {clinvar: buildClinvar, gnomad: buildGnomad, gencc: buildGencc, genesets: buildGeneSets}
+
 async function main() {
     try {
-        await buildClinvar()
-        await buildGnomad()
-        await buildGencc()
+        const want = process.argv.slice(2).filter(a => STEPS[a])
+        const steps = want.length ? want : Object.keys(STEPS)
+        for (const s of steps) await STEPS[s]()
         process.stdout.write('Done.\n')
     } catch (err) {
         process.stderr.write(`Build failed: ${err.message}\n`)

@@ -37,7 +37,13 @@ const DEFAULT_EXPORT_CONFIG = {
         constraint: true,         // gnomAD constraint-tail convergence (offline)
         clinvar: true,            // ClinVar P/LP gene-history convergence (offline)
         domain: true,             // InterPro protein-domain convergence (via MyGene)
-        gencc: true               // GenCC Mode-of-Inheritance convergence (offline)
+        gencc: true,              // GenCC Mode-of-Inheritance convergence (offline)
+        // Bundled gene-set library dimensions (offline). Each also gets the
+        // hypergeometric enrichment p + BH-FDR q vs the cohort universe.
+        reactome: true,           // Reactome pathway convergence (CC0)
+        wikipathways: true,       // WikiPathways pathway convergence (CC0)
+        hgncFamily: true,         // HGNC gene-family convergence (attribution)
+        msigdbHallmark: true      // MSigDB Hallmark process convergence (CC BY)
     },
 
     // Per-gene impact counts on the Gene Summary tab (curation-derived, not

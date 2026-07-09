@@ -21,7 +21,8 @@ const {generateLollipopSvg} = require('./lollipop')
 const {fetchProteinDomains} = require('./pfam')
 const {fetchGeneAnnotationsBatch} = require('./gene-annotations')
 const annotationRegistry = require('./annotation-registry')
-const {computeConvergence, geneTermsFor, backgroundFractions} = require('./gene-analysis')
+const {computeConvergence, geneTermsFor, universeTermCounts, DIMENSIONS} = require('./gene-analysis')
+const geneSets = require('./genesets')
 const gnomadProvider = require('./providers/gnomad-provider')
 const clinvarProvider = require('./providers/clinvar-provider')
 const genccProvider = require('./providers/gencc-provider')
@@ -1287,7 +1288,7 @@ function buildReadmeSheet(workbook, opts) {
     row('Read Me', 'This guide: worksheet overview, column dictionary, and data sources.')
     row('Variants', 'One row per exported variant. Rows are colour-coded by curation status (Pass/Fail/Uncertain/Pending). When --bed-tracks (kraken2 species BEDs) are configured, adds contamination columns: Contamination (assessment), Nonhuman %, Contam Reads, Nonhuman Reads, Top Taxa.')
     if (hasGene && exportCfg.sheets.geneSummary) row('Gene Summary', 'One row per gene: curation counts, impact-passing counts, and gene-level annotations. See the column dictionary below.')
-    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis', 'Convergence: which shared attributes (constraint tier, ClinVar history, protein domain) your genes stack up on — counted by distinct individuals. See the dictionary below.')
+    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis', 'Convergence: which shared attributes (gnomAD constraint, ClinVar history, protein domain, GenCC inheritance; Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes) your genes stack up on — counted by distinct individuals, each with a hypergeometric enrichment p + FDR q vs your cohort background so you can tell signal from chance. See the dictionary below.')
     if (exportCfg.sheets.sampleSummary) row('Sample Summary', 'Per-sample variant counts by impact group and frequency threshold, with cohort mean/median.')
     if (hasSampleQc && exportCfg.sheets.sampleQc) row('Sample QC', 'Per-sample sequencing QC metrics with threshold-based pass/warn/fail assessment.')
     if (exportCfg.sheets.appliedFilters) row('Applied Filters', 'The filters and export settings used to produce this report (self-documenting).')
@@ -1346,10 +1347,13 @@ function buildReadmeSheet(workbook, opts) {
         row('Purpose', 'For each grouping dimension, shows which shared attributes (terms) your genes converge on — the signal when de novo hits are singletons scattered across genes.')
         row('Counts = INDIVIDUALS', 'Each cell is the number of DISTINCT INDIVIDUALS (probands) with a qualifying variant in a gene carrying that term — NOT the number of variants. One proband with several de novo hits in the group counts once, so a single hypermutated proband cannot look like convergence.', 'impact × curation × sample')
         row('# genes / Genes', 'Distinct genes contributing (locus heterogeneity), and their symbols. So single-proband exports still surface gene-level convergence.')
-        row('bg', 'Background frequency — fraction of all scored genes that carry this term (constraint / ClinVar / GenCC, from their bundles; "—" for protein domain, which has no offline genome-wide map). A low bg with a high count = surprising convergence; a high bg (e.g. a generic term) = expected. A cue, not a p-value.', 'gnomAD / ClinVar / GenCC bundle')
+        row('bg', 'Background rate — fraction of the cohort\'s eligible genes (every gene with a callable variant in the FULL loaded set) that carry this term. This is the chance rate to beat. "—" for protein domain (no cohort-wide map).', 'cohort universe')
+        row('Enrich p', 'Signal vs chance: one-tailed hypergeometric (Fisher) probability that the EXPORTED genes over-represent this term versus the whole loaded cohort — the de-novo-appropriate background, not the genome. Small = more than chance. This is a gene-level over-representation test, NOT a de-novo mutation-rate model.', 'hypergeometric ORA')
+        row('FDR q', 'Benjamini-Hochberg false-discovery rate for Enrich p across every term in this tab; q<0.05 (shown green) survives multiple-testing. Expect little/nothing to clear FDR at small N — that is honest, not a bug.', 'BH across all terms')
         row('Columns (cells)', 'Curation status {pass, all} × cumulative impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL}. ALL applies no impact restriction (incl. MODIFIER/blank). A term is shown only if ≥2 individuals OR ≥2 genes share it. Bold rows recur across ≥2 individuals.')
-        row('Dimensions', 'Constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9), ClinVar P/LP history, and GenCC Mode-of-Inheritance are offline; protein domain (InterPro) comes from MyGene (blank if the network is unavailable).', 'gnomAD / ClinVar / GenCC / MyGene')
-        row('Method', 'Transparent shared-attribute counting — NOT enrichment p-values, which are unreliable at small gene counts. Hypothesis-generating, not diagnostic.')
+        row('Dimensions', 'Offline: gnomAD constraint tail (LOEUF<0.6 / pLI≥0.9), ClinVar P/LP history, GenCC Mode-of-Inheritance, Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes. Online: protein domain (InterPro via MyGene; blank offline).', '8 dimensions')
+        row('Reading pathways', 'Pathway dimensions overlap heavily (a gene sits in many pathways), so many near-identical rows can share the same genes — only the top 25 per dimension are shown and the remainder is noted. Judge convergence by the gene list + FDR q, not by the number of rows.')
+        row('Method', 'Distinct-individual counting is the primary signal (faithful at any N); the hypergeometric p/q is a gene-level backstop for "enrichment or chance". Both are hypothesis-generating, not diagnostic. A de-novo mutation-rate model (e.g. denovolyzeR) is the principled next step once a multi-proband cohort accrues.')
     }
 
     // --- Data sources & licensing ---
@@ -1357,6 +1361,17 @@ function buildReadmeSheet(workbook, opts) {
     row('gnomAD', 'Gene constraint (pLI, LOEUF, missense Z), bundled offline from gnomAD v4 (GRCh38); live API fallback for GRCh37/hg19.', 'gnomad.broadinstitute.org', 'CC0 (attrib. requested)')
     row('ClinVar', 'Per-gene counts of Pathogenic and Likely-pathogenic variants (separately), plus VUS/conflicts, from the GRCh38 variant summary.', 'ncbi.nlm.nih.gov/clinvar', 'public domain')
     row('GenCC', 'Harmonised gene-disease validity + Mode of Inheritance (aggregates ClinGen, DDG2P, PanelApp, Orphanet). Bundled offline; highest validity + established-evidence MOIs per gene.', 'thegencc.org', 'CC0')
+    // Bundled gene-set libraries (Gene Analysis convergence dimensions only).
+    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) {
+        try {
+            for (const lib of geneSets.available()) {
+                const m = lib.meta || {}
+                const ver = m.version ? ` (${m.version})` : ''
+                row(lib.label, `${m.source || lib.id}${ver}. Gene Analysis convergence dimension (not a per-gene column). ${m.note || ''}`.trim(),
+                    m.url || '', m.license || '')
+            }
+        } catch (_) { /* libraries optional */ }
+    }
     row('MyGene.info', 'Gene name, type, OMIM MIM number, KEGG pathways, function summary.', 'mygene.info', 'per source')
     row('Gene-list membership', 'Yes/No membership derived from user-supplied symbol lists. Used for licence-restricted sources (e.g. COSMIC): only membership is embedded, not the licensed content.', 'user-supplied', 'membership only')
 
@@ -1380,7 +1395,13 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
     const {headerFill, headerFont, borderThin} = styles
     const ws = workbook.addWorksheet('Gene Analysis')
     const cells = conv.cells
-    const nCols = 1 + cells.length + 3   // Group + cell columns + (#genes) + (bg) + (Genes)
+    const nCols = 1 + cells.length + 5   // Group + cells + #genes + bg + Enrich p + FDR q + Genes
+    // p/q formatter: em-dash for N/A, scientific below 0.001, else 3 dp.
+    const fmtP = (p) => p == null ? '—' : (p < 0.001 ? p.toExponential(1) : p.toFixed(3))
+    // Pathway dimensions overlap heavily (mTOR genes hit dozens of pathways),
+    // so cap rows per dimension — the strongest (already sorted first) are kept
+    // and the remainder is reported, never silently dropped.
+    const MAX_GROUPS_PER_DIM = 25
 
     const mergeAcross = (rowIdx) => ws.mergeCells(rowIdx, 1, rowIdx, nCols)
     let r = 0
@@ -1394,7 +1415,9 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
     }
 
     addBanner('Gene Analysis — do the scattered single-hit genes converge?', {bold: true, size: 14, color: {argb: 'FF2C3E50'}})
-    addBanner('Counts are DISTINCT INDIVIDUALS (probands), not variants: one proband with several de novo hits in a group counts once. Shared-attribute counting — terms shared by ≥2 individuals or genes. Hypothesis-generating, not diagnostic.',
+    addBanner('Counts are DISTINCT INDIVIDUALS (probands), not variants: one proband with several de novo hits in a group counts once. Terms shared by ≥2 individuals or genes are kept.',
+        {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    addBanner('Signal vs chance:  bg = fraction of the cohort\'s eligible genes carrying the term (the chance rate).  "Enrich p" = one-tailed hypergeometric test that the EXPORTED genes over-represent the term versus the whole loaded cohort (the de-novo-appropriate background, not the genome).  "FDR q" = Benjamini-Hochberg across every term in this tab; q < 0.05 (✓) is more than chance.  This is a gene-level over-representation test — NOT a de-novo mutation-rate model — so treat it as hypothesis-generating, and expect nothing to clear FDR at small N.',
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
 
     // Per-cell gene-set / individual sizes
@@ -1417,10 +1440,25 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
     }
     addBanner(headBits.length ? `Top convergence (pass · ALL impacts) — ${headBits.join(';  ')}` : 'No attribute is shared by ≥2 passing individuals or genes yet.',
         {bold: true, size: 11, color: {argb: 'FF2C3E50'}})
+
+    // Enrichment headline: the term with the smallest FDR q across the whole tab.
+    let bestSig = null
+    for (const sec of conv.sections) for (const g of sec.groups) {
+        if (g.enrichQ == null) continue
+        if (!bestSig || g.enrichQ < bestSig.g.enrichQ) bestSig = {sec, g}
+    }
+    if (bestSig && bestSig.g.enrichQ < 0.1) {
+        const sig = bestSig.g.enrichQ < 0.05
+        addBanner(`Strongest enrichment vs cohort background: "${bestSig.g.term}" (${bestSig.sec.label}) — ${bestSig.g.refGenes} genes, p=${fmtP(bestSig.g.enrichP)}, FDR q=${fmtP(bestSig.g.enrichQ)}${sig ? '  ✓ more than chance' : '  (suggestive)'}`,
+            {bold: true, size: 11, color: {argb: sig ? 'FF1E8449' : 'FF7D6608'}})
+    } else {
+        addBanner('No term reaches FDR q < 0.1 — nothing exceeds chance given the cohort background. Expected at small N; the counts above remain descriptive.',
+            {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    }
     r++; ws.addRow([])   // spacer
 
-    // Column header row ('bg' = fraction of all scored genes carrying the term)
-    const headerLabels = ['Group', ...cells.map(c => c.label), '# genes', 'bg', 'Genes']
+    // Column header row. bg = chance rate; Enrich p / FDR q = signal vs chance.
+    const headerLabels = ['Group', ...cells.map(c => c.label), '# genes', 'bg', 'Enrich p', 'FDR q', 'Genes']
     r++
     const hdr = ws.addRow(headerLabels)
     hdr.eachCell(cell => {
@@ -1433,20 +1471,25 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
     for (let i = 0; i < cells.length; i++) ws.getColumn(2 + i).width = 12
     ws.getColumn(2 + cells.length).width = 9    // # genes
     ws.getColumn(3 + cells.length).width = 8    // bg
-    ws.getColumn(4 + cells.length).width = 50   // Genes
+    ws.getColumn(4 + cells.length).width = 10   // Enrich p
+    ws.getColumn(5 + cells.length).width = 10   // FDR q
+    ws.getColumn(6 + cells.length).width = 50   // Genes
 
     let anyGroups = false
     for (const sec of conv.sections) {
         if (!sec.groups.length) continue
         anyGroups = true
         r++
-        const secRow = ws.addRow([sec.label])
+        const hiddenCount = Math.max(0, sec.groups.length - MAX_GROUPS_PER_DIM)
+        const shown = sec.groups.slice(0, MAX_GROUPS_PER_DIM)
+        const secLabel = hiddenCount ? `${sec.label}   (top ${shown.length} of ${sec.groups.length} terms)` : sec.label
+        const secRow = ws.addRow([secLabel])
         mergeAcross(r)
         secRow.getCell(1).font = {bold: true, color: {argb: 'FF2C3E50'}}
         for (let c = 1; c <= nCols; c++) secRow.getCell(c).fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFD6EAF8'}}
         secRow.getCell(1).border = borderThin
 
-        sec.groups.forEach((g, idx) => {
+        shown.forEach((g, idx) => {
             const genesStr = g.genes.length > 16 ? g.genes.slice(0, 16).join(', ') + ` +${g.genes.length - 16}` : g.genes.join(', ')
             const rowVals = [g.term]
             for (const c of cells) {
@@ -1455,6 +1498,8 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
             }
             rowVals.push(g.refGenes)
             rowVals.push(g.bgFreq != null ? `${(g.bgFreq * 100).toFixed(g.bgFreq < 0.01 ? 1 : 0)}%` : '—')
+            rowVals.push(fmtP(g.enrichP))
+            rowVals.push(fmtP(g.enrichQ))
             rowVals.push(genesStr)
             r++
             const row = ws.addRow(rowVals)
@@ -1465,9 +1510,20 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
             for (let i = 0; i < cells.length; i++) row.getCell(2 + i).alignment = {horizontal: 'center'}
             row.getCell(2 + cells.length).alignment = {horizontal: 'center'}
             row.getCell(3 + cells.length).alignment = {horizontal: 'center'}   // bg
+            row.getCell(4 + cells.length).alignment = {horizontal: 'center'}   // Enrich p
+            const qCell = row.getCell(5 + cells.length)                        // FDR q
+            qCell.alignment = {horizontal: 'center'}
+            if (g.enrichQ != null && g.enrichQ < 0.05) qCell.font = {bold: true, color: {argb: 'FF1E8449'}}
             // Emphasise rows with independent recurrence (≥2 individuals anywhere)
             if (g.refIndividuals >= 2) row.getCell(1).font = {bold: true}
         })
+
+        if (hiddenCount) {
+            r++
+            const noteRow = ws.addRow([`… ${hiddenCount} more term${hiddenCount === 1 ? '' : 's'} not shown (overlapping pathways with the same genes; ranked below the top ${MAX_GROUPS_PER_DIM}).`])
+            mergeAcross(r)
+            noteRow.getCell(1).font = {italic: true, size: 9, color: {argb: 'FF6B7D8D'}}
+        }
     }
 
     if (!anyGroups) {
@@ -1843,26 +1899,51 @@ app.post('/api/export/xlsx', async (req, res) => {
         if (gaOn) {
             try {
                 const gaImpactCol = headerColumns.includes('impact') ? 'impact' : null
-                const gaGenes = [...new Set(filtered.map(v => v[geneCol]).filter(Boolean))]
-                const geneTerms = new Map()
-                for (const gene of gaGenes) {
-                    const terms = geneTermsFor(gene, providerByGene.get(gene), geneAnnotations.get(gene))
-                    if (!gaCfg.constraint) terms.constraint = []
-                    if (!gaCfg.clinvar) terms.clinvar = []
-                    if (!gaCfg.domain) terms.domain = []
-                    if (!gaCfg.gencc) terms.gencc = []
-                    geneTerms.set(String(gene).toUpperCase(), terms)
+
+                // Bundled gene-set library dimensions (Reactome/WikiPathways
+                // pathways, HGNC gene families, MSigDB Hallmark) — offline;
+                // included when their bundle is present and not disabled by config.
+                const gsLibs = {}, gsDims = []
+                for (const lib of geneSets.available()) {
+                    if (gaCfg[lib.id] === false) continue
+                    gsLibs[lib.id] = geneSets.libMap(lib.id)
+                    gsDims.push({id: lib.id, label: lib.label})
                 }
-                // Background frequency of each term across the full bundled
-                // gene universe (offline dimensions only) — the "is this
-                // surprising?" cue. Gracefully null if bundles are unavailable.
-                let bgFreq = null
+                // Active dimensions = enabled base dims + enabled gene-set dims.
+                const dimensions = [...DIMENSIONS.filter(d => gaCfg[d.id] !== false), ...gsDims]
+
+                // Per-gene term lists for the EXPORTED genes.
+                const geneTerms = new Map()
+                for (const gene of [...new Set(filtered.map(v => v[geneCol]).filter(Boolean))]) {
+                    geneTerms.set(String(gene).toUpperCase(),
+                        geneTermsFor(gene, providerByGene.get(gene), geneAnnotations.get(gene), gsLibs))
+                }
+
+                // Cohort eligible-gene universe = every gene with a callable
+                // variant in the FULL loaded set — the de-novo-appropriate
+                // enrichment background (NOT the genome). Term counts come from
+                // the offline bundles + gene-set libraries (no cohort-wide MyGene
+                // domains), so the protein-domain dimension gets no bg/enrichment.
+                // Degrades gracefully (empty universe → counts only) on failure.
+                let utc = {counts: {}, size: 0}, selectedSize = 0
                 try {
-                    bgFreq = backgroundFractions({gnomad: gnomadProvider.getBundle(), clinvar: clinvarProvider.getGenes(), gencc: genccProvider.getGenes()})
-                } catch (bgErr) { /* leave bgFreq null */ }
+                    const gnB = gnomadProvider.getBundle(), cvB = clinvarProvider.getGenes(), gcB = genccProvider.getGenes()
+                    const universeGeneTerms = new Map()
+                    for (const v of variants) {
+                        const gene = v[geneCol]; if (!gene) continue
+                        const UP = String(gene).toUpperCase()
+                        if (universeGeneTerms.has(UP)) continue
+                        const provObj = {gnomad: gnB && gnB.get(UP), clinvar: cvB && cvB.get(UP), gencc: gcB && gcB.get(UP)}
+                        universeGeneTerms.set(UP, geneTermsFor(gene, provObj, null, gsLibs))
+                    }
+                    utc = universeTermCounts(universeGeneTerms)
+                    selectedSize = geneTerms.size
+                } catch (uErr) { log.warn('Gene Analysis enrichment background skipped:', uErr.message) }
+
                 const conv = computeConvergence(filtered, {
                     geneCol, impactCol: gaImpactCol, sampleCol: xlsSampleCol,
-                    geneTerms, minCount: gaCfg.minCount || 2, bgFreq
+                    geneTerms, minCount: gaCfg.minCount || 2,
+                    dimensions, universeTermCounts: utc, selectedSize,
                 })
                 buildGeneAnalysisSheet(workbook, conv, {headerFill, headerFont, borderThin})
             } catch (sectionErr) {
