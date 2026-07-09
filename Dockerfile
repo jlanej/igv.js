@@ -38,6 +38,11 @@ RUN node -e "require('./server.js')" && echo "server module graph OK"
 
 EXPOSE 3000
 
+# Raise the V8 heap limit above Node's ~4 GB default (large exports + species
+# BED parsing can exceed it; hosts here have far more RAM). Overridable at
+# runtime, e.g. Singularity --env NODE_OPTIONS="--max-old-space-size=16384".
+ENV NODE_OPTIONS="--max-old-space-size=8192"
+
 # Default command — users override --variants and --data-dir at runtime
 # Bind 0.0.0.0 inside container so Singularity port mapping works
 ENTRYPOINT ["node", "server.js", "--host", "0.0.0.0"]

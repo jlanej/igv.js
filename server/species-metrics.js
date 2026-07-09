@@ -14,6 +14,13 @@ const zlib = require('zlib')
 const path = require('path')
 const log = require('./logger')
 
+// Memory guards. Parsing a BED file holds every read as an object, so a huge
+// file (or many cached files) can exhaust the Node heap. Skip files above a
+// size limit, and bound the parse cache to a few files (LRU). Both are
+// overridable by env for large-RAM deployments.
+const MAX_BED_BYTES = (parseInt(process.env.SPECIES_MAX_BED_MB, 10) || 300) * 1024 * 1024
+const MAX_CACHED_FILES = parseInt(process.env.SPECIES_MAX_CACHED_FILES, 10) || 8
+
 // -------------------------------------------------------------------------
 // BED column indices (0-based) matching kmer_denovo_filter output schema
 // -------------------------------------------------------------------------
@@ -56,6 +63,16 @@ const bedCache = new Map()
 function readBedFile(filePath) {
     if (!filePath || !fs.existsSync(filePath)) return []
 
+    // Skip pathologically large files so one BED can't exhaust the heap.
+    try {
+        const size = fs.statSync(filePath).size
+        if (size > MAX_BED_BYTES) {
+            log.warn(`Skipping large BED file for species metrics (${(size / 1048576).toFixed(0)} MB > ` +
+                `${(MAX_BED_BYTES / 1048576).toFixed(0)} MB; raise SPECIES_MAX_BED_MB to allow): ${filePath}`)
+            return []
+        }
+    } catch (_) { /* stat failed — fall through and let the read handle it */ }
+
     let content
     if (filePath.endsWith('.gz')) {
         const compressed = fs.readFileSync(filePath)
@@ -81,7 +98,13 @@ function readBedFile(filePath) {
  * @returns {Map<string, Array<Object>>} variant key → parsed row objects
  */
 function parseBedByVariant(filePath) {
-    if (bedCache.has(filePath)) return bedCache.get(filePath)
+    if (bedCache.has(filePath)) {
+        // LRU touch: move to most-recently-used position.
+        const cached = bedCache.get(filePath)
+        bedCache.delete(filePath)
+        bedCache.set(filePath, cached)
+        return cached
+    }
 
     const variantMap = new Map()
     const rows = readBedFile(filePath)
@@ -116,6 +139,11 @@ function parseBedByVariant(filePath) {
     }
 
     bedCache.set(filePath, variantMap)
+    // Evict least-recently-used entries so parsing many per-variant BED files
+    // (e.g. during an export) can't grow the cache without bound.
+    while (bedCache.size > MAX_CACHED_FILES) {
+        bedCache.delete(bedCache.keys().next().value)
+    }
     return variantMap
 }
 
