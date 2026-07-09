@@ -21,3 +21,4 @@ igv.js.iml
 /server/test/.tmp_giab
 /server/test/data/giab/*.curation.json
 /server/test/data/giab/*.filters.json
+/server/data/gene-lists/__test_*.txt

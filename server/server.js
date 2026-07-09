@@ -20,6 +20,7 @@ const log = require('./logger')
 const {generateLollipopSvg} = require('./lollipop')
 const {fetchProteinDomains} = require('./pfam')
 const {fetchGeneAnnotationsBatch} = require('./gene-annotations')
+const annotationRegistry = require('./annotation-registry')
 const {DEFAULT_EXPORT_CONFIG, mergeWithDefaults, filterColumns} = require('./export-config')
 const speciesMetrics = require('./species-metrics')
 
@@ -1038,18 +1039,29 @@ app.get('/api/summary', (req, res) => {
     }
 
     const sampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
+    const impactCol = headerColumns.includes('impact') ? 'impact' : null
 
     const geneMap = {}
     for (const v of filtered) {
         const gene = v[geneCol]
         if (!gene) continue
         if (!geneMap[gene]) {
-            geneMap[gene] = {gene, total: 0, pass: 0, fail: 0, uncertain: 0, pending: 0, _samples: new Set(), variants: []}
+            geneMap[gene] = {gene, total: 0, pass: 0, fail: 0, uncertain: 0, pending: 0,
+                passHigh: 0, passMod: 0, passLow: 0, high: 0, mod: 0, low: 0,
+                _samples: new Set(), variants: []}
         }
-        geneMap[gene].total++
-        geneMap[gene][v.curation_status || 'pending']++
-        if (sampleCol && v[sampleCol]) geneMap[gene]._samples.add(v[sampleCol])
-        geneMap[gene].variants.push({
+        const gm = geneMap[gene]
+        gm.total++
+        gm[v.curation_status || 'pending']++
+        if (impactCol) {
+            const imp = String(v[impactCol] || '').toUpperCase()
+            const isPass = v.curation_status === 'pass'
+            if (imp === 'HIGH') { gm.high++; if (isPass) gm.passHigh++ }
+            else if (imp === 'MODERATE') { gm.mod++; if (isPass) gm.passMod++ }
+            else if (imp === 'LOW') { gm.low++; if (isPass) gm.passLow++ }
+        }
+        if (sampleCol && v[sampleCol]) gm._samples.add(v[sampleCol])
+        gm.variants.push({
             id: v.id, chrom: v.chrom, pos: v.pos, ref: v.ref, alt: v.alt,
             impact: v.impact || '', curation_status: v.curation_status
         })
@@ -1204,6 +1216,121 @@ app.get('/api/lollipop/:gene', async (req, res) => {
     res.send(svg)
 })
 
+/**
+ * Build the "Read Me" worksheet: a guide to every tab plus a per-column data
+ * dictionary (meaning, source, licence) for the Gene Summary annotations.
+ * Placed as the first sheet so reviewers can orient before reading the data.
+ * Wrapped by the caller in try/catch — must never break the export.
+ */
+function buildReadmeSheet(workbook, opts) {
+    const {exportCfg, headerFill, headerFont, borderThin, genome, hasGene, hasImpact, hasSampleQc,
+        hasScreenshots, hasLollipop} = opts
+    const ga = exportCfg.geneAnnotations || {}
+    const ws = workbook.addWorksheet('Read Me')
+    ws.columns = [
+        {header: 'Item', key: 'item', width: 26},
+        {header: 'Description', key: 'desc', width: 66},
+        {header: 'Source', key: 'src', width: 20},
+        {header: 'Licence', key: 'lic', width: 18}
+    ]
+    const hdr = ws.getRow(1)
+    hdr.eachCell(cell => {
+        cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin
+        cell.alignment = {vertical: 'middle', horizontal: 'left'}
+    })
+    hdr.height = 22
+
+    let idx = 0
+    const row = (item, desc, src, lic) => {
+        const r = ws.addRow({item, desc, src: src || '', lic: lic || ''})
+        r.eachCell(cell => {
+            cell.border = borderThin
+            cell.alignment = {vertical: 'top', wrapText: true}
+            if (idx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
+        })
+        idx++
+        return r
+    }
+    const section = (title) => {
+        const r = ws.addRow({item: title, desc: '', src: '', lic: ''})
+        r.getCell(1).font = {bold: true, color: {argb: 'FF2C3E50'}}
+        for (let c = 1; c <= 4; c++) r.getCell(c).fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFD6EAF8'}}
+        r.eachCell(cell => { cell.border = borderThin })
+        idx++
+    }
+
+    row('IGV Variant Review — report guide', `Genome build: ${genome}. This workbook was generated from the review session; annotation columns are best-effort (see the Annotation Status tab for any fetch failures).`)
+
+    // --- Worksheet overview ---
+    section('Worksheets in this report')
+    row('Read Me', 'This guide: worksheet overview, column dictionary, and data sources.')
+    row('Variants', 'One row per exported variant. Rows are colour-coded by curation status (Pass/Fail/Uncertain/Pending).')
+    if (hasGene && exportCfg.sheets.geneSummary) row('Gene Summary', 'One row per gene: curation counts, impact-passing counts, and gene-level annotations. See the column dictionary below.')
+    if (exportCfg.sheets.sampleSummary) row('Sample Summary', 'Per-sample variant counts by impact group and frequency threshold, with cohort mean/median.')
+    if (hasSampleQc && exportCfg.sheets.sampleQc) row('Sample QC', 'Per-sample sequencing QC metrics with threshold-based pass/warn/fail assessment.')
+    if (exportCfg.sheets.appliedFilters) row('Applied Filters', 'The filters and export settings used to produce this report (self-documenting).')
+    if (exportCfg.sheets.annotationStatus) row('Annotation Status', 'Which external data sources were fetched, any failures, and data-source licences.')
+    if (hasLollipop) row('LP <gene>', 'Lollipop plot(s): variant positions along the protein with domain overlays.')
+    if (hasScreenshots) row('1, 2, 3, …', 'IGV screenshots captured for individual variants, linked from the Variants sheet.')
+
+    // --- Gene Summary column dictionary ---
+    if (hasGene && exportCfg.sheets.geneSummary) {
+        section('Gene Summary — column dictionary')
+        row('Gene', 'HGNC gene symbol.')
+        row('Total', 'Total variants in this gene passing the applied filters.')
+        row('Samples', 'Distinct samples/trios harbouring a variant in this gene.')
+        row('Pass / Fail / Uncertain / Pending', 'Per-gene counts of variants by reviewer curation status.', 'Reviewer curation')
+        if (hasImpact && exportCfg.impactCounts && exportCfg.impactCounts.passByImpact) {
+            row('Pass HIGH / Pass MODERATE / Pass LOW', 'Count of HIGH/MODERATE/LOW-impact variants in this gene that PASS review. MODIFIER and blank impacts are excluded, so these need not sum to Pass.', 'impact × curation')
+        }
+        if (hasImpact && exportCfg.impactCounts && exportCfg.impactCounts.totalByImpact) {
+            row('HIGH / MODERATE / LOW', 'Count of HIGH/MODERATE/LOW-impact variants in this gene regardless of review status.', 'impact column')
+        }
+        if (ga.enabled) {
+            if (ga.geneName) row('Gene Name', 'Full gene name.', 'MyGene.info', 'see below')
+            if (ga.geneType) row('Gene Type', 'Gene biotype (e.g. protein-coding).', 'MyGene.info', 'see below')
+            if (ga.omim) row('OMIM', 'OMIM MIM number (identifier only — link to omim.org/entry/<MIM>). OMIM disease titles are not embedded (licence).', 'OMIM via MyGene', 'ID/link only')
+            if (ga.pathways) row('Pathways', 'KEGG pathway memberships.', 'MyGene.info', 'see below')
+            if (ga.summary) row('Summary', 'NCBI gene function summary.', 'MyGene.info', 'see below')
+
+            // Provider columns, described by key so the dictionary tracks what is emitted.
+            const keyDesc = {
+                gnomadLoeuf: ['gnomAD LoF observed/expected upper CI (LOEUF). Lower = more constrained; <0.35 flagged constrained.', 'gnomAD', 'CC0'],
+                gnomadPli: ['Probability of loss-of-function intolerance (pLI). ≥0.9 = LoF-intolerant.', 'gnomAD', 'CC0'],
+                gnomadConstrained: ['Derived flag: Yes if pLI≥0.9 or LOEUF<0.35.', 'gnomAD (derived)', 'CC0'],
+                gnomadMisZ: ['Missense constraint Z-score. ≥3.09 = missense-constrained.', 'gnomAD', 'CC0'],
+                clinvarPlp: ['Count of Pathogenic/Likely-pathogenic alleles reported in ClinVar for this gene.', 'ClinVar', 'public domain'],
+                clinvarHasPlp: ['Yes if the gene has ≥1 Pathogenic/Likely-pathogenic allele in ClinVar.', 'ClinVar', 'public domain'],
+                clinvarVus: ['Count of uncertain-significance alleles in ClinVar.', 'ClinVar', 'public domain'],
+                clinvarConflicts: ['Count of alleles with conflicting interpretations in ClinVar.', 'ClinVar', 'public domain']
+            }
+            for (const col of annotationRegistry.columns(exportCfg)) {
+                if (keyDesc[col.key]) {
+                    row(col.header, keyDesc[col.key][0], keyDesc[col.key][1], keyDesc[col.key][2])
+                } else if (String(col.key).startsWith('list_')) {
+                    row(col.header, 'Membership flag (Yes/No): is this gene present in the named user-supplied gene list?', 'user list', 'membership only')
+                }
+            }
+        }
+    }
+
+    // --- Data sources & licensing ---
+    section('Data sources & licensing')
+    row('gnomAD', 'Gene constraint (pLI, LOEUF, missense Z). Genome build selects v4 (GRCh38) or v2.1.1 (GRCh37).', 'gnomad.broadinstitute.org', 'CC0 (attrib. requested)')
+    row('ClinVar', 'Aggregate per-gene Pathogenic/Likely-pathogenic allele counts.', 'ncbi.nlm.nih.gov/clinvar', 'public domain')
+    row('MyGene.info', 'Gene name, type, OMIM MIM number, KEGG pathways, function summary.', 'mygene.info', 'per source')
+    row('Gene-list membership', 'Yes/No membership derived from user-supplied symbol lists. Used for licence-restricted sources (e.g. COSMIC): only membership is embedded, not the licensed content.', 'user-supplied', 'membership only')
+
+    // --- Notes ---
+    section('Notes')
+    row('Impact counts', 'Only HIGH, MODERATE and LOW impacts are counted; MODIFIER and blank impacts are excluded.')
+    row('Best-effort annotations', 'Live annotations (gnomAD, MyGene) may be blank if a fetch failed or timed out — the Annotation Status tab records failures. Bundled data (ClinVar, gene lists) are offline.')
+    row('OMIM', 'Only the numeric MIM identifier is included; OMIM disease-title text is licence-restricted and is not embedded.')
+
+    ws.autoFilter = {from: 'A1', to: {row: 1, column: 4}}
+    ws.views = [{state: 'frozen', ySplit: 1}]
+}
+
 // -------------------------------------------------------------------------
 // XLSX Export – publication-quality workbook with variant data and optional
 // IGV screenshots on per-variant tabs, linked from the main sheet.
@@ -1254,6 +1381,24 @@ app.post('/api/export/xlsx', async (req, res) => {
             fail: {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFFADBD8'}},
             uncertain: {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFFDEBD0'}},
             pending: null
+        }
+
+        // --- "Read Me" data-dictionary worksheet (first tab) ----------------
+        if (exportCfg.sheets.dataDictionary !== false) {
+            try {
+                buildReadmeSheet(workbook, {
+                    exportCfg, headerFill, headerFont, borderThin,
+                    genome: exportCfg.genomeBuild || GENOME,
+                    hasGene: headerColumns.includes('gene'),
+                    hasImpact: headerColumns.includes('impact'),
+                    hasSampleQc: Array.isArray(sampleQcData) && sampleQcData.length > 0,
+                    hasScreenshots: screenshots && typeof screenshots === 'object' && Object.keys(screenshots).length > 0,
+                    hasLollipop: lollipopPlots && typeof lollipopPlots === 'object' && Object.keys(lollipopPlots).length > 0
+                })
+            } catch (sectionErr) {
+                log.warn('Read Me worksheet failed:', sectionErr.message)
+                exportErrors.push({section: 'Read Me', error: sectionErr.message})
+            }
         }
 
         // --- Main "Variants" worksheet --------------------------------------
@@ -1379,14 +1524,27 @@ app.post('/api/export/xlsx', async (req, res) => {
         const xlsSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
         try {
         if (geneCol && exportCfg.sheets.geneSummary) {
+            // Local impact-column lookup (the handler-level `impactCol` is
+            // declared later, in the Sample Summary section).
+            const gsImpactCol = headerColumns.includes('impact') ? 'impact' : null
             const geneMap = {}
             for (const v of filtered) {
                 const gene = v[geneCol]
                 if (!gene) continue
-                if (!geneMap[gene]) geneMap[gene] = {gene, total: 0, samples: 0, pass: 0, fail: 0, uncertain: 0, pending: 0, _samples: new Set()}
-                geneMap[gene].total++
-                geneMap[gene][v.curation_status || 'pending']++
-                if (xlsSampleCol && v[xlsSampleCol]) geneMap[gene]._samples.add(v[xlsSampleCol])
+                if (!geneMap[gene]) geneMap[gene] = {gene, total: 0, samples: 0, pass: 0, fail: 0, uncertain: 0, pending: 0,
+                    passHigh: 0, passMod: 0, passLow: 0, high: 0, mod: 0, low: 0, _samples: new Set()}
+                const gm = geneMap[gene]
+                gm.total++
+                gm[v.curation_status || 'pending']++
+                if (gsImpactCol) {
+                    const imp = String(v[gsImpactCol] || '').toUpperCase()
+                    const isPass = v.curation_status === 'pass'
+                    // Only HIGH/MODERATE/LOW are tallied; MODIFIER/blank are excluded.
+                    if (imp === 'HIGH') { gm.high++; if (isPass) gm.passHigh++ }
+                    else if (imp === 'MODERATE') { gm.mod++; if (isPass) gm.passMod++ }
+                    else if (imp === 'LOW') { gm.low++; if (isPass) gm.passLow++ }
+                }
+                if (xlsSampleCol && v[xlsSampleCol]) gm._samples.add(v[xlsSampleCol])
             }
             const geneSummary = Object.values(geneMap).map(g => {
                 g.samples = g._samples.size
@@ -1396,12 +1554,27 @@ app.post('/api/export/xlsx', async (req, res) => {
 
             // Fetch gene annotations if enabled
             let geneAnnotations = new Map()
+            let providerByGene = new Map()   // gene -> {[providerId]: obj|null}
             if (exportCfg.geneAnnotations.enabled && geneSummary.length > 0) {
-                try {
-                    geneAnnotations = await fetchGeneAnnotationsBatch(geneSummary.map(g => g.gene))
-                } catch (err) {
-                    annotationErrors.push({source: 'MyGene.info', error: err.message})
+                const geneNames = geneSummary.map(g => g.gene)
+                // Only hit MyGene.info if at least one MyGene-sourced column is requested.
+                const ga = exportCfg.geneAnnotations
+                const wantMyGene = ga.geneName || ga.summary || ga.omim || ga.pathways || ga.geneType
+                // Run MyGene and the registry providers concurrently to minimise
+                // export-time latency (each fails independently and gracefully).
+                const tasks = []
+                if (wantMyGene) {
+                    tasks.push(fetchGeneAnnotationsBatch(geneNames)
+                        .then(m => { geneAnnotations = m })
+                        .catch(err => annotationErrors.push({source: 'MyGene.info', error: err.message})))
                 }
+                tasks.push(annotationRegistry.annotate(geneNames, exportCfg)
+                    .then(prov => {
+                        providerByGene = prov.byGene
+                        for (const e of prov.errors) annotationErrors.push({source: e.source, gene: e.gene, error: e.error})
+                    })
+                    .catch(err => annotationErrors.push({source: 'annotations', error: err.message})))
+                await Promise.all(tasks)
             }
 
             if (geneSummary.length > 0) {
@@ -1416,6 +1589,18 @@ app.post('/api/export/xlsx', async (req, res) => {
                     {header: 'Pending', key: 'pending', width: 10}
                 ]
 
+                // Impact counts passing review (HIGH/MODERATE/LOW), then optional totals
+                if (exportCfg.impactCounts && exportCfg.impactCounts.passByImpact) {
+                    gsCols.push({header: 'Pass HIGH', key: 'passHigh', width: 10})
+                    gsCols.push({header: 'Pass MODERATE', key: 'passMod', width: 14})
+                    gsCols.push({header: 'Pass LOW', key: 'passLow', width: 10})
+                }
+                if (exportCfg.impactCounts && exportCfg.impactCounts.totalByImpact) {
+                    gsCols.push({header: 'HIGH', key: 'high', width: 8})
+                    gsCols.push({header: 'MODERATE', key: 'mod', width: 10})
+                    gsCols.push({header: 'LOW', key: 'low', width: 8})
+                }
+
                 // Add annotation columns based on config
                 if (exportCfg.geneAnnotations.enabled) {
                     if (exportCfg.geneAnnotations.geneName) gsCols.push({header: 'Gene Name', key: 'geneName', width: 30})
@@ -1423,6 +1608,8 @@ app.post('/api/export/xlsx', async (req, res) => {
                     if (exportCfg.geneAnnotations.omim) gsCols.push({header: 'OMIM', key: 'omim', width: 12})
                     if (exportCfg.geneAnnotations.pathways) gsCols.push({header: 'Pathways', key: 'pathways', width: 30})
                     if (exportCfg.geneAnnotations.summary) gsCols.push({header: 'Summary', key: 'summary', width: 50})
+                    // Registry provider columns (gnomAD, ClinVar, gene-list membership)
+                    gsCols.push(...annotationRegistry.columns(exportCfg))
                 }
 
                 gws.columns = gsCols
@@ -1443,6 +1630,10 @@ app.post('/api/export/xlsx', async (req, res) => {
                         if (exportCfg.geneAnnotations.summary) g.summary = ann.summary || ''
                     } else if (ann && ann.error) {
                         annotationErrors.push({source: 'MyGene.info', gene: g.gene, error: ann.error})
+                    }
+                    // Enrich with registry-provider cells (gnomAD/ClinVar/gene-lists)
+                    if (exportCfg.geneAnnotations.enabled) {
+                        Object.assign(g, annotationRegistry.applyCells(providerByGene.get(g.gene), exportCfg))
                     }
                     const row = gws.addRow(g)
                     row.eachCell(cell => {
@@ -1754,6 +1945,16 @@ app.post('/api/export/xlsx', async (req, res) => {
             // Metadata row: genome build
             const buildRow = asws.addRow({source: 'Genome Build', gene: '', status: 'Info', details: exportCfg.genomeBuild || GENOME})
             buildRow.eachCell(cell => { cell.border = borderThin })
+
+            // Data-source / licence attribution rows for enabled annotations
+            if (exportCfg.geneAnnotations.enabled) {
+                const attributions = [{source: 'MyGene.info', details: 'Gene name/type/OMIM/pathways/summary — https://mygene.info'}]
+                try { attributions.push(...annotationRegistry.attributions(exportCfg)) } catch (_) { /* ignore */ }
+                for (const a of attributions) {
+                    const r = asws.addRow({source: a.source, gene: '', status: 'Source', details: a.details})
+                    r.eachCell(cell => { cell.border = borderThin })
+                }
+            }
 
             // Export config summary
             const cfgRow = asws.addRow({source: 'Export Config', gene: '', status: 'Info', details: `Screenshots: ${exportCfg.igvScreenshots ? 'ON' : 'OFF'}, Lollipop: ${exportCfg.lollipopPlots ? 'ON' : 'OFF'}, Annotations: ${exportCfg.geneAnnotations.enabled ? 'ON' : 'OFF'}`})

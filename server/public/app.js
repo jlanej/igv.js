@@ -958,7 +958,7 @@
 
         const tbody = document.getElementById('summary-body')
         if (!data.summary || data.summary.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="10">No gene data available</td></tr>'
+            tbody.innerHTML = '<tr><td colspan="13">No gene data available</td></tr>'
             return
         }
 
@@ -970,6 +970,9 @@
             <td class="curation-fail">${g.fail}</td>
             <td class="curation-uncertain">${g.uncertain}</td>
             <td class="curation-pending">${g.pending}</td>
+            <td class="curation-pass">${g.passHigh != null ? g.passHigh : 0}</td>
+            <td class="curation-pass">${g.passMod != null ? g.passMod : 0}</td>
+            <td class="curation-pass">${g.passLow != null ? g.passLow : 0}</td>
             <td>${g.variants.map(v =>
                 `<span class="badge badge-${v.curation_status}" title="${v.chrom}:${v.pos} ${v.ref}→${v.alt}">${v.chrom}:${v.pos}</span> `
             ).join('')}</td>

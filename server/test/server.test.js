@@ -3511,3 +3511,101 @@ describe('API /api/species-metrics', function () {
         expect(res.body).to.have.property('error')
     })
 })
+
+// ---------------------------------------------------------------------------
+// Gene Summary: impact-passing counts + annotation columns + Read Me tab
+// ---------------------------------------------------------------------------
+describe('Gene Summary impact counts and annotations', function () {
+    // Collect a streamed binary (xlsx) response into a Buffer.
+    function binaryParser(res, callback) {
+        const chunks = []
+        res.on('data', chunk => chunks.push(chunk))
+        res.on('end', () => callback(null, Buffer.concat(chunks)))
+    }
+
+    after(function () {
+        if (fs.existsSync(curationFile)) fs.unlinkSync(curationFile)
+    })
+
+    it('/api/summary exposes per-gene impact count fields', async function () {
+        const res = await request(app).get('/api/summary').expect(200)
+        const gene = res.body.summary[0]
+        for (const k of ['passHigh', 'passMod', 'passLow', 'high', 'mod', 'low']) {
+            expect(gene).to.have.property(k).that.is.a('number')
+        }
+    })
+
+    it('/api/summary counts HIGH-impact variants passing review', async function () {
+        // GENE2 has two HIGH-impact variants and no others in the example data.
+        await request(app).put('/api/curate/gene').send({gene: 'GENE2', status: 'pass'}).expect(200)
+        const res = await request(app).get('/api/summary').expect(200)
+        const g2 = res.body.summary.find(g => g.gene === 'GENE2')
+        expect(g2.high).to.equal(2)
+        expect(g2.passHigh).to.equal(2)
+        expect(g2.passMod).to.equal(0)
+        expect(g2.passLow).to.equal(0)
+        // Restore pending so later assertions about default state are unaffected.
+        await request(app).put('/api/curate/gene').send({gene: 'GENE2', status: 'pending'}).expect(200)
+    })
+
+    it('xlsx Gene Summary includes Pass HIGH/MODERATE/LOW columns', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4], exportConfig: {geneAnnotations: {enabled: false}}})
+            .buffer(true).parse(binaryParser).expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        const header = wb.getWorksheet('Gene Summary').getRow(1).values
+        expect(header).to.include.members(['Pass HIGH', 'Pass MODERATE', 'Pass LOW'])
+    })
+
+    it('xlsx omits impact columns when passByImpact is off', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2], exportConfig: {geneAnnotations: {enabled: false}, impactCounts: {passByImpact: false}}})
+            .buffer(true).parse(binaryParser).expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        const header = wb.getWorksheet('Gene Summary').getRow(1).values
+        expect(header).to.not.include('Pass HIGH')
+    })
+
+    it('xlsx Gene Summary includes ClinVar columns (offline provider)', async function () {
+        this.timeout(10000)
+        // MyGene fields off + gnomAD off ⇒ no network; ClinVar is a bundled file.
+        const exportConfig = {geneAnnotations: {
+            enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false,
+            gnomadConstraint: {enabled: false}, clinvar: {enabled: true}, geneLists: {enabled: false}
+        }}
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4], exportConfig})
+            .buffer(true).parse(binaryParser).expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        const header = wb.getWorksheet('Gene Summary').getRow(1).values
+        expect(header).to.include.members(['ClinVar P/LP', 'Has P/LP'])
+        expect(header).to.not.include('Gene Name')
+        expect(header).to.not.include('gnomAD pLI')
+    })
+
+    it('xlsx includes a Read Me data-dictionary sheet as the first tab', async function () {
+        this.timeout(10000)
+        const res = await request(app)
+            .post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2], exportConfig: {geneAnnotations: {enabled: false}}})
+            .buffer(true).parse(binaryParser).expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        expect(wb.worksheets[0].name).to.equal('Read Me')
+        const rm = wb.getWorksheet('Read Me')
+        const text = []
+        rm.eachRow(r => r.eachCell(c => { if (c.value != null) text.push(String(c.value)) }))
+        const joined = text.join(' | ')
+        expect(joined).to.contain('Worksheets in this report')
+        expect(joined).to.contain('Gene Summary')
+        expect(joined).to.contain('Impact counts')
+    })
+})

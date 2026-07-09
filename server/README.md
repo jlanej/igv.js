@@ -21,8 +21,11 @@ OpenDemand desktop access).
   multiple variants passing current filters
 - **Lollipop plots** – per-gene mutation lollipop plots with protein domain
   overlays (fetched from UniProt)
-- **Gene annotations** – automated gene annotation from MyGene.info (gene name,
-  summary, OMIM, pathways, gene type) displayed in the Gene Summary sheet
+- **Gene annotations** – pluggable gene-level annotations on the Gene Summary
+  sheet: MyGene.info (name, summary, OMIM, pathways, type), gnomAD constraint
+  (LOEUF/pLI), ClinVar P/LP counts, and Yes/No gene-list membership (e.g. COSMIC)
+- **Impact counts** – per-gene counts of HIGH/MODERATE/LOW-impact variants
+  passing review, on the Gene Summary sheet
 - **Sample QC** – load a per-sample QC file (e.g. VerifyBamID freemix) to
   display trio-aggregated metrics and color-coded warnings in the variant table
 - **Sample summary** – per-sample variant counts by impact and frequency
@@ -464,12 +467,15 @@ using row-index keys are automatically migrated on first load.
 
 The **Export XLSX** button generates a publication-ready workbook containing:
 
+- **Read Me** sheet – a guide to every worksheet plus a per-column data
+  dictionary (meaning, source, licence) for the Gene Summary annotations. This
+  is the first tab so reviewers can orient before reading the data.
 - **Variants** sheet – styled table of filtered variants with curation status,
   auto-filters, frozen header row, and full-row coloring by curation status.
   Gene names link to their lollipop plot worksheets when available.
 - **Gene Summary** sheet – gene-level statistics (total, samples, pass/fail/
-  uncertain/pending) enriched with annotations from MyGene.info (gene name,
-  gene type, OMIM, pathways, summary)
+  uncertain/pending), **impact counts passing review** (Pass HIGH / MODERATE /
+  LOW), and gene-level annotations (see *Gene annotations* below).
 - **Sample Summary** sheet – per-sample variant counts by impact group and
   frequency threshold, plus cohort statistics (mean, median, std dev)
 - **Sample QC** sheet – trio-aggregated QC metrics (if QC data is loaded)
@@ -510,12 +516,42 @@ from disk.
 | Category | Options |
 |----------|---------|
 | **Visual Elements** | IGV Screenshots, Lollipop Plots, Protein Domains |
-| **Gene Annotations** | Enable/Disable, Gene Name, Summary, OMIM, Pathways, Gene Type |
-| **Worksheets** | Gene Summary, Sample Summary, Sample QC, Applied Filters, Annotation Status |
+| **Gene Annotations** | Enable/Disable, Gene Name, Summary, OMIM, Pathways, Gene Type; gnomAD constraint; ClinVar P/LP; gene-list membership |
+| **Impact Counts** | Pass HIGH/MODERATE/LOW (on), HIGH/MODERATE/LOW totals (off) |
+| **Worksheets** | Read Me, Gene Summary, Sample Summary, Sample QC, Applied Filters, Annotation Status |
 | **Variant Columns** | Core (chrom/pos/ref/alt), Gene Info, Frequency, Quality, Genotypes, Allelic Depth, Genotype Quality, Sample Info, File Paths, Other Annotations |
 
-All options default to **enabled**.  The variant column categories allow
+Most options default to **enabled**.  The variant column categories allow
 excluding file paths and other technical columns from the exported data.
+
+### Gene annotations
+
+The Gene Summary tab is enriched by a set of pluggable annotation providers
+(`annotation-registry.js` + `providers/*`). Each provider fails independently —
+a network timeout or missing data file yields blank cells and a note on the
+Annotation Status tab, never a failed export.
+
+| Annotation | Columns | Source | Licence |
+|------------|---------|--------|---------|
+| **Impact passing review** | Pass HIGH / MODERATE / LOW | curation × impact | n/a |
+| **gnomAD constraint** | gnomAD LOEUF, pLI, LoF-constrained | gnomAD GraphQL API (live) | CC0 |
+| **ClinVar** | ClinVar P/LP, Has P/LP | bundled `data/annotations/*` | public domain |
+| **Gene-list membership** | one Yes/No column per list | `data/gene-lists/*.txt` | membership only |
+| **MyGene.info** | Gene Name, Type, OMIM, Pathways, Summary | MyGene.info (live) | per source |
+
+- **Impact counts** tally only HIGH/MODERATE/LOW; MODIFIER and blank impacts are
+  excluded, so the three Pass columns need not sum to the Pass column.
+- **gnomAD** uses v4 (GRCh38) for `hg38` and v2.1.1 (GRCh37) for `hg19`; the
+  column header records the version used.
+- **Gene-list membership** is the licence-safe way to include restricted
+  sources (e.g. COSMIC Cancer Gene Census): drop a symbol list into
+  `data/gene-lists/` and the report gains one Yes/No column — only membership is
+  embedded, never the licensed content. See `data/gene-lists/README.md`.
+- **OMIM** is included as the numeric MIM identifier only (disease-title text is
+  licence-restricted and is not embedded).
+
+The bundled ClinVar snapshot is regenerated with `npm run build-annotation-data`
+(re-downloads NCBI's public-domain `gene_specific_summary.txt` and slims it).
 
 If IGV has not yet been loaded (no variant clicked), exports are generated
 with data sheets only (no screenshots).

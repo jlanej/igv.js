@@ -18,6 +18,7 @@ const DEFAULT_EXPORT_CONFIG = {
     // Worksheets to include in XLSX
     sheets: {
         variants: true,           // Main variants sheet (always true)
+        dataDictionary: true,     // "Read Me" guide + per-tab column dictionary
         geneSummary: true,        // Gene summary tab
         sampleSummary: true,      // Sample summary tab
         sampleQc: true,           // Sample QC tab (if data exists)
@@ -25,19 +26,49 @@ const DEFAULT_EXPORT_CONFIG = {
         annotationStatus: true    // Annotation status / failure tracking
     },
 
+    // Per-gene impact counts on the Gene Summary tab (curation-derived, not
+    // fetched). "passByImpact" counts HIGH/MODERATE/LOW variants that pass
+    // review; "totalByImpact" counts them regardless of review status.
+    // NOTE: only HIGH/MODERATE/LOW are counted — MODIFIER and blank impacts are
+    // excluded, so the three pass columns need not sum to the Pass column.
+    impactCounts: {
+        passByImpact: true,
+        totalByImpact: false
+    },
+
     // Visual elements
     igvScreenshots: true,         // Capture & embed IGV screenshots
     lollipopPlots: true,          // Generate & embed lollipop plots
     proteinDomains: true,         // Fetch protein domains for lollipop plots
 
-    // Gene annotations (fetched from MyGene.info)
+    // Gene annotations. Legacy flat flags below are MyGene.info fields; the
+    // nested objects are pluggable providers registered in annotation-registry.js.
     geneAnnotations: {
-        enabled: true,            // Master toggle
+        enabled: true,            // Master toggle (gates every provider)
+        // --- MyGene.info fields (wired directly in server.js) ---
         geneName: true,           // Full gene name
         summary: true,            // Gene function summary
-        omim: true,               // OMIM disease associations
+        omim: true,               // OMIM disease associations (MIM number)
         pathways: true,           // KEGG pathway memberships
-        geneType: true            // Gene biotype
+        geneType: true,           // Gene biotype
+        // --- Registry providers (each {enabled, ...sub-columns}) ---
+        gnomadConstraint: {       // gnomAD gene constraint (live API)
+            enabled: true,
+            loeuf: true,          // LOEUF (oe_lof_upper)
+            pli: true,            // pLI
+            constrainedFlag: true, // derived Yes/No LoF-constrained flag
+            misZ: false           // missense Z-score
+        },
+        clinvar: {                // ClinVar gene-level P/LP (bundled file)
+            enabled: true,
+            plp: true,            // count of Pathogenic/Likely-pathogenic alleles
+            hasPlp: true,         // Yes/No has any P/LP
+            vus: false,           // count of uncertain-significance alleles
+            conflicts: false      // count with conflicting interpretations
+        },
+        geneLists: {              // Gene-list membership flags (bundled lists)
+            enabled: true         // e.g. COSMIC / panel membership — see data/gene-lists
+        }
     },
 
     // Variant column categories to include in export
@@ -102,8 +133,20 @@ function mergeWithDefaults(partial) {
 
     // Deep-merge nested objects
     merged.sheets = {...DEFAULT_EXPORT_CONFIG.sheets, ...(partial.sheets || {})}
-    merged.geneAnnotations = {...DEFAULT_EXPORT_CONFIG.geneAnnotations, ...(partial.geneAnnotations || {})}
     merged.variantColumns = {...DEFAULT_EXPORT_CONFIG.variantColumns, ...(partial.variantColumns || {})}
+    merged.impactCounts = {...DEFAULT_EXPORT_CONFIG.impactCounts, ...(partial.impactCounts || {})}
+
+    // geneAnnotations mixes flat flags with nested provider objects. A shallow
+    // spread would let a partial that sets a single nested sub-flag (e.g.
+    // {gnomadConstraint: {loeuf: false}}) drop the provider's other keys
+    // (including `enabled`), so each nested provider object is merged in turn.
+    merged.geneAnnotations = {...DEFAULT_EXPORT_CONFIG.geneAnnotations, ...(partial.geneAnnotations || {})}
+    const pGA = partial.geneAnnotations || {}
+    for (const key of ['gnomadConstraint', 'clinvar', 'geneLists']) {
+        const base = DEFAULT_EXPORT_CONFIG.geneAnnotations[key] || {}
+        const over = (pGA[key] && typeof pGA[key] === 'object') ? pGA[key] : {}
+        merged.geneAnnotations[key] = {...base, ...over}
+    }
 
     return merged
 }
