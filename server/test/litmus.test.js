@@ -105,13 +105,9 @@ describe('litmus: proportions are exactly reconstructable from the raw counts', 
     const dims = [...DIMENSIONS, {id: 'reactome', label: 'Reactome'}, {id: 'hgncFamily', label: 'HGNC'}]
     const geneTerms = new Map()
     for (const g of realGenes) geneTerms.set(g, geneTermsFor(g, {gnomad: gnB.get(g), clinvar: cvB.get(g), gencc: gcB.get(g)}, null, gsLibs))
-    const selectedGenes = new Set(realGenes)
-    const srcMap = {constraint: gnB, clinvar: cvB, gencc: gcB, ...gsLibs}
-    const selectedSizes = {}
-    for (const d of dims) { const m = srcMap[d.id]; if (!m) continue; let c = 0; for (const g of selectedGenes) if (m.has(g)) c++; selectedSizes[d.id] = c }
     const variants = realGenes.map((g, i) => ({gene: g, impact: ['HIGH', 'MODERATE', 'LOW'][i % 3], curation_status: i % 3 === 0 ? 'pass' : 'fail', sample: 'P' + (i % 5)}))
     const conv = computeConvergence(variants, {geneCol: 'gene', impactCol: 'impact', sampleCol: 'sample',
-        geneTerms, dimensions: dims, sourceUniverse: SRC, selectedSizes, selectedSize: selectedGenes.size, totalProbands: 5, minCount: 2})
+        geneTerms, dimensions: dims, sourceUniverse: SRC, totalProbands: 5, minCount: 2})
 
     it('produced at least one convergence group', function () {
         expect(conv.sections.reduce((n, s) => n + s.groups.length, 0)).to.be.greaterThan(0)
@@ -119,15 +115,18 @@ describe('litmus: proportions are exactly reconstructable from the raw counts', 
     it('every proportion equals its raw-count ratio, and invariants hold', function () {
         for (const s of conv.sections) for (const g of s.groups) {
             if (g.prevalence != null) expect(g.prevalence).to.be.closeTo(g.catSize / s.sourceSize, 1e-9)
-            expect(g.pctGenes).to.be.closeTo(g.refGenes / conv.selectedSize, 1e-9)
-            expect(g.pctDnms).to.be.closeTo(g.refVariants / conv.totalVariants, 1e-9)
-            if (g.fold != null) expect(g.fold).to.be.closeTo((g.refIndividuals / conv.totalProbands) / g.prevalence, 1e-9)
+            // SAMPLE track (pass): % samples = # samples ÷ pass probands
+            expect(g.pctSamples).to.be.closeTo(g.refIndividuals / conv.nPassProbands, 1e-9)
+            if (g.foldS != null) expect(g.foldS).to.be.closeTo(g.pctSamples / g.prevalence, 1e-9)
+            // DNM track (pass): % DNMs = # DNMs ÷ pass DNMs
+            expect(g.pctDnms).to.be.closeTo(g.refVariants / conv.nPassDnms, 1e-9)
+            if (g.foldD != null) expect(g.foldD).to.be.closeTo(g.pctDnms / g.prevalence, 1e-9)
             // invariants
             if (g.prevalence != null) expect(g.prevalence).to.be.within(0, 1)
             if (g.catSize != null) expect(g.catSize).to.be.at.most(s.sourceSize)
-            expect(g.refGenes).to.be.at.most(conv.selectedSize)
-            expect(g.refVariants).to.be.at.most(conv.totalVariants)
-            if (g.enrichQ != null) expect(g.enrichQ).to.be.within(0, 1)
+            expect(g.refIndividuals).to.be.at.most(conv.nPassProbands)
+            expect(g.refVariants).to.be.at.most(conv.nPassDnms)
+            for (const q of [g.qSample, g.qDnm]) if (q != null) expect(q).to.be.within(0, 1)
         }
     })
 })
@@ -170,11 +169,11 @@ describe('litmus: the full XLSX export pipeline produces a valid workbook', func
         const names = wb.worksheets.map(w => w.name)
         expect(names, names.join(',')).to.include.members(['Read Me', 'Gene Summary', 'Gene Analysis'])
 
-        // The Gene Analysis sheet must carry the descriptive column headers.
+        // The Gene Analysis sheet must carry the two-level pass column headers.
         const ws = wb.getWorksheet('Gene Analysis')
         const seen = new Set()
         ws.eachRow(row => row.eachCell(cell => { if (typeof cell.value === 'string') seen.add(cell.value) }))
-        for (const col of ['% all genes', '% genes', '% DNMs', 'Fold', '# genes', '# DNMs', 'cat size']) {
+        for (const col of ['% all genes', 'cat size', '# samples', '% samples', 'Fold (s)', 'samp p', 'samp q', '# DNMs', '% DNMs', 'Fold (d)', 'DNM p', 'DNM q']) {
             expect(seen.has(col), `Gene Analysis header "${col}"`).to.equal(true)
         }
     })

@@ -19,7 +19,7 @@ const clinvar = require('../providers/clinvar-provider')
 const gnomad = require('../providers/gnomad-provider')
 const gencc = require('../providers/gencc-provider')
 const geneLists = require('../providers/genelist-provider')
-const {computeConvergence, geneTermsFor, sourceUniverseStats, hypergeomUpperTail, benjaminiHochberg} = require('../gene-analysis')
+const {computeConvergence, geneTermsFor, sourceUniverseStats, hypergeomUpperTail, binomUpperTail, poissonBinomUpperTail, benjaminiHochberg} = require('../gene-analysis')
 const geneSets = require('../genesets')
 const registry = require('../annotation-registry')
 
@@ -334,6 +334,26 @@ describe('gene-analysis convergence (independent signals)', function () {
         expect(q[2]).to.be.closeTo(0.5, 1e-12)
     })
 
+    it('binomUpperTail returns exact DNM-level upper-tail probabilities', function () {
+        expect(binomUpperTail(0, 5, 0.3)).to.equal(1)                       // k<=0
+        expect(binomUpperTail(5, 5, 0.3)).to.be.closeTo(Math.pow(0.3, 5), 1e-12)
+        expect(binomUpperTail(6, 5, 0.3)).to.equal(0)                       // k>n
+        expect(binomUpperTail(1, 3, 0.5)).to.be.closeTo(0.875, 1e-12)       // 1 - 0.5^3
+        expect(binomUpperTail(2, 3, 0.5)).to.be.closeTo(0.5, 1e-12)
+        expect(binomUpperTail(1, 0, 0.3)).to.equal(null)                    // degenerate n
+    })
+
+    it('poissonBinomUpperTail (conservative sample test) is exact', function () {
+        expect(poissonBinomUpperTail(0, [0.5, 0.5])).to.equal(1)
+        expect(poissonBinomUpperTail(1, [0.5, 0.5])).to.be.closeTo(0.75, 1e-12)
+        expect(poissonBinomUpperTail(2, [0.5, 0.5])).to.be.closeTo(0.25, 1e-12)
+        expect(poissonBinomUpperTail(3, [0.5, 0.5])).to.equal(0)            // k>n
+        expect(poissonBinomUpperTail(1, [0.2, 0.3, 0.5])).to.be.closeTo(0.72, 1e-12)
+        expect(poissonBinomUpperTail(2, [0.2, 0.3, 0.5])).to.be.closeTo(0.25, 1e-12)
+        expect(poissonBinomUpperTail(3, [0.2, 0.3, 0.5])).to.be.closeTo(0.03, 1e-12)
+        expect(poissonBinomUpperTail(1, [])).to.equal(null)
+    })
+
     it('sourceUniverseStats derives per-source prevalence from bundles + libraries', function () {
         const gnomad = new Map([['A', {pli: 0.95}], ['B', {pli: 0.1}], ['C', {loeuf: 0.3}]])
         const gencc = new Map([['A', {moi: ['Autosomal dominant']}], ['B', {moi: ['Autosomal recessive']}]])
@@ -348,65 +368,69 @@ describe('gene-analysis convergence (independent signals)', function () {
         expect(su.fam.counts.T).to.equal(2)                                          // A,B
     })
 
-    it('per-source prevalence + descriptive proportions + ORA attach to groups', function () {
+    it('per-source prevalence + IGV-pass sample & DNM tracks attach to groups', function () {
         // Source universe for dim "fam": 10 genes, term T carried by 3 (A,B,C).
         const famLib = new Map([['A', ['T']], ['B', ['T']], ['C', ['T']],
             ['D', []], ['E', []], ['F', []], ['G', []], ['H', []], ['I', []], ['J', []]])
         const srcU = sourceUniverseStats({}, {fam: famLib})
         expect(srcU.fam.size).to.equal(10)
         expect(srcU.fam.counts.T).to.equal(3)
+        // Two pass probands (X, Y), each one pass DNM in a category gene.
         const conv = computeConvergence(
             [{gene: 'A', s: 'X', impact: 'HIGH', curation_status: 'pass'},
              {gene: 'B', s: 'Y', impact: 'HIGH', curation_status: 'pass'}],
             {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 2,
                 geneTerms: new Map([['A', {fam: ['T']}], ['B', {fam: ['T']}]]),
-                dimensions: [{id: 'fam', label: 'Family'}], sourceUniverse: srcU,
-                selectedSizes: {fam: 2}, selectedSize: 2, totalProbands: 20})
+                dimensions: [{id: 'fam', label: 'Family'}], sourceUniverse: srcU, totalProbands: 20})
         const fam = conv.sections.find(s => s.id === 'fam')
         const grp = fam.groups.find(g => g.term === 'T')
-        expect(grp.refGenes).to.equal(2)
-        expect(grp.prevalence).to.be.closeTo(0.3, 1e-9)          // 3/10 (per-source)
-        expect(grp.pctGenes).to.be.closeTo(1, 1e-9)              // 2 of 2 selected genes
-        expect(grp.pctDnms).to.be.closeTo(1, 1e-9)               // 2 of 2 variants
-        expect(grp.fold).to.be.closeTo((2 / 20) / 0.3, 1e-9)     // proband-rate / prevalence
-        expect(grp.enrichP).to.be.closeTo(3 / 45, 1e-9)          // hypergeom(2,10,3,2)
-        expect(grp.enrichQ).to.be.closeTo(3 / 45, 1e-9)          // single test
-        // Raw counts to reconstruct the proportions
-        expect(grp.catSize).to.equal(3)                          // source genes in T (% all genes numerator)
-        expect(grp.refVariants).to.equal(2)                      // your variants in T (% DNMs numerator)
-        expect(fam.sourceSize).to.equal(10)                      // source universe size (% all genes denom)
-        expect(conv.totalProbands).to.equal(20)
-        expect(conv.selectedSize).to.equal(2)                    // % genes denominator
-        expect(conv.totalVariants).to.equal(2)                   // % DNMs denominator
+        expect(conv.nPassProbands).to.equal(2)
+        expect(conv.nPassDnms).to.equal(2)
+        expect(grp.refIndividuals).to.equal(2)                   // pass samples (= # samples)
+        expect(grp.refVariants).to.equal(2)                      // pass DNMs (= # DNMs)
+        expect(grp.catSize).to.equal(3)
+        expect(fam.sourceSize).to.equal(10)
+        expect(grp.prevalence).to.be.closeTo(0.3, 1e-9)          // 3/10
+        // SAMPLE track: pct = 2/2; fold = 1/0.3; burden [1,1] → probs [.3,.3] → PB(2) = .09
+        expect(grp.pctSamples).to.be.closeTo(1, 1e-9)
+        expect(grp.foldS).to.be.closeTo(1 / 0.3, 1e-9)
+        expect(grp.pSample).to.be.closeTo(0.3 * 0.3, 1e-9)
+        expect(grp.qSample).to.be.closeTo(0.3 * 0.3, 1e-9)       // single test
+        // DNM track: pct = 2/2; fold = 1/0.3; binom(2,2,0.3) = 0.09
+        expect(grp.pctDnms).to.be.closeTo(1, 1e-9)
+        expect(grp.foldD).to.be.closeTo(1 / 0.3, 1e-9)
+        expect(grp.pDnm).to.be.closeTo(Math.pow(0.3, 2), 1e-9)
+        expect(grp.qDnm).to.be.closeTo(Math.pow(0.3, 2), 1e-9)
     })
 
-    it('a dimension with no source universe gets null prevalence/ORA but keeps descriptive rates', function () {
+    it('a dimension with no source universe gets null prevalence/p but keeps sample & DNM rates', function () {
         const conv = computeConvergence(
             [{gene: 'A', s: 'X', impact: 'HIGH', curation_status: 'pass'},
              {gene: 'B', s: 'Y', impact: 'HIGH', curation_status: 'pass'}],
             {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 2,
                 geneTerms: new Map([['A', {domain: ['Dom']}], ['B', {domain: ['Dom']}]]),
-                dimensions: [{id: 'domain', label: 'Domain'}], sourceUniverse: {}, selectedSize: 2, totalProbands: 5})
+                dimensions: [{id: 'domain', label: 'Domain'}], sourceUniverse: {}, totalProbands: 5})
         const grp = conv.sections.find(s => s.id === 'domain').groups[0]
         expect(grp.prevalence).to.equal(null)
-        expect(grp.enrichP).to.equal(null)
-        expect(grp.enrichQ).to.equal(null)
-        expect(grp.fold).to.equal(null)
-        expect(grp.pctGenes).to.be.closeTo(1, 1e-9)              // rates need no source
+        for (const f of ['foldS', 'pSample', 'qSample', 'foldD', 'pDnm', 'qDnm']) expect(grp[f], f).to.equal(null)
+        expect(grp.pctSamples).to.be.closeTo(1, 1e-9)            // rates need no source
+        expect(grp.pctDnms).to.be.closeTo(1, 1e-9)
     })
 
-    it('no sample column → probands collapse, Fold suppressed, prevalence intact', function () {
+    it('no sample column → SAMPLE track suppressed, DNM track survives', function () {
         const srcU = sourceUniverseStats({}, {fam: new Map([['A', ['T']], ['B', ['T']], ['C', ['T']], ['D', []]])})
         const conv = computeConvergence(
             [{gene: 'A', impact: 'HIGH', curation_status: 'pass'}, {gene: 'B', impact: 'HIGH', curation_status: 'pass'}],
             {geneCol: 'gene', impactCol: 'impact', sampleCol: null, minCount: 2,
                 geneTerms: new Map([['A', {fam: ['T']}], ['B', {fam: ['T']}]]),
-                dimensions: [{id: 'fam', label: 'Family'}], sourceUniverse: srcU,
-                selectedSizes: {fam: 2}, selectedSize: 2, totalProbands: 1})
+                dimensions: [{id: 'fam', label: 'Family'}], sourceUniverse: srcU, totalProbands: 1})
         const grp = conv.sections.find(s => s.id === 'fam').groups[0]
         expect(conv.hasSamples).to.equal(false)
-        expect(grp.fold).to.equal(null)                          // no proband base → no fold
-        expect(grp.prevalence).to.be.closeTo(3 / 4, 1e-9)        // prevalence still valid (3 of 4)
+        expect(grp.pSample).to.equal(null)                       // no proband base
+        expect(grp.foldS).to.equal(null)
+        expect(grp.pctSamples).to.equal(null)
+        expect(grp.pDnm).to.not.equal(null)                      // DNM track still computed
+        expect(grp.prevalence).to.be.closeTo(3 / 4, 1e-9)
     })
 
     it('sourceUniverseStats omits constraint when no gnomad bundle (GRCh37 build gate)', function () {
