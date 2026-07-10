@@ -21,7 +21,7 @@ const {generateLollipopSvg} = require('./lollipop')
 const {fetchProteinDomains} = require('./pfam')
 const {fetchGeneAnnotationsBatch} = require('./gene-annotations')
 const annotationRegistry = require('./annotation-registry')
-const {computeConvergence, geneTermsFor, universeTermCounts, DIMENSIONS} = require('./gene-analysis')
+const {computeConvergence, geneTermsFor, sourceUniverseStats, DIMENSIONS} = require('./gene-analysis')
 const geneSets = require('./genesets')
 const gnomadProvider = require('./providers/gnomad-provider')
 const clinvarProvider = require('./providers/clinvar-provider')
@@ -1288,7 +1288,7 @@ function buildReadmeSheet(workbook, opts) {
     row('Read Me', 'This guide: worksheet overview, column dictionary, and data sources.')
     row('Variants', 'One row per exported variant. Rows are colour-coded by curation status (Pass/Fail/Uncertain/Pending). When --bed-tracks (kraken2 species BEDs) are configured, adds contamination columns: Contamination (assessment), Nonhuman %, Contam Reads, Nonhuman Reads, Top Taxa.')
     if (hasGene && exportCfg.sheets.geneSummary) row('Gene Summary', 'One row per gene: curation counts, impact-passing counts, and gene-level annotations. See the column dictionary below.')
-    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis', 'Convergence: which shared attributes (gnomAD constraint, ClinVar history, protein domain, GenCC inheritance; Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes) your genes stack up on — counted by distinct individuals, each with a hypergeometric enrichment p + FDR q vs your cohort background so you can tell signal from chance. See the dictionary below.')
+    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis', 'Convergence: which shared attributes (gnomAD constraint, ClinVar history, protein domain, GenCC inheritance; Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes) your genes stack up on — distinct-proband counts per stratum shown against each category\'s genome-wide prevalence ("% of all genes"), so you can see "1% of genes but 50% of probands". Optional hypergeometric p / FDR q alongside. See the dictionary below.')
     if (exportCfg.sheets.sampleSummary) row('Sample Summary', 'Per-sample variant counts by impact group and frequency threshold, with cohort mean/median.')
     if (hasSampleQc && exportCfg.sheets.sampleQc) row('Sample QC', 'Per-sample sequencing QC metrics with threshold-based pass/warn/fail assessment.')
     if (exportCfg.sheets.appliedFilters) row('Applied Filters', 'The filters and export settings used to produce this report (self-documenting).')
@@ -1345,15 +1345,16 @@ function buildReadmeSheet(workbook, opts) {
     if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) {
         section('Gene Analysis — how to read it')
         row('Purpose', 'For each grouping dimension, shows which shared attributes (terms) your genes converge on — the signal when de novo hits are singletons scattered across genes.')
-        row('Counts = INDIVIDUALS', 'Each cell is the number of DISTINCT INDIVIDUALS (probands) with a qualifying variant in a gene carrying that term — NOT the number of variants. One proband with several de novo hits in the group counts once, so a single hypermutated proband cannot look like convergence.', 'impact × curation × sample')
-        row('# genes / Genes', 'Distinct genes contributing (locus heterogeneity), and their symbols. So single-proband exports still surface gene-level convergence.')
-        row('bg', 'Background rate — fraction of the cohort\'s eligible genes (every gene with a callable variant in the FULL loaded set) that carry this term. This is the chance rate to beat. "—" for protein domain (no cohort-wide map).', 'cohort universe')
-        row('Enrich p', 'Signal vs chance: one-tailed hypergeometric (Fisher) probability that the EXPORTED genes over-represent this term versus the whole loaded cohort — the de-novo-appropriate background, not the genome. Small = more than chance. This is a gene-level over-representation test, NOT a de-novo mutation-rate model.', 'hypergeometric ORA')
-        row('FDR q', 'Benjamini-Hochberg false-discovery rate for Enrich p across every term in this tab; q<0.05 (shown green) survives multiple-testing. Expect little/nothing to clear FDR at small N — that is honest, not a bug.', 'BH across all terms')
-        row('Columns (cells)', 'Curation status {pass, all} × cumulative impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL}. ALL applies no impact restriction (incl. MODIFIER/blank). A term is shown only if ≥2 individuals OR ≥2 genes share it. Bold rows recur across ≥2 individuals.')
+        row('Stratum cells: n (%)', 'Each pass/impact cell shows DISTINCT INDIVIDUALS (probands) with a qualifying DNM in a category gene, and their % of ALL probands in the loaded cohort. Distinct individuals — one proband with several hits in the category counts once, so a hypermutated proband cannot fake convergence. Cells split by curation {pass, all} × cumulative impact {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL}; ALL includes MODIFIER/blank.', 'impact × curation × sample')
+        row('# genes / # DNMs / cat size', 'RAW COUNTS so every proportion can be reconstructed by hand: # genes = your distinct genes in the category (numerator of "% genes"); # DNMs = your variants in it (numerator of "% DNMs"); cat size = genes in the category within its source universe (numerator of "% all genes"). The matching denominators are printed in the banner (cohort probands, selected genes, selected variants) and each section header (source-gene count).')
+        row('Genes', 'The contributing gene symbols (locus heterogeneity). A term is shown only if ≥2 individuals OR ≥2 genes share it; bold rows recur across ≥2 individuals.')
+        row('% all genes', 'The category\'s PREVALENCE within its own source universe = cat size ÷ source-gene count (source size shown in each section header) — e.g. % of gnomAD-scored genes at pLI≥0.9, or a pathway\'s size ÷ the genes its library annotates. This is the chance rate to beat: compare it to a cell\'s % (or "% genes"). 50% vs 50% is expected; 50% vs 1% is striking. Shows "—" for protein domain (no offline source) and for constraint on GRCh37 exports (the bundled constraint universe is gnomAD v4.1/GRCh38 only — mixing it with live GRCh37 calls would be invalid).', 'per-source universe')
+        row('% genes / % DNMs', 'Of YOUR selected genes / variants (all·ALL), the share that fall in this category — the observed rate to compare against "% all genes". Numerators are the # genes / # DNMs columns; denominators are the selected-gene / selected-variant totals in the banner.')
+        row('Fold', 'Proband-rate ÷ prevalence = (% of cohort probands with a category DNM) ÷ (% all genes). A single "how striking" ratio, e.g. 60% ÷ 0.2% ≈ 300×. Descriptive only; a gene-count baseline silently assumes equal gene mutability, so read marginal folds gently.')
+        row('Enrich p / FDR q', 'Optional inferential backstop: one-tailed hypergeometric (Fisher) test that your selected genes over-represent the category vs its source\'s genome, + Benjamini-Hochberg FDR (q<0.05 shown green). Gene-level ORA, NOT a de-novo mutation-rate model — the descriptive proportions above are the primary read; expect little to clear FDR at small N.', 'hypergeometric ORA')
         row('Dimensions', 'Offline: gnomAD constraint tail (LOEUF<0.6 / pLI≥0.9), ClinVar P/LP history, GenCC Mode-of-Inheritance, Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes. Online: protein domain (InterPro via MyGene; blank offline).', '8 dimensions')
-        row('Reading pathways', 'Pathway dimensions overlap heavily (a gene sits in many pathways), so many near-identical rows can share the same genes — only the top 25 per dimension are shown and the remainder is noted. Judge convergence by the gene list + FDR q, not by the number of rows.')
-        row('Method', 'Distinct-individual counting is the primary signal (faithful at any N); the hypergeometric p/q is a gene-level backstop for "enrichment or chance". Both are hypothesis-generating, not diagnostic. A de-novo mutation-rate model (e.g. denovolyzeR) is the principled next step once a multi-proband cohort accrues.')
+        row('Reading pathways', 'Pathway dimensions overlap heavily (a gene sits in many pathways), so many near-identical rows can share the same genes — only the top 25 per dimension are shown and the remainder is noted. Judge convergence by the gene list + the proportions, not by the number of rows.')
+        row('Method', 'Descriptive proportions (prevalence vs observed rates) are the primary, always-honest read — you decide if a contrast is striking. The hypergeometric p/q is a secondary backstop. Both are hypothesis-generating, not diagnostic; a de-novo mutation-rate model (e.g. denovolyzeR) is the principled next step once a multi-proband cohort accrues.')
     }
 
     // --- Data sources & licensing ---
@@ -1395,9 +1396,34 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
     const {headerFill, headerFont, borderThin} = styles
     const ws = workbook.addWorksheet('Gene Analysis')
     const cells = conv.cells
-    const nCols = 1 + cells.length + 5   // Group + cells + #genes + bg + Enrich p + FDR q + Genes
-    // p/q formatter: em-dash for N/A, scientific below 0.001, else 3 dp.
+    const totalProbands = conv.totalProbands || 0
+    const selectedSize = conv.selectedSize || 0     // total distinct selected genes
+    const totalVariants = conv.totalVariants || 0    // total selected variants (all·ALL)
+    // Trailing columns: raw counts (# genes, # DNMs, cat size) then the
+    // proportions they build (% all genes, % genes, % DNMs, Fold) then p/q, Genes.
+    const nCols = 1 + cells.length + 10
+    // Column offsets (1-based) after the stratum cells.
+    const CG = 2 + cells.length, DN = 3 + cells.length, CAT = 4 + cells.length,
+        PALL = 5 + cells.length, PGN = 6 + cells.length, PDN = 7 + cells.length,
+        FOLD = 8 + cells.length, PVAL = 9 + cells.length, QVAL = 10 + cells.length,
+        GENES = 11 + cells.length
+
     const fmtP = (p) => p == null ? '—' : (p < 0.001 ? p.toExponential(1) : p.toFixed(3))
+    const pct = (x) => {
+        if (x == null) return '—'
+        const v = x * 100
+        return `${v.toFixed(v < 0.1 ? 2 : (v < 1 ? 1 : 0))}%`
+    }
+    const fmtFold = (f) => f == null ? '—' : (f >= 10 ? `${Math.round(f)}×` : `${f.toFixed(1)}×`)
+    // A stratum cell shows distinct probands + their % of the whole cohort — but
+    // only when there is a real sample column; otherwise every variant collapses
+    // to one pseudo-proband, so show the bare count and omit the misleading %.
+    const hasSamples = !!conv.hasSamples
+    const cellStr = (cc) => {
+        const n = (cc && cc.individuals) || 0
+        if (!n) return ''
+        return (hasSamples && totalProbands > 0) ? `${n} (${pct(n / totalProbands)})` : `${n}`
+    }
     // Pathway dimensions overlap heavily (mTOR genes hit dozens of pathways),
     // so cap rows per dimension — the strongest (already sorted first) are kept
     // and the remainder is reported, never silently dropped.
@@ -1417,8 +1443,18 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
     addBanner('Gene Analysis — do the scattered single-hit genes converge?', {bold: true, size: 14, color: {argb: 'FF2C3E50'}})
     addBanner('Counts are DISTINCT INDIVIDUALS (probands), not variants: one proband with several de novo hits in a group counts once. Terms shared by ≥2 individuals or genes are kept.',
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    addBanner('Signal vs chance:  bg = fraction of the cohort\'s eligible genes carrying the term (the chance rate).  "Enrich p" = one-tailed hypergeometric test that the EXPORTED genes over-represent the term versus the whole loaded cohort (the de-novo-appropriate background, not the genome).  "FDR q" = Benjamini-Hochberg across every term in this tab; q < 0.05 (✓) is more than chance.  This is a gene-level over-representation test — NOT a de-novo mutation-rate model — so treat it as hypothesis-generating, and expect nothing to clear FDR at small N.',
+    const cellDesc = hasSamples
+        ? `each stratum cell shows distinct probands (and their % of all ${totalProbands} probands in the cohort) with a DNM in a category gene`
+        : `each stratum cell shows the count of DNMs in a category gene (no sample/trio column — see the note below)`
+    addBanner(`How to read the numbers — ${cellDesc}.  "% all genes" = the category's prevalence within its own source (gnomAD / ClinVar / GenCC / each gene-set library) — the chance rate to beat.  "% genes" / "% DNMs" = the share of YOUR selected genes / variants that fall in the category.  "Fold" = proband-rate ÷ prevalence (e.g. 60% of probands vs 0.2% of genes ≈ 300×).  Compare a cell's % (or "% genes") against "% all genes": 50% vs 50% is expected, 50% vs 1% is striking.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    if (!hasSamples) addBanner('No sample_id / trio_id column detected — every variant collapses to a single pseudo-proband, so the per-cell proband %, the proband base, and Fold are omitted as meaningless. Read the gene/DNM counts and "% genes" / "% DNMs" instead.',
+        {italic: true, size: 10, color: {argb: 'FFB9770E'}})
+    addBanner('"Enrich p" / "FDR q" = one-tailed hypergeometric test that your selected genes over-represent the category vs its source\'s genome, + Benjamini-Hochberg. Gene-level ORA — a gene-count null only approximates the de-novo mutation-rate null (constrained/large genes are bigger targets), so treat marginal p/q gently; the descriptive proportions are the primary read.',
+        {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    const probandClause = hasSamples ? `  proband % = n ÷ ${totalProbands} cohort probands;` : ''
+    addBanner(`Raw counts for auditing — the numerators are each cell's "n" and the "# genes" / "# DNMs" / "cat size" columns; the denominators are:${probandClause}  "% genes" = # genes ÷ ${selectedSize} selected genes;  "% DNMs" = # DNMs ÷ ${totalVariants} selected variants;  "% all genes" = cat size ÷ the dimension's source-gene count (shown in each section header).`,
+        {size: 10, color: {argb: 'FF47586A'}})
 
     // Per-cell gene-set / individual sizes
     const sizeStr = cells.map(c => `${c.label}: ${c.genes}g/${c.individuals}i`).join('   ')
@@ -1440,25 +1476,11 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
     }
     addBanner(headBits.length ? `Top convergence (pass · ALL impacts) — ${headBits.join(';  ')}` : 'No attribute is shared by ≥2 passing individuals or genes yet.',
         {bold: true, size: 11, color: {argb: 'FF2C3E50'}})
-
-    // Enrichment headline: the term with the smallest FDR q across the whole tab.
-    let bestSig = null
-    for (const sec of conv.sections) for (const g of sec.groups) {
-        if (g.enrichQ == null) continue
-        if (!bestSig || g.enrichQ < bestSig.g.enrichQ) bestSig = {sec, g}
-    }
-    if (bestSig && bestSig.g.enrichQ < 0.1) {
-        const sig = bestSig.g.enrichQ < 0.05
-        addBanner(`Strongest enrichment vs cohort background: "${bestSig.g.term}" (${bestSig.sec.label}) — ${bestSig.g.refGenes} genes, p=${fmtP(bestSig.g.enrichP)}, FDR q=${fmtP(bestSig.g.enrichQ)}${sig ? '  ✓ more than chance' : '  (suggestive)'}`,
-            {bold: true, size: 11, color: {argb: sig ? 'FF1E8449' : 'FF7D6608'}})
-    } else {
-        addBanner('No term reaches FDR q < 0.1 — nothing exceeds chance given the cohort background. Expected at small N; the counts above remain descriptive.',
-            {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    }
     r++; ws.addRow([])   // spacer
 
-    // Column header row. bg = chance rate; Enrich p / FDR q = signal vs chance.
-    const headerLabels = ['Group', ...cells.map(c => c.label), '# genes', 'bg', 'Enrich p', 'FDR q', 'Genes']
+    // Column header row. Raw counts (# genes / # DNMs / cat size) sit before
+    // the proportions they build so the numbers can be reconstructed by hand.
+    const headerLabels = ['Group', ...cells.map(c => c.label), '# genes', '# DNMs', 'cat size', '% all genes', '% genes', '% DNMs', 'Fold', 'Enrich p', 'FDR q', 'Genes']
     r++
     const hdr = ws.addRow(headerLabels)
     hdr.eachCell(cell => {
@@ -1468,12 +1490,17 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
     hdr.height = 26
     const headerRowIdx = r
     ws.getColumn(1).width = 34
-    for (let i = 0; i < cells.length; i++) ws.getColumn(2 + i).width = 12
-    ws.getColumn(2 + cells.length).width = 9    // # genes
-    ws.getColumn(3 + cells.length).width = 8    // bg
-    ws.getColumn(4 + cells.length).width = 10   // Enrich p
-    ws.getColumn(5 + cells.length).width = 10   // FDR q
-    ws.getColumn(6 + cells.length).width = 50   // Genes
+    for (let i = 0; i < cells.length; i++) ws.getColumn(2 + i).width = 13
+    ws.getColumn(CG).width = 8      // # genes (your genes in category)
+    ws.getColumn(DN).width = 8      // # DNMs (your variants in category)
+    ws.getColumn(CAT).width = 8     // cat size (source genes in category)
+    ws.getColumn(PALL).width = 11   // % all genes (prevalence = cat size / source)
+    ws.getColumn(PGN).width = 9     // % genes
+    ws.getColumn(PDN).width = 9     // % DNMs
+    ws.getColumn(FOLD).width = 8    // Fold
+    ws.getColumn(PVAL).width = 10   // Enrich p
+    ws.getColumn(QVAL).width = 9    // FDR q
+    ws.getColumn(GENES).width = 46  // Genes
 
     let anyGroups = false
     for (const sec of conv.sections) {
@@ -1482,8 +1509,9 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
         r++
         const hiddenCount = Math.max(0, sec.groups.length - MAX_GROUPS_PER_DIM)
         const shown = sec.groups.slice(0, MAX_GROUPS_PER_DIM)
-        const secLabel = hiddenCount ? `${sec.label}   (top ${shown.length} of ${sec.groups.length} terms)` : sec.label
-        const secRow = ws.addRow([secLabel])
+        const srcNote = sec.sourceSize ? `  ·  ${sec.sourceSize.toLocaleString()} source genes (÷ for "% all genes")` : '  ·  no source (no prevalence)'
+        const capNote = hiddenCount ? `   (top ${shown.length} of ${sec.groups.length} terms)` : ''
+        const secRow = ws.addRow([`${sec.label}${capNote}${srcNote}`])
         mergeAcross(r)
         secRow.getCell(1).font = {bold: true, color: {argb: 'FF2C3E50'}}
         for (let c = 1; c <= nCols; c++) secRow.getCell(c).fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFD6EAF8'}}
@@ -1492,12 +1520,14 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
         shown.forEach((g, idx) => {
             const genesStr = g.genes.length > 16 ? g.genes.slice(0, 16).join(', ') + ` +${g.genes.length - 16}` : g.genes.join(', ')
             const rowVals = [g.term]
-            for (const c of cells) {
-                const cc = g.cells[c.key] || {individuals: 0}
-                rowVals.push(cc.individuals || '')   // blank for 0 to reduce clutter
-            }
-            rowVals.push(g.refGenes)
-            rowVals.push(g.bgFreq != null ? `${(g.bgFreq * 100).toFixed(g.bgFreq < 0.01 ? 1 : 0)}%` : '—')
+            for (const c of cells) rowVals.push(cellStr(g.cells[c.key]))
+            rowVals.push(g.refGenes)                              // # genes (numerator of % genes)
+            rowVals.push(g.refVariants)                           // # DNMs (numerator of % DNMs)
+            rowVals.push(g.catSize != null ? g.catSize : '—')     // cat size (numerator of % all genes)
+            rowVals.push(pct(g.prevalence))   // % all genes
+            rowVals.push(pct(g.pctGenes))     // % of your genes
+            rowVals.push(pct(g.pctDnms))      // % of your DNMs
+            rowVals.push(fmtFold(g.fold))     // Fold
             rowVals.push(fmtP(g.enrichP))
             rowVals.push(fmtP(g.enrichQ))
             rowVals.push(genesStr)
@@ -1508,12 +1538,9 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
                 if (idx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
             })
             for (let i = 0; i < cells.length; i++) row.getCell(2 + i).alignment = {horizontal: 'center'}
-            row.getCell(2 + cells.length).alignment = {horizontal: 'center'}
-            row.getCell(3 + cells.length).alignment = {horizontal: 'center'}   // bg
-            row.getCell(4 + cells.length).alignment = {horizontal: 'center'}   // Enrich p
-            const qCell = row.getCell(5 + cells.length)                        // FDR q
-            qCell.alignment = {horizontal: 'center'}
-            if (g.enrichQ != null && g.enrichQ < 0.05) qCell.font = {bold: true, color: {argb: 'FF1E8449'}}
+            for (const col of [CG, DN, CAT, PALL, PGN, PDN, FOLD, PVAL, QVAL]) row.getCell(col).alignment = {horizontal: 'center'}
+            if (g.fold != null && g.fold >= 5) row.getCell(FOLD).font = {bold: true, color: {argb: 'FF1E8449'}}
+            if (g.enrichQ != null && g.enrichQ < 0.05) row.getCell(QVAL).font = {bold: true, color: {argb: 'FF1E8449'}}
             // Emphasise rows with independent recurrence (≥2 individuals anywhere)
             if (g.refIndividuals >= 2) row.getCell(1).font = {bold: true}
         })
@@ -1919,31 +1946,43 @@ app.post('/api/export/xlsx', async (req, res) => {
                         geneTermsFor(gene, providerByGene.get(gene), geneAnnotations.get(gene), gsLibs))
                 }
 
-                // Cohort eligible-gene universe = every gene with a callable
-                // variant in the FULL loaded set — the de-novo-appropriate
-                // enrichment background (NOT the genome). Term counts come from
-                // the offline bundles + gene-set libraries (no cohort-wide MyGene
-                // domains), so the protein-domain dimension gets no bg/enrichment.
-                // Degrades gracefully (empty universe → counts only) on failure.
-                let utc = {counts: {}, size: 0}, selectedSize = 0
+                // Background = each source's OWN gene universe (per-source
+                // prevalence: "% of all genes in the category"), from the full
+                // offline bundles + gene-set libraries — NOT the cohort. The
+                // protein-domain dimension has no offline source, so it gets no
+                // prevalence/ORA. Degrades gracefully (counts only) on failure.
+                const selectedGenes = new Set(geneTerms.keys())   // UPPER selected genes
+                const selectedSize = selectedGenes.size
+                let sourceUniverse = {}, selectedSizes = {}
                 try {
-                    const gnB = gnomadProvider.getBundle(), cvB = clinvarProvider.getGenes(), gcB = genccProvider.getGenes()
-                    const universeGeneTerms = new Map()
-                    for (const v of variants) {
-                        const gene = v[geneCol]; if (!gene) continue
-                        const UP = String(gene).toUpperCase()
-                        if (universeGeneTerms.has(UP)) continue
-                        const provObj = {gnomad: gnB && gnB.get(UP), clinvar: cvB && cvB.get(UP), gencc: gcB && gcB.get(UP)}
-                        universeGeneTerms.set(UP, geneTermsFor(gene, provObj, null, gsLibs))
+                    // The constraint prevalence/ORA must use the SAME gnomAD build
+                    // as the per-gene constraint terms. getBundle() is always
+                    // v4.1/GRCh38; for a GRCh37 export the per-gene terms come from
+                    // the live v2.1.1 API, so skip the constraint universe (it
+                    // degrades to counts-only, like the domain dimension) rather
+                    // than mixing builds into a bogus prevalence/fold/p-value.
+                    const gnB = gnomadProvider.refGenome(exportCfg) === 'GRCh38' ? gnomadProvider.getBundle() : null
+                    const cvB = clinvarProvider.getGenes(), gcB = genccProvider.getGenes()
+                    sourceUniverse = sourceUniverseStats({gnomad: gnB, clinvar: cvB, gencc: gcB}, gsLibs)
+                    // ORA draw n restricted per dimension to genes the source can score.
+                    const srcMap = {constraint: gnB, clinvar: cvB, gencc: gcB, ...gsLibs}
+                    for (const d of dimensions) {
+                        const m = srcMap[d.id]
+                        if (!m) continue
+                        let c = 0
+                        for (const g of selectedGenes) if (m.has(g)) c++
+                        selectedSizes[d.id] = c
                     }
-                    utc = universeTermCounts(universeGeneTerms)
-                    selectedSize = geneTerms.size
-                } catch (uErr) { log.warn('Gene Analysis enrichment background skipped:', uErr.message) }
+                } catch (uErr) { log.warn('Gene Analysis prevalence/background skipped:', uErr.message) }
+
+                // Proband base = ALL distinct probands in the loaded cohort.
+                const totalProbands = xlsSampleCol
+                    ? new Set(variants.map(v => v[xlsSampleCol] || 'unknown')).size : 1
 
                 const conv = computeConvergence(filtered, {
                     geneCol, impactCol: gaImpactCol, sampleCol: xlsSampleCol,
-                    geneTerms, minCount: gaCfg.minCount || 2,
-                    dimensions, universeTermCounts: utc, selectedSize,
+                    geneTerms, minCount: gaCfg.minCount || 2, dimensions,
+                    sourceUniverse, selectedSizes, selectedSize, totalProbands,
                 })
                 buildGeneAnalysisSheet(workbook, conv, {headerFill, headerFont, borderThin})
             } catch (sectionErr) {

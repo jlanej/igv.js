@@ -134,23 +134,49 @@ function benjaminiHochberg(pvals) {
 }
 
 /**
- * Count, over the cohort's eligible-gene universe, how many genes carry each
- * term per dimension — the K and N inputs to the enrichment test and the
- * denominator for the background-frequency column. Pure.
- * @param {Map<string,Object>} universeGeneTerms  gene(UPPER) -> {dimId:[terms]}
- * @returns {{counts:Object, size:number}}  counts[dimId][term] = #universe genes
+ * Per-source genome prevalence: for each dimension, how many genes in THAT
+ * source's own universe carry each term, and the universe size. This is the
+ * "% of all genes in the category" denominator (per-source, cohort-independent)
+ * and the ORA background. Pure — takes the already-loaded bundle Maps + the
+ * gene-set library Maps. Term derivation MUST match geneTermsFor so the source
+ * counts and the per-gene terms agree.
+ * @param {{gnomad?:Map, clinvar?:Map, gencc?:Map}} bundles
+ * @param {Object<string,Map>} [geneSetLibs]  {dimId: Map<UPPER,[terms]>}
+ * @returns {Object<string,{size:number, counts:Object}>}  by dimension id
  */
-function universeTermCounts(universeGeneTerms) {
-    const counts = {}
-    let size = 0
-    for (const terms of universeGeneTerms.values()) {
-        size++
-        for (const dimId of Object.keys(terms)) {
-            const bucket = counts[dimId] || (counts[dimId] = {})
-            for (const term of terms[dimId] || []) bucket[term] = (bucket[term] || 0) + 1
+function sourceUniverseStats(bundles, geneSetLibs) {
+    const out = {}
+    const gn = bundles && bundles.gnomad
+    if (gn && gn.size) {
+        const counts = {}
+        for (const rec of gn.values()) {
+            if (rec && typeof rec.loeuf === 'number' && rec.loeuf < 0.6) counts['LOEUF < 0.6 (LoF-constrained)'] = (counts['LOEUF < 0.6 (LoF-constrained)'] || 0) + 1
+            if (rec && typeof rec.pli === 'number' && rec.pli >= 0.9) counts['pLI ≥ 0.9'] = (counts['pLI ≥ 0.9'] || 0) + 1
+        }
+        out.constraint = {size: gn.size, counts}
+    }
+    const cv = bundles && bundles.clinvar
+    if (cv && cv.size) {
+        let plp = 0
+        for (const rec of cv.values()) if (rec && rec.plp > 0) plp++
+        out.clinvar = {size: cv.size, counts: {'Has ClinVar P/LP': plp}}
+    }
+    const gc = bundles && bundles.gencc
+    if (gc && gc.size) {
+        const counts = {}
+        for (const rec of gc.values()) if (rec && Array.isArray(rec.moi)) for (const m of rec.moi) counts[m] = (counts[m] || 0) + 1
+        out.gencc = {size: gc.size, counts}
+    }
+    if (geneSetLibs) {
+        for (const dimId of Object.keys(geneSetLibs)) {
+            const lib = geneSetLibs[dimId]
+            if (!lib || !lib.size) continue
+            const counts = {}
+            for (const terms of lib.values()) for (const t of terms) counts[t] = (counts[t] || 0) + 1
+            out[dimId] = {size: lib.size, counts}
         }
     }
-    return {counts, size}
+    return out
 }
 
 /**
@@ -168,16 +194,18 @@ function computeConvergence(variants, opts) {
     const dims = opts.dimensions || DIMENSIONS
     const cells = buildCells()
 
-    // Enrichment inputs (optional): the cohort eligible-gene universe.
-    const uCounts = (opts.universeTermCounts && opts.universeTermCounts.counts) || {}
-    const N = opts.universeTermCounts ? opts.universeTermCounts.size : 0   // universe gene count
-    const n = opts.selectedSize || 0                                       // selected (export) gene count
+    // Background = each annotation source's OWN gene universe (per-source
+    // prevalence), NOT the cohort. srcU[dimId] = {size:N, counts:{term:K}}.
+    const srcU = opts.sourceUniverse || {}
+    const selSizes = opts.selectedSizes || {}   // {dimId: #selected genes in that source} — ORA n
+    const nSel = opts.selectedSize || 0         // total distinct selected genes (descriptive denom)
+    const totalProbands = opts.totalProbands || 0   // ALL distinct probands in the cohort (Q1)
 
-    // acc[dimId][term][cellKey] = {individuals:Set, genes:Set}
+    // acc[dimId][term][cellKey] = {individuals:Set, genes:Set, variants:count}
     const acc = {}
     for (const d of dims) acc[d.id] = {}
-    const cellGenes = {}, cellInds = {}
-    for (const c of cells) { cellGenes[c.key] = new Set(); cellInds[c.key] = new Set() }
+    const cellGenes = {}, cellInds = {}, cellVars = {}
+    for (const c of cells) { cellGenes[c.key] = new Set(); cellInds[c.key] = new Set(); cellVars[c.key] = 0 }
 
     for (const v of variants) {
         const gene = geneCol ? v[geneCol] : null
@@ -197,13 +225,15 @@ function computeConvergence(variants, opts) {
             if (impactCol && c.tier.impacts && !c.tier.impacts.includes(impact)) continue
             cellGenes[c.key].add(upper)
             cellInds[c.key].add(individual)
+            cellVars[c.key]++                        // total DNMs in this stratum
             for (const d of dims) {
                 const tlist = terms[d.id] || []
                 for (const term of tlist) {
                     const bucket = acc[d.id][term] || (acc[d.id][term] = {})
-                    const cd = bucket[c.key] || (bucket[c.key] = {individuals: new Set(), genes: new Set()})
+                    const cd = bucket[c.key] || (bucket[c.key] = {individuals: new Set(), genes: new Set(), variants: 0})
                     cd.individuals.add(individual)   // <-- dedup by individual
                     cd.genes.add(upper)
+                    cd.variants++                    // DNMs hitting a category gene in this stratum
                 }
             }
         }
@@ -211,37 +241,50 @@ function computeConvergence(variants, opts) {
 
     const sections = dims.map(d => {
         const groups = []
-        const dimU = uCounts[d.id] || null   // {term: #universe genes} or null (no universe data)
+        const u = srcU[d.id] || null                            // {size, counts} or null
+        const nD = selSizes[d.id] != null ? selSizes[d.id] : nSel   // ORA draw restricted to source
         for (const term of Object.keys(acc[d.id])) {
             const bucket = acc[d.id][term]
-            const ref = bucket[REF_CELL] || {individuals: new Set(), genes: new Set()}
+            const ref = bucket[REF_CELL] || {individuals: new Set(), genes: new Set(), variants: 0}
             const refIndividuals = ref.individuals.size
             const refGenes = ref.genes.size
+            const refVariants = ref.variants
             if (refIndividuals < minCount && refGenes < minCount) continue
             const cellCounts = {}
             for (const c of cells) {
                 const cd = bucket[c.key]
-                cellCounts[c.key] = cd ? {individuals: cd.individuals.size, genes: cd.genes.size}
-                    : {individuals: 0, genes: 0}
+                cellCounts[c.key] = cd ? {individuals: cd.individuals.size, genes: cd.genes.size, variants: cd.variants}
+                    : {individuals: 0, genes: 0, variants: 0}
             }
-            // Enrichment vs the cohort universe (gene-level ORA). k = selected
-            // genes in the term (ref cell), K = universe genes in the term,
-            // n = selected genes, N = universe genes. bg = K/N (chance rate).
-            let bg = null, enrichP = null
-            if (dimU && dimU[term] != null && N > 0) {
-                const K = Math.max(dimU[term], refGenes)   // export ⊆ universe → K≥k
-                bg = dimU[term] / N
-                enrichP = hypergeomUpperTail(refGenes, N, K, n)
+            // Per-source genome prevalence (% of all genes in the category) +
+            // the optional ORA. catSize = K = source genes carrying the term,
+            // u.size = N; k/nD from the selected set restricted to the source.
+            let prevalence = null, enrichP = null, catSize = null
+            if (u && u.counts[term] != null && u.size > 0) {
+                catSize = u.counts[term]
+                prevalence = catSize / u.size
+                const K = Math.max(catSize, refGenes)   // selected ⊆ source → K≥k
+                enrichP = hypergeomUpperTail(refGenes, u.size, K, nD)
             }
-            groups.push({term, refIndividuals, refGenes, cells: cellCounts,
-                genes: [...ref.genes].sort(), bgFreq: bg, enrichP, enrichQ: null})
+            // Descriptive observed rates (denominators = YOUR selected totals,
+            // proband base = the whole cohort). All at the all·ALL ref cell.
+            const pctGenes = nSel > 0 ? refGenes / nSel : null
+            const pctDnms = cellVars[REF_CELL] > 0 ? refVariants / cellVars[REF_CELL] : null
+            const probandPct = totalProbands > 0 ? refIndividuals / totalProbands : null
+            // Fold needs a real proband base: without a sample column every
+            // variant collapses to one pseudo-proband (probandPct ≡ 100%), so a
+            // fold would be a meaningless 1/prevalence — leave it null.
+            const fold = (sampleCol && prevalence && prevalence > 0 && probandPct != null) ? probandPct / prevalence : null
+            groups.push({term, refIndividuals, refGenes, refVariants, catSize, cells: cellCounts,
+                genes: [...ref.genes].sort(), prevalence, pctGenes, pctDnms, fold,
+                enrichP, enrichQ: null})
         }
         // Rank by independent recurrence (individuals), then locus heterogeneity
         // (genes), then enrichment significance, then name.
         groups.sort((a, b) => b.refIndividuals - a.refIndividuals || b.refGenes - a.refGenes
             || ((a.enrichP == null ? 1 : a.enrichP) - (b.enrichP == null ? 1 : b.enrichP))
             || a.term.localeCompare(b.term))
-        return {id: d.id, label: d.label, groups}
+        return {id: d.id, label: d.label, groups, sourceSize: u ? u.size : null}
     })
 
     // Benjamini-Hochberg FDR across every enrichment test in the whole tab.
@@ -252,10 +295,12 @@ function computeConvergence(variants, opts) {
 
     const cellSummary = cells.map(c => ({
         key: c.key, label: c.label, statusKey: c.statusKey, tierKey: c.tierKey,
-        genes: cellGenes[c.key].size, individuals: cellInds[c.key].size
+        genes: cellGenes[c.key].size, individuals: cellInds[c.key].size, variants: cellVars[c.key]
     }))
 
-    return {cells: cellSummary, sections, hasSamples: !!sampleCol}
+    // Export-wide denominators for the proportions (so the sheet can show them).
+    return {cells: cellSummary, sections, hasSamples: !!sampleCol, totalProbands,
+        selectedSize: nSel, totalVariants: cellVars[REF_CELL]}
 }
 
 /**
@@ -294,7 +339,7 @@ function geneTermsFor(gene, providerObj, myGeneAnn, geneSetLibs) {
 }
 
 module.exports = {
-    computeConvergence, geneTermsFor, universeTermCounts,
+    computeConvergence, geneTermsFor, sourceUniverseStats,
     hypergeomUpperTail, benjaminiHochberg,
     DIMENSIONS, IMPACT_TIERS, STATUS_FILTERS, REF_CELL
 }

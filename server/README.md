@@ -493,9 +493,10 @@ The **Export XLSX** button generates a publication-ready workbook containing:
   WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes) the
   review's genes stack up on, counted by **distinct individuals** (not variants),
   stratified by curation {pass, all} × impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW,
-  ALL}. Each term shows a background rate plus a **hypergeometric enrichment
-  p-value and Benjamini-Hochberg FDR q** vs the cohort background, to separate
-  signal from chance. See *Gene convergence* below.
+  ALL}. Each term shows its **genome-wide prevalence** ("% of all genes") next to
+  the observed proband/gene/DNM rates and a **fold** ratio, so a "1% of genes but
+  50% of probands" contrast is visible at a glance; an optional hypergeometric
+  p / FDR q sits alongside. See *Gene convergence* below.
 - **Sample Summary** sheet – per-sample variant counts by impact group and
   frequency threshold, plus cohort statistics (mean, median, std dev)
 - **Sample QC** sheet – trio-aggregated QC metrics (if QC data is loaded)
@@ -616,20 +617,32 @@ grouping dimension it inverts `term → genes` and reports the shared terms:
   processes; **online**: protein domain (InterPro via MyGene). (MOI convergence —
   e.g. "5 of my genes are known autosomal-dominant disease genes" — and pathway
   convergence are strong de novo signals.)
-- **Stratification** – curation {pass, all} × cumulative impact tier {HIGH,
-  HIGH+MOD, HIGH+MOD+LOW, ALL}.
-- **Signal vs chance** – alongside the counts, each term carries `bg` (the
-  fraction of the cohort's eligible genes carrying it — the chance rate), an
-  **Enrich p** (one-tailed hypergeometric/Fisher test that the exported genes
-  over-represent the term versus the *whole loaded cohort* — the
-  de-novo-appropriate background, **not** the genome), and an **FDR q**
-  (Benjamini-Hochberg across every term). `q < 0.05` (green) is more than chance.
-  This is a **gene-level over-representation test**, not a de-novo mutation-rate
-  model — treat it as hypothesis-generating, and expect little to clear FDR at
-  small N (that is honest). Pathway dimensions overlap heavily, so only the top
-  25 terms per dimension are shown (the rest is noted, never silently dropped).
-- **Method** – distinct-individual counting is the primary, always-faithful
-  signal; the hypergeometric p/q is the "enrichment or chance?" backstop. A
+- **Stratification** – each term's counts split by curation {pass, all} ×
+  cumulative impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL}; every stratum cell
+  shows distinct probands **and their % of all probands in the cohort**.
+- **Signal vs chance (descriptive)** – the primary read is proportions you
+  compare by eye. **`% all genes`** is the category's *prevalence within its own
+  source* — e.g. the % of gnomAD-scored genes at pLI≥0.9, or a pathway's size ÷
+  the genes its library annotates — i.e. the chance rate. **`% genes` / `% DNMs`**
+  are the share of your selected genes / variants in the category. **`Fold`** =
+  proband-rate ÷ prevalence (e.g. 60% of probands vs 0.2% of genes ≈ 300×). The
+  striking case is a small `% all genes` next to a large cell % or `Fold` — "1%
+  of genes, but 50% of probands." A gene-count prevalence only *approximates* the
+  de-novo mutation-rate null (constrained/large genes are bigger targets), so
+  read marginal contrasts gently. Every proportion is backed by its raw counts —
+  the `# genes`, `# DNMs`, and `cat size` columns are the numerators, and the
+  denominators (cohort probands, selected genes, selected variants, and each
+  dimension's source-gene count) are printed in the header banners and section
+  headers — so any number can be reconstructed by hand.
+- **Optional inferential backstop** – **`Enrich p`** (one-tailed
+  hypergeometric/Fisher test that your selected genes over-represent the category
+  vs its source's genome) + **`FDR q`** (Benjamini-Hochberg; `q<0.05` green).
+  Gene-level ORA, not a de-novo mutation-rate model — secondary to the
+  proportions; expect little to clear FDR at small N. Pathway dimensions overlap
+  heavily, so only the top 25 terms per dimension are shown (the rest is noted,
+  never silently dropped).
+- **Method** – descriptive proportions are the primary, always-honest signal
+  (you judge the contrast); the hypergeometric p/q is a secondary backstop. A
   de-novo mutation-rate model (e.g. **denovolyzeR**, run at build time) is the
   principled next step once a multi-proband cohort accrues.
 

@@ -19,7 +19,7 @@ const clinvar = require('../providers/clinvar-provider')
 const gnomad = require('../providers/gnomad-provider')
 const gencc = require('../providers/gencc-provider')
 const geneLists = require('../providers/genelist-provider')
-const {computeConvergence, geneTermsFor, universeTermCounts, hypergeomUpperTail, benjaminiHochberg} = require('../gene-analysis')
+const {computeConvergence, geneTermsFor, sourceUniverseStats, hypergeomUpperTail, benjaminiHochberg} = require('../gene-analysis')
 const geneSets = require('../genesets')
 const registry = require('../annotation-registry')
 
@@ -333,39 +333,85 @@ describe('gene-analysis convergence (independent signals)', function () {
         expect(q[2]).to.be.closeTo(0.5, 1e-12)
     })
 
-    it('universe-based bg + hypergeometric enrichment attach to convergence groups', function () {
-        // Universe of 10 genes; term T carried by 3 (A,B,C). Export selects A,B.
-        const universe = new Map()
-        for (const g of ['A', 'B', 'C']) universe.set(g, {fam: ['T']})
-        for (const g of ['D', 'E', 'F', 'G', 'H', 'I', 'J']) universe.set(g, {fam: []})
-        const utc = universeTermCounts(universe)
-        expect(utc.size).to.equal(10)
-        expect(utc.counts.fam.T).to.equal(3)
+    it('sourceUniverseStats derives per-source prevalence from bundles + libraries', function () {
+        const gnomad = new Map([['A', {pli: 0.95}], ['B', {pli: 0.1}], ['C', {loeuf: 0.3}]])
+        const gencc = new Map([['A', {moi: ['Autosomal dominant']}], ['B', {moi: ['Autosomal recessive']}]])
+        const fam = new Map([['A', ['T']], ['B', ['T']], ['C', []]])
+        const su = sourceUniverseStats({gnomad, gencc}, {fam})
+        expect(su.constraint.size).to.equal(3)
+        expect(su.constraint.counts['pLI ≥ 0.9']).to.equal(1)                        // A
+        expect(su.constraint.counts['LOEUF < 0.6 (LoF-constrained)']).to.equal(1)    // C
+        expect(su.gencc.size).to.equal(2)
+        expect(su.gencc.counts['Autosomal dominant']).to.equal(1)
+        expect(su.fam.size).to.equal(3)
+        expect(su.fam.counts.T).to.equal(2)                                          // A,B
+    })
+
+    it('per-source prevalence + descriptive proportions + ORA attach to groups', function () {
+        // Source universe for dim "fam": 10 genes, term T carried by 3 (A,B,C).
+        const famLib = new Map([['A', ['T']], ['B', ['T']], ['C', ['T']],
+            ['D', []], ['E', []], ['F', []], ['G', []], ['H', []], ['I', []], ['J', []]])
+        const srcU = sourceUniverseStats({}, {fam: famLib})
+        expect(srcU.fam.size).to.equal(10)
+        expect(srcU.fam.counts.T).to.equal(3)
         const conv = computeConvergence(
             [{gene: 'A', s: 'X', impact: 'HIGH', curation_status: 'pass'},
              {gene: 'B', s: 'Y', impact: 'HIGH', curation_status: 'pass'}],
             {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 2,
                 geneTerms: new Map([['A', {fam: ['T']}], ['B', {fam: ['T']}]]),
-                dimensions: [{id: 'fam', label: 'Family'}], universeTermCounts: utc, selectedSize: 2})
-        const grp = conv.sections.find(s => s.id === 'fam').groups.find(g => g.term === 'T')
+                dimensions: [{id: 'fam', label: 'Family'}], sourceUniverse: srcU,
+                selectedSizes: {fam: 2}, selectedSize: 2, totalProbands: 20})
+        const fam = conv.sections.find(s => s.id === 'fam')
+        const grp = fam.groups.find(g => g.term === 'T')
         expect(grp.refGenes).to.equal(2)
-        expect(grp.bgFreq).to.be.closeTo(0.3, 1e-9)          // 3/10
-        expect(grp.enrichP).to.be.closeTo(3 / 45, 1e-9)      // C(3,2)C(7,0)/C(10,2)
-        expect(grp.enrichQ).to.be.closeTo(3 / 45, 1e-9)      // single test
+        expect(grp.prevalence).to.be.closeTo(0.3, 1e-9)          // 3/10 (per-source)
+        expect(grp.pctGenes).to.be.closeTo(1, 1e-9)              // 2 of 2 selected genes
+        expect(grp.pctDnms).to.be.closeTo(1, 1e-9)               // 2 of 2 variants
+        expect(grp.fold).to.be.closeTo((2 / 20) / 0.3, 1e-9)     // proband-rate / prevalence
+        expect(grp.enrichP).to.be.closeTo(3 / 45, 1e-9)          // hypergeom(2,10,3,2)
+        expect(grp.enrichQ).to.be.closeTo(3 / 45, 1e-9)          // single test
+        // Raw counts to reconstruct the proportions
+        expect(grp.catSize).to.equal(3)                          // source genes in T (% all genes numerator)
+        expect(grp.refVariants).to.equal(2)                      // your variants in T (% DNMs numerator)
+        expect(fam.sourceSize).to.equal(10)                      // source universe size (% all genes denom)
+        expect(conv.totalProbands).to.equal(20)
+        expect(conv.selectedSize).to.equal(2)                    // % genes denominator
+        expect(conv.totalVariants).to.equal(2)                   // % DNMs denominator
     })
 
-    it('a dimension with no universe term data gets null bg/enrichment', function () {
-        const utc = universeTermCounts(new Map([['A', {domain: []}], ['B', {domain: []}]]))
+    it('a dimension with no source universe gets null prevalence/ORA but keeps descriptive rates', function () {
         const conv = computeConvergence(
             [{gene: 'A', s: 'X', impact: 'HIGH', curation_status: 'pass'},
              {gene: 'B', s: 'Y', impact: 'HIGH', curation_status: 'pass'}],
             {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 2,
                 geneTerms: new Map([['A', {domain: ['Dom']}], ['B', {domain: ['Dom']}]]),
-                dimensions: [{id: 'domain', label: 'Domain'}], universeTermCounts: utc, selectedSize: 2})
+                dimensions: [{id: 'domain', label: 'Domain'}], sourceUniverse: {}, selectedSize: 2, totalProbands: 5})
         const grp = conv.sections.find(s => s.id === 'domain').groups[0]
-        expect(grp.bgFreq).to.equal(null)
+        expect(grp.prevalence).to.equal(null)
         expect(grp.enrichP).to.equal(null)
         expect(grp.enrichQ).to.equal(null)
+        expect(grp.fold).to.equal(null)
+        expect(grp.pctGenes).to.be.closeTo(1, 1e-9)              // rates need no source
+    })
+
+    it('no sample column → probands collapse, Fold suppressed, prevalence intact', function () {
+        const srcU = sourceUniverseStats({}, {fam: new Map([['A', ['T']], ['B', ['T']], ['C', ['T']], ['D', []]])})
+        const conv = computeConvergence(
+            [{gene: 'A', impact: 'HIGH', curation_status: 'pass'}, {gene: 'B', impact: 'HIGH', curation_status: 'pass'}],
+            {geneCol: 'gene', impactCol: 'impact', sampleCol: null, minCount: 2,
+                geneTerms: new Map([['A', {fam: ['T']}], ['B', {fam: ['T']}]]),
+                dimensions: [{id: 'fam', label: 'Family'}], sourceUniverse: srcU,
+                selectedSizes: {fam: 2}, selectedSize: 2, totalProbands: 1})
+        const grp = conv.sections.find(s => s.id === 'fam').groups[0]
+        expect(conv.hasSamples).to.equal(false)
+        expect(grp.fold).to.equal(null)                          // no proband base → no fold
+        expect(grp.prevalence).to.be.closeTo(3 / 4, 1e-9)        // prevalence still valid (3 of 4)
+    })
+
+    it('sourceUniverseStats omits constraint when no gnomad bundle (GRCh37 build gate)', function () {
+        const su = sourceUniverseStats({clinvar: new Map([['A', {plp: 1}]])}, {})
+        expect(su.constraint).to.equal(undefined)
+        expect(su.clinvar.size).to.equal(1)
     })
 })
 
