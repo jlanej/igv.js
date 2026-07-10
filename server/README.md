@@ -604,15 +604,16 @@ Annotation Status tab, never a failed export.
 The bundled ClinVar, gnomAD, GenCC, and gene-set snapshots are regenerated with
 `npm run build-annotation-data`, which streams NCBI's public-domain ClinVar
 `variant_summary.txt.gz` line-by-line (to bound memory) and downloads the gnomAD
-v4.1 constraint table, the GenCC submissions export, and the gene-set GMT/TSV
-sources, slimming each to a per-gene JSON. Build individual groups by name, e.g.
-`node scripts/build-annotation-data.js genesets` (also `clinvar`, `gnomad`, `gencc`).
+v4.1 constraint table, the GenCC submissions export, the gene-set GMT/TSV sources,
+and the InterPro domain map, slimming each to a per-gene JSON. Build individual
+groups by name, e.g. `node scripts/build-annotation-data.js genesets` (also
+`clinvar`, `gnomad`, `gencc`, `interpro`).
 
 #### Gene-set libraries (Gene Analysis convergence dimensions)
 
-These bundled libraries (`data/genesets/*.json.gz`, `gene → [set names]`) add
-convergence dimensions only — they are **not** per-gene Gene Summary columns (a
-gene belongs to many pathways). All are offline and cleanly licensed:
+These bundled libraries (`data/genesets/*.json.gz`, `gene → [set names]`) are
+convergence dimensions only — **not** per-gene Gene Summary columns (a gene
+belongs to many pathways). All are offline and cleanly licensed:
 
 | Library | Adds | Source | Licence |
 |---------|------|--------|---------|
@@ -620,11 +621,15 @@ gene belongs to many pathways). All are offline and cleanly licensed:
 | **WikiPathways** | community pathways | WikiPathways GMT (Entrez→symbol via HGNC) | CC0 1.0 |
 | **HGNC gene families** | curated gene families/superfamilies | HGNC `gene_group` | attribution |
 | **MSigDB Hallmark** | 50 broad, well-separated processes | MSigDB `h.all` (symbols) | CC BY 4.0 |
+| **InterPro domain** | protein domains — the *background* for the existing "Protein domain" dimension (`interpro_domain.json.gz`, ~19k human genes) | Ensembl BioMart `interpro_description` (byte-identical to MyGene's `.desc`), per-chromosome | InterPro CC0 / EMBL-EBI |
 
 Pathway sets are capped at ≤500 genes at build time (generic mega-pathways add
 noise, not signal). KEGG and BioCarta are deliberately excluded (encumbered
-licences); a test asserts none leak into the Hallmark bundle. Complex Portal,
-GO-slim, and HPO are candidate future additions.
+licences); a test asserts none leak into the Hallmark bundle. The InterPro bundle
+makes the **protein-domain dimension fully offline** (terms *and* background from
+the same source, so they align exactly) and is fetched per-chromosome to avoid
+the ~100 GB genome-wide `protein2ipr`; with it absent, domain terms fall back to
+MyGene (no background). Complex Portal, GO-slim, and HPO are future additions.
 
 ### Gene convergence (Gene Analysis tab)
 
@@ -658,11 +663,11 @@ grouping dimension it inverts `term → genes` and reports the shared terms:
   - The striking case is a small `% all genes` next to a large `% samples`/`Fold` —
     "1% of genes but 50% of samples." Every proportion reconstructs from the raw
     count columns (`# samples`, `# DNMs`, `cat size`) and the banner denominators.
-- **Dimensions (8)** – **offline**: constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9),
-  ClinVar P/LP history, **GenCC Mode of Inheritance**, **Reactome** &
-  **WikiPathways** pathways, **HGNC gene families**, **MSigDB Hallmark**
-  processes; **online**: protein domain (InterPro via MyGene — no prevalence/
-  p-values until its background is bundled). On **GRCh37/hg19** exports the
+- **Dimensions (8, all offline)** – constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9),
+  ClinVar P/LP history, **GenCC Mode of Inheritance**, **protein domain**
+  (InterPro, human gene→domain bundled from Ensembl/InterPro — terms and
+  background from the same source), **Reactome** & **WikiPathways** pathways,
+  **HGNC gene families**, **MSigDB Hallmark** processes. On **GRCh37/hg19** exports the
   constraint dimension shows `—` for prevalence/fold/p (the bundled constraint
   universe is gnomAD v4.1/GRCh38 only). Pathway dimensions overlap heavily, so
   only the top 25 terms per dimension (by pass samples) are shown; the rest is

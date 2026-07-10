@@ -322,8 +322,58 @@ async function buildGeneSets() {
     }, parseGmt(hmText, hmName, null, null))
 }
 
+// -------------------------------------------------------------------------
+// InterPro protein-domain background: human gene -> [InterPro entry names].
+// Sources the "Protein domain" convergence dimension AND its background offline.
+// Ensembl BioMart's interpro_description is byte-identical to MyGene's
+// interpro[].desc, so export domain terms and the background align exactly (no
+// remapping). Human-only (~3 MB, one request) — no need for protein2ipr (~100 GB).
+// -------------------------------------------------------------------------
+const BIOMART_URL = 'https://www.ensembl.org/biomart/martservice'
+const BIOMART_QUERY = '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE Query>' +
+    '<Query virtualSchemaName="default" formatter="TSV" header="0" uniqueRows="1" datasetConfigVersion="0.6">' +
+    '<Dataset name="hsapiens_gene_ensembl" interface="default">' +
+    '<Attribute name="external_gene_name"/><Attribute name="interpro"/><Attribute name="interpro_description"/>' +
+    '</Dataset></Query>'
+
+async function buildInterproDomain() {
+    process.stdout.write(`Fetching ${BIOMART_URL} (human gene → InterPro) …\n`)
+    // BioMart wants the query as a urlencoded form field; genome-wide pull is slow.
+    let text = ''
+    for (let attempt = 1; attempt <= 3 && text.split('\n').length < 10000; attempt++) {
+        const resp = await fetch(BIOMART_URL, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'query=' + encodeURIComponent(BIOMART_QUERY),
+        })
+        if (resp.ok) text = await resp.text()
+        if (/^error|not allowed|<html/i.test(text.slice(0, 40))) text = ''
+        if (text.split('\n').length < 10000) await new Promise(r => setTimeout(r, 4000))
+    }
+    if (text.split('\n').length < 10000) throw new Error('BioMart returned too few rows (transient? retry)')
+
+    const byGene = {}   // UPPER symbol -> Set(domain description)
+    for (const line of text.split('\n')) {
+        const c = line.split('\t')       // gene \t IPR accession \t interpro_description
+        const sym = (c[0] || '').trim().toUpperCase()
+        const desc = (c[2] || '').trim()
+        if (!sym || !desc) continue
+        ;(byGene[sym] || (byGene[sym] = new Set())).add(desc)
+    }
+    const genes = {}
+    for (const sym of Object.keys(byGene)) genes[sym] = [...byGene[sym]].sort()
+    writeGeneSet('interpro_domain', {
+        id: 'domain', label: 'Protein domain (InterPro)',
+        source: 'Ensembl BioMart hsapiens_gene_ensembl (external_gene_name + interpro_description)',
+        version: 'Ensembl current', url: BIOMART_URL,
+        license: 'EMBL-EBI terms (InterPro CC0); Ensembl free to use',
+        licenseUrl: 'https://www.ebi.ac.uk/about/terms-of-use',
+        note: 'aligns with MyGene interpro[].desc', builtWith: 'build-annotation-data.js buildInterproDomain',
+    }, genes)
+}
+
 // Named build steps — run all, or only those named on the CLI.
-const STEPS = {clinvar: buildClinvar, gnomad: buildGnomad, gencc: buildGencc, genesets: buildGeneSets}
+const STEPS = {clinvar: buildClinvar, gnomad: buildGnomad, gencc: buildGencc, genesets: buildGeneSets, interpro: buildInterproDomain}
 
 async function main() {
     try {

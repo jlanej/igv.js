@@ -34,6 +34,7 @@ const gsLibs = {
     wikipathways: geneSets.libMap('wikipathways'),
     hgncFamily: geneSets.libMap('hgncFamily'),
     msigdbHallmark: geneSets.libMap('msigdbHallmark'),
+    domain: geneSets.libMap('domain'),   // InterPro protein-domain background
 }
 const SRC = sourceUniverseStats({gnomad: gnB, clinvar: cvB, gencc: gcB}, gsLibs)
 
@@ -43,12 +44,15 @@ describe('litmus: bundled data loads with expected magnitudes', function () {
         expect(cvB.size, 'ClinVar').to.be.greaterThan(25000)    // ~31k
         expect(gcB.size, 'GenCC').to.be.greaterThan(5000)       // ~6.1k
     })
-    it('all four gene-set libraries are present and non-trivial', function () {
-        expect(geneSets.available().map(a => a.id)).to.include.members(['reactome', 'wikipathways', 'hgncFamily', 'msigdbHallmark'])
+    it('all gene-set libraries + the InterPro domain background are present and non-trivial', function () {
+        expect(geneSets.available().map(a => a.id)).to.include.members(['reactome', 'wikipathways', 'hgncFamily', 'msigdbHallmark', 'domain'])
         expect(gsLibs.reactome.size).to.be.greaterThan(8000)
         expect(gsLibs.wikipathways.size).to.be.greaterThan(6000)
         expect(gsLibs.hgncFamily.size).to.be.greaterThan(20000)
         expect(gsLibs.msigdbHallmark.size).to.be.greaterThan(3000)
+        expect(gsLibs.domain.size, 'InterPro domain').to.be.greaterThan(15000)   // ~19k human genes
+        // the domain library is a base-dim source (not a new convergence section)
+        expect(geneSets.available().find(a => a.id === 'domain').baseDim).to.equal(true)
     })
 })
 
@@ -66,7 +70,7 @@ describe('litmus: per-source prevalences are in sane ranges', function () {
         expect(ad, 'GenCC AD').to.be.within(0.40, 0.60)      // ~50.4%
     })
     it('every gene-set category prevalence is a small positive fraction', function () {
-        for (const id of ['reactome', 'wikipathways', 'hgncFamily', 'msigdbHallmark']) {
+        for (const id of ['reactome', 'wikipathways', 'hgncFamily', 'msigdbHallmark', 'domain']) {
             const u = SRC[id]
             for (const t of Object.keys(u.counts)) {
                 const f = u.counts[t] / u.size
@@ -87,7 +91,7 @@ describe('litmus: geneTermsFor and sourceUniverseStats agree (the key invariant)
         for (const g of realGenes) {
             const terms = geneTermsFor(g, {gnomad: gnB.get(g), clinvar: cvB.get(g), gencc: gcB.get(g)}, null, gsLibs)
             for (const dim of Object.keys(terms)) {
-                if (dim === 'domain') continue   // no offline source (MyGene only)
+                // domain now has an offline source (InterPro bundle), so include it
                 for (const t of terms[dim] || []) {
                     checks++
                     expect(SRC[dim] && SRC[dim].counts[t], `${g}/${dim}/${t}`).to.be.greaterThan(0)

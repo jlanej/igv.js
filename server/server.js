@@ -1345,14 +1345,14 @@ function buildReadmeSheet(workbook, opts) {
     if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) {
         section('Gene Analysis — how to read it')
         row('Purpose', 'For each grouping dimension, shows which shared attributes (categories) your genes converge on — the signal when de novo hits are singletons scattered across genes. ALL summary stats (right of the grid) are IGV-PASS only.')
-        row('Grid cells: n (%)', 'CONTEXT (all curation statuses). Each pass/impact cell = DISTINCT PROBANDS with a DNM in a category gene, and their % of ALL cohort probands. Split by curation {pass, all} × cumulative impact {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL} (ALL includes MODIFIER/blank). KEEP THE all·* ROWS AS A QUALITY FLAG: if a category has many "all" but few "pass" (all·ALL ≫ pass·ALL) it began with a lot of poor-quality calls — treat with suspicion.', 'impact × curation × sample')
-        row('cat size / % all genes', 'The BACKGROUND (chance rate). cat size = genes in the category within its own source universe; % all genes = cat size ÷ that source\'s gene count (shown in each section header) — e.g. % of gnomAD-scored genes at pLI≥0.9, or a pathway\'s size ÷ the genes its library annotates. Shows "—" for protein domain (no offline source yet) and for constraint on GRCh37 exports (the bundle is gnomAD v4.1/GRCh38 only).', 'per-source universe')
+        row('Grid cells: n (%)', 'CONTEXT (all curation statuses). Each pass/impact cell = DISTINCT PROBANDS with a DNM in a category gene, and their % of ALL cohort probands. Split by curation {pass, all} × cumulative impact {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL} (ALL includes MODIFIER/blank). Only categories reaching the pass threshold (≥2 pass samples OR genes) are listed; for each listed row the all·* cells are a QUALITY FLAG — a large all·ALL ≫ pass·ALL gap means its pass signal came from a pool with many poor-quality/non-pass calls, so treat that row with suspicion.', 'impact × curation × sample')
+        row('cat size / % all genes', 'The BACKGROUND (chance rate). cat size = genes in the category within its own source universe; % all genes = cat size ÷ that source\'s gene count (shown in each section header) — e.g. % of gnomAD-scored genes at pLI≥0.9, a pathway\'s size ÷ the genes its library annotates, or a protein domain\'s size ÷ ~19k human genes with any domain. Shows "—" only for constraint on GRCh37 exports (the bundle is gnomAD v4.1/GRCh38 only).', 'per-source universe')
         row('SAMPLE track: # samples / % samples / Fold(s)', 'The CONSERVATIVE, robust read (IGV-pass). # samples = distinct PASS probands with a DNM in a category gene (= the pass·ALL grid cell). % samples = # samples ÷ the count of pass probands (in the banner). Fold(s) = % samples ÷ % all genes. A hypermutated proband counts once, so it cannot inflate this. "1% of genes but 50% of samples" is the striking case.')
         row('samp p / samp q', 'Conservative SAMPLE test: Poisson-binomial probability of ≥ this many pass probands hitting the category by chance, where each proband\'s expected hit-rate accounts for its own pass-DNM burden (a proband with many DNMs is EXPECTED to hit, so its single hit is not surprising). "q" = Benjamini-Hochberg FDR across the tab (q<0.05 shown green). This is the primary statistic.', 'Poisson-binomial + BH')
         row('DNM track: # DNMs / % DNMs / Fold(d)', 'The less-conservative variant-level read (IGV-pass). # DNMs = PASS DNMs hitting a category gene (can exceed # samples — a proband may have several). % DNMs = # DNMs ÷ total pass DNMs (in the banner). Fold(d) = % DNMs ÷ % all genes.')
         row('DNM p / DNM q', 'DNM test: binomial probability of ≥ this many pass category DNMs, treating each pass DNM as an independent draw at the "% all genes" rate. Not deduped by proband, so less robust than samp p — use the SAMPLE track as the headline. "q" = BH FDR.', 'binomial + BH')
         row('# genes / Genes', 'Distinct PASS genes in the category, and their symbols (locus heterogeneity). A category is shown only if ≥2 pass samples OR ≥2 pass genes share it; bold rows recur across ≥2 pass samples.')
-        row('Dimensions', 'Offline: gnomAD constraint tail (LOEUF<0.6 / pLI≥0.9), ClinVar P/LP history, GenCC Mode-of-Inheritance, Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes. Online: protein domain (InterPro via MyGene; no prevalence/p-values until its background is bundled).', '8 dimensions')
+        row('Dimensions', 'All 8 offline: gnomAD constraint tail (LOEUF<0.6 / pLI≥0.9), ClinVar P/LP history, GenCC Mode-of-Inheritance, protein domain (InterPro, human gene→domain bundled from Ensembl/InterPro — terms + background from the same source), Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes. (If the InterPro bundle is absent, domain terms fall back to MyGene with no background.)', '8 dimensions')
         row('Reading pathways', 'Pathway dimensions overlap heavily (a gene sits in many pathways), so many near-identical rows can share the same genes — only the top 25 per dimension (by pass samples) are shown and the remainder is noted. Judge convergence by the gene list + the proportions, not by the number of rows.')
         row('Method', 'Descriptive proportions (prevalence vs the pass sample/DNM rates) are the primary read — you decide if a contrast is striking. The SAMPLE p/q is the conservative statistical backstop; the DNM p/q is a less-robust companion. A gene-count null only approximates the de-novo mutation-rate null, so treat marginal q gently; a mutation-rate model (e.g. denovolyzeR) is the principled next step once a multi-proband cohort accrues.')
     }
@@ -1440,7 +1440,7 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
     }
 
     addBanner('Gene Analysis — do the scattered single-hit genes converge?', {bold: true, size: 14, color: {argb: 'FF2C3E50'}})
-    addBanner(`All summary stats (right of the grid) are IGV-PASS only. The grid keeps both the pass·* and all·* rows as a QUALITY DIAGNOSTIC: if a category has many "all" but few "pass" (all·ALL ≫ pass·ALL), it started with a lot of poor-quality calls — treat with suspicion; otherwise the all-rows are just context. Each grid cell = distinct probands${hasSamples ? ` (and their % of all ${totalProbands} cohort probands)` : ' (no sample column — bare DNM count)'} with a DNM in a category gene.`,
+    addBanner(`All summary stats (right of the grid) are IGV-PASS only, and only categories reaching the pass keep-threshold (≥2 pass samples OR genes) are listed. The grid shows both pass·* and all·* rows so you can judge, FOR EACH LISTED CATEGORY, whether its pass convergence came from a noisy pool: a large gap (all·ALL ≫ pass·ALL) means many of its variants were poor-quality/non-pass — treat that row with suspicion. Each grid cell = distinct probands${hasSamples ? ` (and their % of all ${totalProbands} cohort probands)` : ' (no sample column — bare DNM count)'} with a DNM in a category gene.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
     addBanner(`Two IGV-pass tracks vs the category's genome prevalence ("% all genes" = cat size ÷ the source's gene count, in each section header — the chance rate):  SAMPLE level (conservative, robust) — "# samples" = distinct PASS probands with a category DNM, "% samples" = that ÷ ${nPassProbands} pass probands, "Fold" = %samples ÷ %all genes.  DNM level — "# DNMs" = PASS DNMs in the category, "% DNMs" = that ÷ ${nPassDnms} pass DNMs, "Fold" = %DNMs ÷ %all genes.  "1% of genes but 50% of samples" is the striking case.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
@@ -1783,8 +1783,11 @@ app.post('/api/export/xlsx', async (req, res) => {
             const geneNames = [...new Set(filtered.map(v => v[geneCol]).filter(Boolean))]
             if (geneNames.length > 0) {
                 const ga = exportCfg.geneAnnotations
-                // Hit MyGene if a MyGene column is requested, or Gene Analysis needs domains.
-                const wantMyGene = ga.geneName || ga.summary || ga.omim || ga.pathways || ga.geneType || (gaOn && gaCfg.domain)
+                // Hit MyGene if a MyGene column is requested, or Gene Analysis needs
+                // domains AND the offline InterPro domain bundle is unavailable
+                // (with the bundle, domains + their background come from it — no network).
+                const interproAvailable = geneSets.available().some(l => l.id === 'domain')
+                const wantMyGene = ga.geneName || ga.summary || ga.omim || ga.pathways || ga.geneType || (gaOn && gaCfg.domain && !interproAvailable)
                 const tasks = []
                 if (wantMyGene) {
                     tasks.push(fetchGeneAnnotationsBatch(geneNames)
@@ -1922,7 +1925,9 @@ app.post('/api/export/xlsx', async (req, res) => {
                 for (const lib of geneSets.available()) {
                     if (gaCfg[lib.id] === false) continue
                     gsLibs[lib.id] = geneSets.libMap(lib.id)
-                    gsDims.push({id: lib.id, label: lib.label})
+                    // baseDim libraries (InterPro domain) source an EXISTING base
+                    // dimension — don't add them as a new convergence section.
+                    if (!lib.baseDim) gsDims.push({id: lib.id, label: lib.label})
                 }
                 // Active dimensions = enabled base dims + enabled gene-set dims.
                 const dimensions = [...DIMENSIONS.filter(d => gaCfg[d.id] !== false), ...gsDims]
@@ -1936,9 +1941,8 @@ app.post('/api/export/xlsx', async (req, res) => {
 
                 // Background = each source's OWN gene universe (per-source
                 // prevalence: "% of all genes in the category"), from the full
-                // offline bundles + gene-set libraries — NOT the cohort. The
-                // protein-domain dimension has no offline source yet, so it gets
-                // no prevalence/p-values. Degrades gracefully on failure.
+                // offline bundles + gene-set libraries (incl. the InterPro domain
+                // bundle) — NOT the cohort. Degrades gracefully on failure.
                 let sourceUniverse = {}
                 try {
                     // Constraint prevalence must use the SAME gnomAD build as the

@@ -29,6 +29,10 @@ const MANIFEST = [
     {id: 'wikipathways',   file: 'wikipathways.json.gz',    fallbackLabel: 'Pathway (WikiPathways)'},
     {id: 'hgncFamily',     file: 'hgnc_family.json.gz',     fallbackLabel: 'Gene family (HGNC)'},
     {id: 'msigdbHallmark', file: 'msigdb_hallmark.json.gz', fallbackLabel: 'Hallmark process (MSigDB)'},
+    // baseDim: not a NEW convergence dimension — it is the offline gene->domain
+    // source + background for the existing base "domain" dimension (whose export
+    // terms otherwise come from MyGene). Same source both sides ⇒ perfect align.
+    {id: 'domain',         file: 'interpro_domain.json.gz', fallbackLabel: 'Protein domain (InterPro)', baseDim: true},
 ]
 
 // id -> {meta, genes: Map<UPPER_SYMBOL,[terms]>} | null (load failed / missing)
@@ -59,7 +63,7 @@ function available() {
     const out = []
     for (const m of MANIFEST) {
         const lib = loadLibrary(m.id)
-        if (lib) out.push({id: m.id, label: (lib.meta && lib.meta.label) || m.fallbackLabel, meta: lib.meta})
+        if (lib) out.push({id: m.id, label: (lib.meta && lib.meta.label) || m.fallbackLabel, meta: lib.meta, baseDim: !!m.baseDim})
     }
     return out
 }
