@@ -3644,7 +3644,7 @@ describe('Gene Summary impact counts and annotations', function () {
         const text = []
         ga.eachRow(r => r.eachCell(c => { if (c.value != null) text.push(String(c.value)) }))
         const joined = text.join(' | ')
-        expect(joined).to.contain('DISTINCT INDIVIDUALS')   // the independent-signal method note
-        expect(joined).to.contain('Gene set per cell')
+        expect(joined).to.contain('distinct probands')   // the independent-signal method note
+        expect(joined).to.contain('% all genes')          // the per-source prevalence column
     })
 })
