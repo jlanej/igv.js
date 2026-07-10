@@ -59,14 +59,14 @@ function buildCells() {
 // -------------------------------------------------------------------------
 // Enrichment statistics — "is this convergence more than chance?"
 //
-// A gene-level over-representation test (hypergeometric / one-tailed Fisher)
-// against the COHORT'S OWN eligible-gene universe (every gene carrying a
-// callable variant in the loaded data), NOT the genome. Using the cohort as
-// the background is what makes this defensible for de novo data: de novo
-// discovery is biased toward long, mutable genes, and the cohort's
-// variant-bearing genes carry that same bias, so it largely cancels. Still a
-// gene-level ORA — it is NOT a de-novo mutation-rate model (that needs a
-// multi-proband cohort + denovolyzeR); label it as such wherever shown.
+// An OPTIONAL gene-level over-representation test (hypergeometric / one-tailed
+// Fisher) backing the descriptive proportions. It runs against each annotation
+// SOURCE's own gene universe (per-source prevalence — gnomAD-scored genes,
+// ClinVar/GenCC gene sets, each gene-set library's gene set), i.e. the genome
+// prevalence of the category, NOT the cohort's variant-bearing genes. Still a
+// gene-level ORA — it is NOT a de-novo mutation-rate model (a gene-count null
+// only approximates the true length/mutability-weighted null; that needs a
+// multi-proband cohort + denovolyzeR), so it is secondary to the proportions.
 //
 // All pure, deterministic, dependency-free (log-gamma so large N is stable).
 // -------------------------------------------------------------------------
@@ -305,9 +305,9 @@ function computeConvergence(variants, opts) {
 
 /**
  * Derive the per-gene term lists (all dimensions) from the assembled
- * annotations. Used for BOTH the export's genes and the cohort universe (with
- * providerObj built from bundle lookups and myGeneAnn=null for the universe),
- * so the two agree on how a gene maps to terms.
+ * annotations, for the export's genes. Term derivation here MUST match
+ * sourceUniverseStats (which counts the same terms over each source's full gene
+ * universe) so a gene's terms and the per-source prevalence agree.
  * @param {string} gene
  * @param {Object} providerObj  {gnomad, clinvar, gencc} records for this gene
  * @param {Object|null} myGeneAnn  MyGene annotation (domains) — export genes only

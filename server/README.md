@@ -17,8 +17,9 @@ OpenDemand desktop access).
   notes; curation state is persisted to disk using stable genomic-coordinate
   keys (`chrom:pos:ref:alt`) that survive row reordering and variant
   additions/removals
-- **Gene summary** – post-filtering summarization showing genes that harbour
-  multiple variants passing current filters
+- **Gene summary** – post-filtering summarization with one row per gene,
+  aggregating each gene's filter-passing variants (curation counts,
+  impact-passing counts, distinct samples)
 - **Lollipop plots** – per-gene mutation lollipop plots with protein domain
   overlays (fetched from UniProt)
 - **Gene annotations** – pluggable gene-level annotations on the Gene Summary
@@ -31,9 +32,12 @@ OpenDemand desktop access).
   tier, ClinVar history, GenCC inheritance, protein domain, plus Reactome &
   WikiPathways pathways, HGNC gene families, and MSigDB Hallmark processes),
   counted by distinct individuals and stratified by curation × impact tier. Each
-  term carries a **hypergeometric enrichment p-value + Benjamini-Hochberg FDR q**
-  against the cohort's own eligible-gene background, so you can tell real
-  convergence from chance
+  term is shown against its source's **genome-wide prevalence** ("% of all
+  genes") next to the observed % of your genes / % of your DNMs / distinct-proband
+  rate and a **Fold** ratio, so a "1% of genes but 50% of probands" contrast is
+  visible at a glance; an optional one-tailed hypergeometric p + Benjamini-Hochberg
+  FDR q (against each annotation source's own gene universe) sits alongside as a
+  secondary backstop
 - **Contamination metrics** – per-variant kraken2 species/contamination summary
   in the Variants sheet and above each per-variant IGV screenshot
 - **Sample QC** – load a per-sample QC file (e.g. VerifyBamID freemix) to
@@ -139,7 +143,8 @@ automatically displayed and made filterable.
 Paths in the `*_file` and `*_index` columns can be:
 
 - **Relative** – resolved relative to `--data-dir`
-- **Absolute URLs** – `https://…` served directly
+- **Absolute URLs** – any value starting with `http` (`http://` or `https://`) is
+  served directly, unchanged
 
 If index files are co-located with the alignment files and follow standard
 naming (`.bam.bai`, `.cram.crai`), the index columns can be omitted.
@@ -164,7 +169,8 @@ used as a fallback.
 A **tab-separated** sample QC file can be loaded with `--sample-qc <path>` to
 display per-trio quality control metrics and apply colored warnings to
 variant table rows.  This is useful for flagging contaminated samples (e.g.
-VerifyBamID freemix) or low-coverage samples before curating variants.
+VerifyBamID freemix) before curating variants. (Only `freemix` currently drives
+warnings — see below; other metrics are displayed but not classified.)
 
 ### Required Columns
 
@@ -176,10 +182,14 @@ VerifyBamID freemix) or low-coverage samples before curating variants.
 
 ### QC Metric Columns
 
-All additional columns are treated as numeric QC metrics (e.g. `freemix`,
-`mean_coverage`, `chimeric_rate`).  Values are displayed per-role in the
-**Sample QC** tab and the worst-case value across the trio determines the
-row-level warning status.
+All additional columns are displayed per-role in the **Sample QC** tab (e.g.
+`freemix`, `mean_coverage`, `chimeric_rate`).  However, only metrics with
+configured threshold tiers are *classified*, and at present **only `freemix`
+has thresholds** (in the `QC_METRIC_THRESHOLDS` object in `server.js`).  So
+`freemix` is currently the only metric that can raise a warn/fail/critical
+row-level warning; other columns are shown but not evaluated until a matching
+entry is added to `QC_METRIC_THRESHOLDS`.  The worst-case classified value
+across the trio determines the row's warning status.
 
 ### Example File
 
@@ -199,7 +209,7 @@ The `freemix` column is classified into tiers automatically:
 
 | Status       | Freemix Range | Interpretation                                |
 |--------------|---------------|-----------------------------------------------|
-| **Pass**     | ≤ 0.01 (≤1%)  | Clean – no special handling needed             |
+| **Pass**     | < 0.01 (<1%)  | Clean – no special handling needed             |
 | **Warn**     | 0.01–0.03     | Caution – apply stricter DNM evidence filters  |
 | **Fail**     | 0.03–0.05     | Exclude sample/trio from DNM detection         |
 | **Critical** | ≥ 0.05 (≥5%)  | Hard fail – results are usually unreliable     |
@@ -276,9 +286,9 @@ that end with `_kraken2_spans_bed`, `_kraken2_expanded_bed`, or
 
 | Column                      | Description                                  |
 |-----------------------------|----------------------------------------------|
-| `kraken2_spans_bed`         | Path to standard span BED (global)           |
-| `kraken2_expanded_bed`      | Path to expanded span BED (global)           |
-| `kraken2_reads_bed`         | Path to per-read detail BED (global)         |
+| `kraken2_spans_bed`         | Path to standard span BED                    |
+| `kraken2_expanded_bed`      | Path to expanded span BED                    |
+| `kraken2_reads_bed`         | Path to per-read detail BED                  |
 | `child_kraken2_spans_bed`   | Path to child-specific span BED              |
 
 Paths follow the same resolution rules as alignment files (relative to
@@ -308,11 +318,19 @@ The server provides a REST API for species metrics:
 ```
 GET /api/species-metrics
 GET /api/species-metrics?variant_id=<id>
-GET /api/species-metrics?variant_key=<chr:pos:ref:alt>
+GET /api/species-metrics?variant_key=<chr:pos:ref:alt[:trio_id]>
 ```
 
 Returns per-variant or global species composition summaries parsed from the
-configured BED files.
+configured BED files.  `variant_key` must equal the variant's internal key,
+which appends `:trio_id` (or `:sample_id`) when the variant row has one — a bare
+`chr:pos:ref:alt` will not match rows from multi-sample/trio data.
+
+**Memory safeguards:** BED files larger than `SPECIES_MAX_BED_MB` (default
+300 MB) are skipped during metrics parsing (a warning is logged and metrics for
+that file come back empty), and parsed BED files are held in an LRU cache capped
+at `SPECIES_MAX_CACHED_FILES` (default 8). Both limits are overridable via those
+environment variables for large-RAM deployments.
 
 ### Contamination Assessment Tiers
 
@@ -323,7 +341,7 @@ The species metrics module classifies the non-human read fraction into tiers:
 | **Clean**   | ≤ 2%              | Minimal non-human signal – likely background |
 | **Caution** | 2–5%              | Low-level – apply stricter variant filters   |
 | **Concern** | 5–15%             | Moderate – investigate further               |
-| **High**    | ≥ 15%             | High – likely contamination artifact         |
+| **High**    | > 15%             | High – likely contamination artifact         |
 
 ### Docker Usage
 
@@ -341,18 +359,25 @@ docker run -p 3000:3000 \
 
 ## CLI Options
 
-| Flag               | Default                            | Description                    |
-|--------------------|------------------------------------|--------------------------------|
-| `--variants`       | `example_data/variants.tsv`        | Path to variant TSV file       |
-| `--data-dir`       | `example_data/`                    | Directory with BAM/CRAM files  |
-| `--genome`         | `hg38`                             | Reference genome for igv.js    |
-| `--port`           | `3000`                             | HTTP port                      |
-| `--curation-file`  | `<variants>.curation.json`         | Curation persistence file      |
-| `--host`           | `127.0.0.1`                        | Bind address (use `0.0.0.0` in containers) |
-| `--log-level`      | `info`                             | Log verbosity: `debug`, `info`, `warn`, `error` |
-| `--sample-qc`      | *(none)*                           | Path to sample QC TSV file (see below) |
-| `--check-md5`      | *(off)*                            | Re-enable CRAM MD5 reference checks (see Known Issues) |
-| `--bed-tracks`     | *(none)*                           | Species-annotated BED track files (see below) |
+Defaults for the three persistence files are derived from the variants path with
+the `.tsv` extension stripped — e.g. `variants.tsv` → `variants.curation.json`.
+
+| Flag                    | Default                                | Description                    |
+|-------------------------|----------------------------------------|--------------------------------|
+| `--variants`            | `example_data/variants.tsv`            | Path to variant TSV file       |
+| `--data-dir`            | `example_data/`                        | Directory with BAM/CRAM files (`--data_dir` also accepted) |
+| `--genome`              | `hg38`                                 | Reference genome for igv.js (`hg38`/`hg19`) |
+| `--port`                | `3000`                                 | HTTP port                      |
+| `--host`                | `127.0.0.1`                            | Bind address (use `0.0.0.0` in containers) |
+| `--curation-file`       | `<variants w/o .tsv>.curation.json`    | Curation persistence file      |
+| `--filters-file`        | `<variants w/o .tsv>.filters.json`     | Saved filter configurations    |
+| `--export-config-file`  | `<variants w/o .tsv>.export-config.json` | Saved export configuration   |
+| `--log-level`           | `info`                                 | Log verbosity: `debug`, `info`, `warn`, `error` |
+| `--sample-qc`           | *(none)*                               | Path to sample QC TSV file (see above) |
+| `--bed-tracks`          | *(none)*                               | Species-annotated BED track files (see above) |
+| `--vcf`                 | *(none)*                               | Path/URL to a VCF to show as a global IGV track (fallback when no per-variant VCF columns) |
+| `--vcf-samples`         | *(none)*                               | `role:sampleID` map for the `--vcf` track, e.g. `proband:NA12878,mother:NA12891,father:NA12892` |
+| `--check-md5`           | *(off)*                                | Re-enable CRAM MD5 reference checks (see Known Issues) |
 
 ## HPC Deployment
 
@@ -478,8 +503,9 @@ using row-index keys are automatically migrated on first load.
 The **Export XLSX** button generates a publication-ready workbook containing:
 
 - **Read Me** sheet – a guide to every worksheet plus a per-column data
-  dictionary (meaning, source, licence) for the Gene Summary annotations. This
-  is the first tab so reviewers can orient before reading the data.
+  dictionary (meaning, source, licence) covering both the Gene Summary
+  annotations and the Gene Analysis convergence columns. This is the first tab so
+  reviewers can orient before reading the data.
 - **Variants** sheet – styled table of filtered variants with curation status,
   auto-filters, frozen header row, and full-row coloring by curation status.
   Gene names link to their lollipop plot worksheets when available. When
@@ -543,7 +569,7 @@ from disk.
 | **Impact Counts** | Pass HIGH/MODERATE/LOW/ALL (on), HIGH/MODERATE/LOW/ALL totals (off) |
 | **Gene Analysis** | Convergence dimensions (constraint/ClinVar/GenCC/domain + Reactome/WikiPathways/HGNC-family/MSigDB-Hallmark), enrichment p + FDR q, min-count |
 | **Contamination** | Per-variant species columns + screenshot panel (when `--bed-tracks` set) |
-| **Worksheets** | Read Me, Gene Summary, Gene Analysis, Sample Summary, Sample QC, Applied Filters, Annotation Status |
+| **Worksheets** | Variants (always included), Read Me, Gene Summary, Gene Analysis, Sample Summary, Sample QC, Applied Filters, Annotation Status |
 | **Variant Columns** | Core (chrom/pos/ref/alt), Gene Info, Frequency, Quality, Genotypes, Allelic Depth, Genotype Quality, Sample Info, File Paths, Other Annotations |
 
 Most options default to **enabled**.  The variant column categories allow
@@ -559,7 +585,7 @@ Annotation Status tab, never a failed export.
 | Annotation | Columns | Source | Licence |
 |------------|---------|--------|---------|
 | **Impact passing review** | Pass HIGH / MODERATE / LOW / ALL | curation × impact | n/a |
-| **gnomAD constraint** | gnomAD LOEUF, pLI, LoF-constrained | bundled v4 (GRCh38); live API fallback for hg19 | CC0 |
+| **gnomAD constraint** | gnomAD LOEUF, pLI, LoF-constrained | bundled v4 (GRCh38); live API for hg19 (or hg38 if the bundled snapshot is missing) | CC0 |
 | **ClinVar** | ClinVar P, ClinVar LP, Has P/LP | bundled `data/annotations/*` | public domain |
 | **GenCC** | GenCC MOI (mode of inheritance), GenCC Validity | bundled `data/annotations/*` | CC0 |
 | **Gene-list membership** | one Yes/No column per list | `data/gene-lists/*.txt` | membership only |
@@ -577,10 +603,11 @@ Annotation Status tab, never a failed export.
   licence-restricted and is not embedded).
 
 The bundled ClinVar, gnomAD, GenCC, and gene-set snapshots are regenerated with
-`npm run build-annotation-data` (streams NCBI's public-domain ClinVar
-`variant_summary.txt.gz`, the gnomAD v4 constraint table, the GenCC
-submissions export, and the gene-set GMT/TSV sources, and slims each to a
-per-gene JSON). Build individual groups with e.g. `node scripts/build-annotation-data.js genesets`.
+`npm run build-annotation-data`, which streams NCBI's public-domain ClinVar
+`variant_summary.txt.gz` line-by-line (to bound memory) and downloads the gnomAD
+v4.1 constraint table, the GenCC submissions export, and the gene-set GMT/TSV
+sources, slimming each to a per-gene JSON. Build individual groups by name, e.g.
+`node scripts/build-annotation-data.js genesets` (also `clinvar`, `gnomad`, `gencc`).
 
 #### Gene-set libraries (Gene Analysis convergence dimensions)
 
@@ -616,18 +643,30 @@ grouping dimension it inverts `term → genes` and reports the shared terms:
   **WikiPathways** pathways, **HGNC gene families**, **MSigDB Hallmark**
   processes; **online**: protein domain (InterPro via MyGene). (MOI convergence —
   e.g. "5 of my genes are known autosomal-dominant disease genes" — and pathway
-  convergence are strong de novo signals.)
+  convergence are strong de novo signals.) On **GRCh37/hg19** exports the
+  constraint dimension's prevalence, Fold, and Enrich p/q are shown as "—" and it
+  degrades to counts-only — the bundled constraint universe is gnomAD v4.1/GRCh38
+  only, while the per-gene terms come from the live v2.1.1 API, so mixing them
+  would be invalid.
 - **Stratification** – each term's counts split by curation {pass, all} ×
   cumulative impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL}; every stratum cell
-  shows distinct probands **and their % of all probands in the cohort**.
+  shows distinct probands **and their % of all probands in the cohort** (when a
+  `sample_id`/`trio_id` column exists; otherwise it shows the bare DNM count, with
+  the % omitted). The `# genes`, `# DNMs`, `cat size`, and all the
+  proportion/Fold columns are anchored to the broadest **all·ALL** cell
+  (curation=all, impact=ALL) — only the stratum n(%) cells are split by curation ×
+  impact tier.
 - **Signal vs chance (descriptive)** – the primary read is proportions you
   compare by eye. **`% all genes`** is the category's *prevalence within its own
   source* — e.g. the % of gnomAD-scored genes at pLI≥0.9, or a pathway's size ÷
   the genes its library annotates — i.e. the chance rate. **`% genes` / `% DNMs`**
   are the share of your selected genes / variants in the category. **`Fold`** =
-  proband-rate ÷ prevalence (e.g. 60% of probands vs 0.2% of genes ≈ 300×). The
-  striking case is a small `% all genes` next to a large cell % or `Fold` — "1%
-  of genes, but 50% of probands." A gene-count prevalence only *approximates* the
+  proband-rate ÷ prevalence (e.g. 60% of probands vs 0.2% of genes ≈ 300×) —
+  requires a real proband base, so when the data has no `sample_id`/`trio_id`
+  column (every variant collapses to one pseudo-proband) the `Fold` column and the
+  per-cell proband % are omitted ("—"). The striking case is a small `% all genes`
+  next to a large cell % or `Fold` — "1% of genes, but 50% of probands." A
+  gene-count prevalence only *approximates* the
   de-novo mutation-rate null (constrained/large genes are bigger targets), so
   read marginal contrasts gently. Every proportion is backed by its raw counts —
   the `# genes`, `# DNMs`, and `cat size` columns are the numerators, and the
@@ -655,25 +694,47 @@ with data sheets only (no screenshots).
 Dockerfile                          # Multi-stage Docker build (→ Singularity SIF)
 .dockerignore                       # Docker build exclusions
 .github/workflows/
-├── server_test.yml                 # CI: run integration tests on push/PR
-└── docker_publish.yml              # CI: build & publish Docker image to GHCR
+├── server_test.yml                 # CI: run server integration tests on push/PR
+├── docker_publish.yml              # CI: build & publish Docker image to GHCR
+├── ci_build.yml                    # CI: build the igv.js dist bundle
+└── docs.yml                        # CI: build/publish docs
 server/
 ├── server.js                       # Express server & REST API
 ├── logger.js                       # Leveled logger with timestamps
 ├── lollipop.js                     # Lollipop plot SVG generator
 ├── pfam.js                         # Protein domain fetcher (UniProt API)
-├── gene-annotations.js             # Gene annotation fetcher (MyGene.info)
-├── export-config.js                # Export configuration defaults & helpers
-├── package.json                    # Dependencies
+├── gene-annotations.js             # MyGene.info fetcher (name/summary/OMIM/pathways/domains)
+├── annotation-registry.js          # Pluggable gene-annotation provider registry
+├── gene-analysis.js                # Gene Analysis convergence engine (computeConvergence, per-source stats)
+├── genesets.js                     # Bundled gene-set library loader (Reactome/WikiPathways/HGNC/Hallmark)
+├── species-metrics.js              # Kraken2 BED parsing + per-variant contamination metrics
+├── export-config.js                # Export configuration defaults & deep-merge helpers
+├── package.json                    # Dependencies & npm scripts
+├── providers/                      # Gene-annotation providers (each fails independently)
+│   ├── gnomad-provider.js          # gnomAD constraint (bundled v4/GRCh38 + live fallback)
+│   ├── clinvar-provider.js         # ClinVar P/LP gene-summary counts (bundled)
+│   ├── gencc-provider.js           # GenCC validity + Mode of Inheritance (bundled)
+│   └── genelist-provider.js        # Yes/No gene-list membership (user-supplied)
+├── data/
+│   ├── annotations/                # Bundled per-gene snapshots (clinvar/gnomad/gencc .json.gz)
+│   ├── genesets/                   # Bundled gene-set libraries (reactome/wikipathways/hgnc_family/msigdb_hallmark .json.gz)
+│   └── gene-lists/                 # User-supplied gene lists (*.txt) for membership columns (see its README)
+├── scripts/
+│   ├── build-annotation-data.js    # Rebuild bundled annotation + gene-set snapshots
+│   └── vcf_to_variants_tsv.js      # Convert a VCF to the variant TSV format
 ├── public/
 │   ├── index.html                  # Web UI
 │   ├── app.js                      # Client-side application logic
 │   └── styles.css                  # Styling
 ├── test/
-│   └── server.test.js              # Integration tests (Mocha/Chai/Supertest)
+│   ├── server.test.js              # Integration tests (Mocha/Chai/Supertest)
+│   ├── annotations.test.js         # Annotation providers + convergence/stats unit tests
+│   ├── giab_integration.test.js    # GIAB integration test
+│   ├── logger.test.js              # Logger unit tests
+│   └── data/                       # Test fixtures (giab/, test_kraken2_spans.bed)
 ├── example_data/
 │   ├── variants.tsv                # Example variant file
-│   └── sample_qc.tsv              # Example sample QC file
+│   └── sample_qc.tsv               # Example sample QC file
 └── README.md                       # This file
 ```
 
