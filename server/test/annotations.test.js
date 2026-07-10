@@ -275,8 +275,9 @@ describe('gene-analysis convergence (independent signals)', function () {
         const d1 = conv.sections.find(s => s.id === 'domain').groups.find(g => g.term === 'D1')
         expect(d1.refIndividuals).to.equal(2)   // X (once, not twice) + Y
         expect(d1.refGenes).to.equal(3)
-        expect(d1.cells['pass|HIGH']).to.deep.equal({individuals: 1, genes: 2})       // X only
-        expect(d1.cells['pass|HIGH_MOD']).to.deep.equal({individuals: 2, genes: 3})   // X + Y
+        // .include = subset match (cells also carry a `variants` count)
+        expect(d1.cells['pass|HIGH']).to.include({individuals: 1, genes: 2, variants: 2})       // X: G1+G2
+        expect(d1.cells['pass|HIGH_MOD']).to.include({individuals: 2, genes: 3, variants: 3})   // X + Y
     })
 
     it('falls back to gene-level convergence for a single proband', function () {
