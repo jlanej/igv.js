@@ -321,9 +321,13 @@ function computeConvergence(variants, opts) {
             const foldD = (pctDnms != null && prevalence > 0) ? pctDnms / prevalence : null
             const pDnm = prevalence != null ? binomUpperTail(refVariants, nPassDnms, prevalence) : null
             // Sample level needs a real proband base (no sample column ⇒ suppress).
+            // % samples is over the WHOLE cohort (all attempted probands, incl.
+            // those with 0 DNMs) — the honest denominator. The Poisson-binomial
+            // test is unchanged by 0-DNM probands (their p_i = 1-(1-prev)^0 = 0),
+            // so the burden vector need not be padded to the cohort size.
             let pctSamples = null, foldS = null, pSample = null
-            if (sampleCol && nPassProbands > 0) {
-                pctSamples = refIndividuals / nPassProbands
+            if (sampleCol && totalProbands > 0) {
+                pctSamples = refIndividuals / totalProbands
                 if (prevalence != null && prevalence > 0) {
                     foldS = pctSamples / prevalence
                     pSample = poissonBinomUpperTail(refIndividuals, burden.map(dd => 1 - Math.pow(1 - prevalence, dd)))

@@ -651,8 +651,10 @@ grouping dimension it inverts `term → genes` and reports the shared terms:
   within its own source* (`cat size` ÷ the source's gene count, shown per
   section) — the chance rate. Each term is then reported at two IGV-pass levels:
   - **Sample (conservative, headline):** `# samples` = distinct pass probands
-    with a category DNM (= the pass·ALL grid cell); `% samples` = ÷ pass probands;
-    `Fold(s)` = % samples ÷ % all genes. A hypermutated proband counts once, so it
+    with a category DNM (= the pass·ALL grid cell); `% samples` = ÷ the **true
+    cohort** (every attempted trio incl. those with 0 DNMs — the Sample-QC trio
+    count when loaded, else the distinct probands in the callset); `Fold(s)` =
+    % samples ÷ % all genes. A hypermutated proband counts once, so it
     can't inflate this. **`samp p`** is a Poisson-binomial test whose expected
     accounts for each proband's pass-DNM burden (so a many-DNM proband is
     *expected* to hit and its single hit isn't surprising); **`samp q`** = BH FDR.

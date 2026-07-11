@@ -119,8 +119,8 @@ describe('litmus: proportions are exactly reconstructable from the raw counts', 
     it('every proportion equals its raw-count ratio, and invariants hold', function () {
         for (const s of conv.sections) for (const g of s.groups) {
             if (g.prevalence != null) expect(g.prevalence).to.be.closeTo(g.catSize / s.sourceSize, 1e-9)
-            // SAMPLE track (pass): % samples = # samples ÷ pass probands
-            expect(g.pctSamples).to.be.closeTo(g.refIndividuals / conv.nPassProbands, 1e-9)
+            // SAMPLE track: % samples = # samples ÷ the true cohort (totalProbands)
+            expect(g.pctSamples).to.be.closeTo(g.refIndividuals / conv.totalProbands, 1e-9)
             if (g.foldS != null) expect(g.foldS).to.be.closeTo(g.pctSamples / g.prevalence, 1e-9)
             // DNM track (pass): % DNMs = # DNMs ÷ pass DNMs
             expect(g.pctDnms).to.be.closeTo(g.refVariants / conv.nPassDnms, 1e-9)

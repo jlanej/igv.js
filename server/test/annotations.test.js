@@ -391,9 +391,10 @@ describe('gene-analysis convergence (independent signals)', function () {
         expect(grp.catSize).to.equal(3)
         expect(fam.sourceSize).to.equal(10)
         expect(grp.prevalence).to.be.closeTo(0.3, 1e-9)          // 3/10
-        // SAMPLE track: pct = 2/2; fold = 1/0.3; burden [1,1] → probs [.3,.3] → PB(2) = .09
-        expect(grp.pctSamples).to.be.closeTo(1, 1e-9)
-        expect(grp.foldS).to.be.closeTo(1 / 0.3, 1e-9)
+        // SAMPLE track: % is over the COHORT (totalProbands=20) → 2/20; fold = 0.1/0.3.
+        // The Poisson-binomial test is unchanged by cohort size: burden [1,1] → probs [.3,.3] → PB(2)=.09.
+        expect(grp.pctSamples).to.be.closeTo(2 / 20, 1e-9)
+        expect(grp.foldS).to.be.closeTo((2 / 20) / 0.3, 1e-9)
         expect(grp.pSample).to.be.closeTo(0.3 * 0.3, 1e-9)
         expect(grp.qSample).to.be.closeTo(0.3 * 0.3, 1e-9)       // single test
         // DNM track: pct = 2/2; fold = 1/0.3; binom(2,2,0.3) = 0.09
