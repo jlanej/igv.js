@@ -1288,7 +1288,7 @@ function buildReadmeSheet(workbook, opts) {
     row('Read Me', 'This guide: worksheet overview, column dictionary, and data sources.')
     row('Variants', 'One row per exported variant. Rows are colour-coded by curation status (Pass/Fail/Uncertain/Pending). When --bed-tracks (kraken2 species BEDs) are configured, adds contamination columns: Contamination (assessment), Nonhuman %, Contam Reads, Nonhuman Reads, Top Taxa.')
     if (hasGene && exportCfg.sheets.geneSummary) row('Gene Summary', 'One row per gene: curation counts, impact-passing counts, and gene-level annotations. See the column dictionary below.')
-    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis', 'Convergence: which shared attributes (gnomAD constraint, ClinVar history, protein domain, GenCC inheritance; Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes) your genes stack up on. IGV-pass stats at two levels — SAMPLE (distinct probands, conservative) and DNM — each with a count, %, fold, and p/FDR q against the category\'s genome-wide prevalence ("% all genes"), so you can see "1% of genes but 50% of samples". The grid keeps the all-curation rows as a quality flag. See the dictionary below.')
+    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis (samples) / (DNMs)', 'Convergence, in two matching tabs: which shared attributes (gnomAD constraint, ClinVar history, protein domain, GenCC inheritance; Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes) your genes stack up on. Both are IGV-pass; the "(samples)" tab counts distinct probands (conservative headline), the "(DNMs)" tab counts pass DNMs. Each is a category × cumulative-impact-tier matrix of "count (%)" (with a green ✓ for FDR q<0.05, and the exact p/q to the right) against the category\'s genome-wide prevalence ("% all genes"), so you can see "1% of genes but 50% of samples". An all·ALL column flags noisy (non-pass) pools. See the dictionary below.')
     if (exportCfg.sheets.sampleSummary) row('Sample Summary', 'Per-sample variant counts by impact group and frequency threshold, with cohort mean/median.')
     if (hasSampleQc && exportCfg.sheets.sampleQc) row('Sample QC', 'Per-sample sequencing QC metrics with threshold-based pass/warn/fail assessment.')
     if (exportCfg.sheets.appliedFilters) row('Applied Filters', 'The filters and export settings used to produce this report (self-documenting).')
@@ -1344,17 +1344,17 @@ function buildReadmeSheet(workbook, opts) {
     // --- Gene Analysis dictionary ---
     if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) {
         section('Gene Analysis — how to read it')
-        row('Purpose', 'For each grouping dimension, shows which shared attributes (categories) your genes converge on — the signal when de novo hits are singletons scattered across genes. ALL summary stats (right of the grid) are IGV-PASS only.')
-        row('Grid cells: n (%)', 'CONTEXT (all curation statuses). Each pass/impact cell = DISTINCT PROBANDS with a DNM in a category gene, and their % of ALL cohort probands. Split by curation {pass, all} × cumulative impact {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL} (ALL includes MODIFIER/blank). Only categories reaching the pass threshold (≥2 pass samples OR genes) are listed; for each listed row the all·* cells are a QUALITY FLAG — a large all·ALL ≫ pass·ALL gap means its pass signal came from a pool with many poor-quality/non-pass calls, so treat that row with suspicion.', 'impact × curation × sample')
+        row('Two tabs', 'Convergence is split into TWO matching tabs by the unit of interest. "Gene Analysis (samples)" counts DISTINCT PASS PROBANDS — the conservative, robust headline (a hypermutated proband counts once and can\'t fake convergence). "Gene Analysis (DNMs)" counts PASS DNMs — the variant-level companion (a proband with several hits inflates it). Same categories, same background, same layout; only the counted unit and its test differ. The samples tab is omitted when the data has no sample column.', 'samples | DNMs')
+        row('Purpose', 'For each grouping dimension, shows which shared attributes (categories) your genes converge on — the signal when de novo hits are singletons scattered across genes. Everything on both tabs is IGV-PASS only.')
+        row('Pass-tier cells: count (%) ✓', 'The four "pass·…" columns are CUMULATIVE impact tiers (HIGH ⊆ HIGH+MOD ⊆ HIGH+MOD+LOW ⊆ ALL; ALL includes MODIFIER/blank). Each cell = the count of the tab\'s unit (probands or DNMs) in a category gene at that tier, and in parens their % of the base (the cohort probands on the samples tab, the total pass DNMs on the DNMs tab). A green "✓" marks a tier whose FDR q<0.05. Blank = 0. Reading across the tiers shows whether the convergence is concentrated in high-impact variants or only appears once low-impact hits are included.', 'impact tier × category')
+        row('“…p/q” columns (right)', 'The exact statistics behind each tier\'s ✓, kept to the right so the cells stay scannable: "p / q" = the uncorrected p-value and the Benjamini-Hochberg FDR q for that tier (green when q<0.05; "—" for an empty tier or a dimension with no background). Samples tab p: Poisson-binomial — probability of ≥ this many pass probands hitting the category by chance, where each proband\'s expected hit-rate uses its OWN pass-DNM burden at that tier (a proband with many DNMs is expected to hit, so its single hit is not surprising). DNMs tab p: binomial — each pass DNM at that tier is an independent draw at the "% all genes" rate (not deduped by proband, so less robust). Each tab\'s q is BH-corrected PER DIMENSION across its (category × tier) tests.', 'Poisson-binomial / binomial + BH')
+        row('all·ALL', 'QUALITY FLAG (all curation statuses, any impact): the tab\'s unit hitting the category regardless of IGV status. A large gap (all·ALL ≫ pass·ALL) means the category\'s pass signal was drawn from a pool with many poor-quality/non-pass calls — treat that row with suspicion.', 'curation quality check')
         row('cat size / % all genes', 'The BACKGROUND (chance rate). cat size = genes in the category within its own source universe; % all genes = cat size ÷ that source\'s gene count (shown in each section header) — e.g. % of gnomAD-scored genes at pLI≥0.9, a pathway\'s size ÷ the genes its library annotates, or a protein domain\'s size ÷ ~19k human genes with any domain. Shows "—" only for constraint on GRCh37 exports (the bundle is gnomAD v4.1/GRCh38 only).', 'per-source universe')
-        row('SAMPLE track: # samples / % samples / Fold(s)', 'The CONSERVATIVE, robust read (IGV-pass). # samples = distinct PASS probands with a DNM in a category gene (= the pass·ALL grid cell). % samples = # samples ÷ the TRUE cohort size (every attempted trio incl. those with 0 DNMs — the QC trio count when a Sample QC file is loaded, else distinct probands in the callset; shown in the banner). Fold(s) = % samples ÷ % all genes. A hypermutated proband counts once, so it cannot inflate this. "1% of genes but 50% of samples" is the striking case.')
-        row('samp p / samp q', 'Conservative SAMPLE test: Poisson-binomial probability of ≥ this many pass probands hitting the category by chance, where each proband\'s expected hit-rate accounts for its own pass-DNM burden (a proband with many DNMs is EXPECTED to hit, so its single hit is not surprising). "q" = Benjamini-Hochberg FDR across the tab (q<0.05 shown green). This is the primary statistic.', 'Poisson-binomial + BH')
-        row('DNM track: # DNMs / % DNMs / Fold(d)', 'The less-conservative variant-level read (IGV-pass). # DNMs = PASS DNMs hitting a category gene (can exceed # samples — a proband may have several). % DNMs = # DNMs ÷ total pass DNMs (in the banner). Fold(d) = % DNMs ÷ % all genes.')
-        row('DNM p / DNM q', 'DNM test: binomial probability of ≥ this many pass category DNMs, treating each pass DNM as an independent draw at the "% all genes" rate. Not deduped by proband, so less robust than samp p — use the SAMPLE track as the headline. "q" = BH FDR.', 'binomial + BH')
-        row('# genes / Genes', 'Distinct PASS genes in the category, and their symbols (locus heterogeneity). A category is shown only if ≥2 pass samples OR ≥2 pass genes share it; bold rows recur across ≥2 pass samples.')
+        row('Fold (pass·ALL)', 'The headline effect size at the pass·ALL tier: the observed pass·ALL rate ÷ "% all genes". On the samples tab the rate is # pass·ALL probands ÷ the TRUE cohort size (every attempted trio incl. 0-DNM ones — the QC trio count when a Sample QC file is loaded, else distinct probands in the callset; shown in the banner). On the DNMs tab it is # pass·ALL DNMs ÷ total pass DNMs. Bold-green at ≥5×. "1% of genes but 50% of samples" is the striking case.')
+        row('# genes / Genes', 'Distinct PASS genes in the category (pass·ALL), and their symbols (locus heterogeneity). A category is shown only if ≥2 pass samples OR ≥2 pass genes share it; a row is bold when ≥2 pass·ALL units share it.')
         row('Dimensions', 'All 8 offline: gnomAD constraint tail (LOEUF<0.6 / pLI≥0.9), ClinVar P/LP history, GenCC Mode-of-Inheritance, protein domain (InterPro, human gene→domain bundled from Ensembl/InterPro — terms + background from the same source), Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes. (If the InterPro bundle is absent, domain terms fall back to MyGene with no background.)', '8 dimensions')
-        row('Reading pathways', 'Pathway dimensions overlap heavily (a gene sits in many pathways), so many near-identical rows can share the same genes — only the top 25 per dimension (by pass samples) are shown and the remainder is noted. Judge convergence by the gene list + the proportions, not by the number of rows.')
-        row('Method', 'Descriptive proportions (prevalence vs the pass sample/DNM rates) are the primary read — you decide if a contrast is striking. The SAMPLE p/q is the conservative statistical backstop; the DNM p/q is a less-robust companion. A gene-count null only approximates the de-novo mutation-rate null, so treat marginal q gently; a mutation-rate model (e.g. denovolyzeR) is the principled next step once a multi-proband cohort accrues.')
+        row('Reading pathways', 'Pathway dimensions overlap heavily (a gene sits in many pathways), so many near-identical rows can share the same genes — only the top 25 per dimension (by pass·ALL count) are shown and the remainder is noted. Judge convergence by the gene list + the counts, not by the number of rows.')
+        row('Method', 'The counts vs "% all genes" (the fold) are the primary read — you decide if a contrast is striking. The SAMPLE tab\'s q is the conservative statistical backstop; the DNM tab\'s q is a less-robust companion. A gene-count null only approximates the de-novo mutation-rate null, so treat marginal q gently; a mutation-rate model (e.g. denovolyzeR) is the principled next step once a multi-proband cohort accrues.')
     }
 
     // --- Data sources & licensing ---
@@ -1386,103 +1386,85 @@ function buildReadmeSheet(workbook, opts) {
     ws.views = [{state: 'frozen', ySplit: 1}]
 }
 
+// The two Gene Analysis tabs — same category × pass-tier matrix, one per unit.
+const GA_SAMPLE_TRACK = {sheetName: 'Gene Analysis (samples)', countKey: 'individuals', qKey: 'qSample', pKey: 'pSample',
+    foldKey: 'foldSampleAll', unit: 'distinct PASS probands', unitShort: 'samples', testLabel: 'sample', conservative: true}
+const GA_DNM_TRACK = {sheetName: 'Gene Analysis (DNMs)', countKey: 'variants', qKey: 'qDnm', pKey: 'pDnm',
+    foldKey: 'foldDnmAll', unit: 'PASS DNMs', unitShort: 'DNMs', testLabel: 'DNM', conservative: false}
+
 /**
- * Build the "Gene Analysis" worksheet: gene convergence on shared attributes,
- * counted by DISTINCT INDIVIDUALS (probands), stratified by curation x impact
- * tier. `conv` is the output of computeConvergence(). Wrapped by the caller in
- * try/catch — must never break the export.
+ * Build one Gene Analysis tab: a category × pass-impact-tier matrix in ONE unit
+ * (probands or DNMs). Each pass-tier cell = "count (FDR q)". `conv` is the output
+ * of computeConvergence(); `track` is GA_SAMPLE_TRACK or GA_DNM_TRACK. Wrapped by
+ * the caller in try/catch — must never break the export.
  */
-function buildGeneAnalysisSheet(workbook, conv, styles) {
+function buildGeneAnalysisTab(workbook, conv, styles, track) {
     const {headerFill, headerFont, borderThin} = styles
-    const ws = workbook.addWorksheet('Gene Analysis')
-    const cells = conv.cells
-    const hasSamples = !!conv.hasSamples
-    const totalProbands = conv.totalProbands || 0        // TRUE cohort — grid % AND % samples base
-    const probandsWithVariant = conv.probandsWithVariant || totalProbands  // subset carrying ≥1 variant
-    const nPassDnms = conv.nPassDnms || 0                // pass DNMs — % DNMs base
-    // Columns: Group | grid cells | # genes | cat size | % all genes |
-    //   [SAMPLE: # samples, % samples, Fold, samp p, samp q] |
-    //   [DNM: # DNMs, % DNMs, Fold, DNM p, DNM q] | Genes.  All summary stats are
-    //   IGV-pass; the grid keeps the all-curation rows as a quality diagnostic.
-    const base = 1 + cells.length
-    const CG = base + 1, CAT = base + 2, PALL = base + 3,
-        NSAMP = base + 4, PSAMP = base + 5, FOLDS = base + 6, SPVAL = base + 7, SQVAL = base + 8,
-        NDNM = base + 9, PDN = base + 10, FOLDD = base + 11, DPVAL = base + 12, DQVAL = base + 13,
-        GENES = base + 14
-    const nCols = base + 14
-    const NUMERIC_COLS = [CG, CAT, PALL, NSAMP, PSAMP, FOLDS, SPVAL, SQVAL, NDNM, PDN, FOLDD, DPVAL, DQVAL]
+    const ws = workbook.addWorksheet(track.sheetName)
+    const passCells = conv.cells.filter(c => c.statusKey === 'pass')   // the 4 pass impact tiers, in order
+    const totalProbands = conv.totalProbands || 0
+    const probandsWithVariant = conv.probandsWithVariant || totalProbands
+    const nPassDnms = conv.nPassDnms || 0
+    // Columns: Category | 4 pass-tier "count (%) ✓" | all·ALL | # genes | cat size |
+    // % all genes | Fold | 4 pass-tier "p / q" | Genes.
+    const base = 1 + passCells.length
+    const ALLALL = base + 1, CG = base + 2, CAT = base + 3, PALL = base + 4, FOLD = base + 5
+    const PQ0 = base + 6                          // first per-tier "p / q" column
+    const GENES = PQ0 + passCells.length
+    const nCols = GENES
+
+    // % base for the count cells: cohort probands (samples) or total pass DNMs (DNMs).
+    const pctBase = track.conservative ? totalProbands : nPassDnms
 
     const fmtP = (p) => p == null ? '—' : (p < 0.001 ? p.toExponential(1) : p.toFixed(3))
-    const pct = (x) => {
-        if (x == null) return '—'
-        const v = x * 100
-        return `${v.toFixed(v < 0.1 ? 2 : (v < 1 ? 1 : 0))}%`
-    }
+    const pct = (x) => { if (x == null) return '—'; const v = x * 100; return `${v.toFixed(v < 0.1 ? 2 : (v < 1 ? 1 : 0))}%` }
     const fmtFold = (f) => f == null ? '—' : (f >= 10 ? `${Math.round(f)}×` : `${f.toFixed(1)}×`)
-    // Grid cell: distinct probands (+ % of the whole cohort) — context, all
-    // curation statuses. Bare count when there is no sample column.
-    const cellStr = (cc) => {
-        const n = (cc && cc.individuals) || 0
-        if (!n) return ''
-        return (hasSamples && totalProbands > 0) ? `${n} (${pct(n / totalProbands)})` : `${n}`
-    }
+    const cnt = (cc) => (cc && cc[track.countKey]) || 0
+    const isSig = (cc) => cc && cc[track.qKey] != null && cc[track.qKey] < 0.05
+    // A pass-tier cell: "count (% of the base)" + a green ✓ when FDR q<0.05; blank for 0.
+    const tierStr = (cc) => { const n = cnt(cc); if (!n) return ''; const p = pctBase > 0 ? pct(n / pctBase) : '—'; return isSig(cc) ? `${n} (${p}) ✓` : `${n} (${p})` }
+    // The exact stats, off to the right: uncorrected p / FDR q for that tier.
+    const pqStr = (cc) => { if (!cc) return '—'; const p = cc[track.pKey], q = cc[track.qKey]; return (p == null && q == null) ? '—' : `${fmtP(p)} / ${fmtP(q)}` }
     const MAX_GROUPS_PER_DIM = 25
 
     const mergeAcross = (rowIdx) => ws.mergeCells(rowIdx, 1, rowIdx, nCols)
     let r = 0
-    const addBanner = (text, font) => {
-        r++
-        const row = ws.addRow([text])
-        mergeAcross(r)
-        row.getCell(1).font = font
-        row.getCell(1).alignment = {wrapText: true, vertical: 'top'}
-        return row
-    }
+    const addBanner = (text, font) => { r++; const row = ws.addRow([text]); mergeAcross(r); row.getCell(1).font = font; row.getCell(1).alignment = {wrapText: true, vertical: 'top'}; return row }
 
-    addBanner('Gene Analysis — do the scattered single-hit genes converge?', {bold: true, size: 14, color: {argb: 'FF2C3E50'}})
-    addBanner(`All summary stats (right of the grid) are IGV-PASS only, and only categories reaching the pass keep-threshold (≥2 pass samples OR genes) are listed. The grid shows both pass·* and all·* rows so you can judge, FOR EACH LISTED CATEGORY, whether its pass convergence came from a noisy pool: a large gap (all·ALL ≫ pass·ALL) means many of its variants were poor-quality/non-pass — treat that row with suspicion. Each grid cell = distinct probands${hasSamples ? ` (and their % of all ${totalProbands} cohort probands — every ATTEMPTED trio, incl. those with 0 DNMs; ${probandsWithVariant} carry ≥1 loaded variant)` : ' (no sample column — bare DNM count)'} with a DNM in a category gene.`,
+    addBanner(`Gene Analysis — ${track.conservative ? 'SAMPLE' : 'DNM'} convergence (IGV-pass)`, {bold: true, size: 14, color: {argb: 'FF2C3E50'}})
+    addBanner(`Rows = categories your genes converge on. The four pass columns are CUMULATIVE impact tiers (HIGH ⊆ HIGH+MOD ⊆ HIGH+MOD+LOW ⊆ ALL); each shows the # of ${track.unit} in a category gene and, in parens, their % of ${track.conservative ? `the ${totalProbands} cohort probands` : `the ${nPassDnms} pass DNMs`}. A green "✓" marks a tier whose Benjamini-Hochberg FDR q<0.05 (its ${track.conservative ? 'conservative sample' : 'DNM'} test); the exact "p / q" per tier are in the columns to the right. Only categories with ≥2 pass samples OR genes are listed.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    addBanner(`Two IGV-pass tracks vs the category's genome prevalence ("% all genes" = cat size ÷ the source's gene count, in each section header — the chance rate):  SAMPLE level (conservative, robust) — "# samples" = distinct PASS probands with a category DNM, "% samples" = that ÷ ${totalProbands} cohort probands (all attempted trios), "Fold" = %samples ÷ %all genes.  DNM level — "# DNMs" = PASS DNMs in the category, "% DNMs" = that ÷ ${nPassDnms} pass DNMs, "Fold" = %DNMs ÷ %all genes.  "1% of genes but 50% of samples" is the striking case.`,
+    addBanner(`"% all genes" = the category's prevalence in its own source (cat size ÷ the section-header source-gene count) — the chance rate. "Fold (pass·ALL)" = the pass·ALL ${track.unitShort}-rate ÷ prevalence${track.conservative ? ` (over ${totalProbands} cohort probands — every attempted trio incl. 0-DNM; ${probandsWithVariant} carry ≥1 variant)` : ` (over ${nPassDnms} pass DNMs)`}. "all·ALL" = ${track.unitShort} hitting the category at ANY curation status — a large gap vs pass·ALL flags a category drawn from a noisy (poor-quality) pool.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    addBanner('"samp p" / "DNM p" (+ Benjamini-Hochberg "q") test each track against the prevalence null. The SAMPLE test is the conservative one — its expected accounts for each proband\'s pass-DNM burden, so a single hypermutated proband can\'t fake convergence (it dedups to one sample AND is expected to hit). The DNM test is a binomial over pass DNMs. A gene-count null only approximates the de-novo mutation-rate null, so treat marginal q gently; the SAMPLE track is the robust read.',
+    addBanner(track.conservative
+        ? 'The SAMPLE test is the conservative, robust read: its expected accounts for EACH proband\'s per-tier pass-DNM burden, so a single hypermutated proband can\'t fake convergence (it dedups to one sample AND is expected to hit). FDR is controlled per dimension. A gene-count null only approximates the de-novo mutation-rate null, so treat marginal q gently. The companion "Gene Analysis (DNMs)" tab gives the variant-level view.'
+        : 'The DNM test is a binomial over pass DNMs at each tier — LESS robust than the samples tab (a hypermutated proband inflates it; it is not deduped by proband). FDR is per dimension. Use "Gene Analysis (samples)" as the headline and this for the variant-level view.',
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    if (!hasSamples) addBanner('No sample_id / trio_id column detected — every variant collapses to one pseudo-proband, so the SAMPLE track (# samples, % samples, Fold, samp p/q) and grid % are omitted as meaningless. Read the DNM track instead.',
-        {italic: true, size: 10, color: {argb: 'FFB9770E'}})
-    addBanner('Raw counts for auditing (every proportion reconstructs by hand): "# genes"/"# samples"/"# DNMs"/"cat size" are the numerators; denominators are ' +
-        `${totalProbands} cohort probands (% samples AND grid %), ${nPassDnms} pass DNMs (% DNMs), and the section-header source-gene count (% all genes).`,
-        {size: 10, color: {argb: 'FF47586A'}})
 
-    // Convergence headline: strongest pass·ALL convergence per dimension.
+    // Headline: strongest pass·ALL convergence per dimension (in this unit).
     const headBits = []
     for (const sec of conv.sections) {
         if (!sec.groups.length) continue
-        const best = sec.groups[0]   // already sorted by pass samples/genes
-        const cc = best.cells['pass|ALL'] || {individuals: 0, genes: 0}
-        if (cc.individuals >= 2 || cc.genes >= 2) headBits.push(`${sec.label}: ${cc.individuals} samples / ${cc.genes} genes share "${best.term}"`)
+        const n = cnt(sec.groups[0].cells['pass|ALL'])
+        if (n >= 2) headBits.push(`${sec.label}: ${n} ${track.unitShort} share "${sec.groups[0].term}"`)
     }
-    addBanner(headBits.length ? `Top pass convergence — ${headBits.join(';  ')}` : 'No attribute is shared by ≥2 passing samples or genes yet.',
+    addBanner(headBits.length ? `Top pass convergence — ${headBits.join(';  ')}` : `No category has ≥2 pass ${track.unitShort} yet.`,
         {bold: true, size: 11, color: {argb: 'FF2C3E50'}})
     r++; ws.addRow([])   // spacer
 
-    const headerLabels = ['Group', ...cells.map(c => c.label), '# genes', 'cat size', '% all genes',
-        '# samples', '% samples', 'Fold (s)', 'samp p', 'samp q',
-        '# DNMs', '% DNMs', 'Fold (d)', 'DNM p', 'DNM q', 'Genes']
+    const headerLabels = ['Category', ...passCells.map(c => c.label), 'all·ALL', '# genes', 'cat size', '% all genes', 'Fold (pass·ALL)',
+        ...passCells.map(c => `${c.label.replace('pass·', '')} p/q`), 'Genes']
     r++
     const hdr = ws.addRow(headerLabels)
-    hdr.eachCell(cell => {
-        cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin
-        cell.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true}
-    })
+    hdr.eachCell(cell => { cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin; cell.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true} })
     hdr.height = 26
     const headerRowIdx = r
     ws.getColumn(1).width = 34
-    for (let i = 0; i < cells.length; i++) ws.getColumn(2 + i).width = 13
-    ws.getColumn(CG).width = 8; ws.getColumn(CAT).width = 8; ws.getColumn(PALL).width = 11
-    ws.getColumn(NSAMP).width = 9; ws.getColumn(PSAMP).width = 9; ws.getColumn(FOLDS).width = 8
-    ws.getColumn(SPVAL).width = 9; ws.getColumn(SQVAL).width = 9
-    ws.getColumn(NDNM).width = 8; ws.getColumn(PDN).width = 9; ws.getColumn(FOLDD).width = 8
-    ws.getColumn(DPVAL).width = 9; ws.getColumn(DQVAL).width = 9
-    ws.getColumn(GENES).width = 46
+    for (let i = 0; i < passCells.length; i++) ws.getColumn(2 + i).width = 15
+    ws.getColumn(ALLALL).width = 8; ws.getColumn(CG).width = 8; ws.getColumn(CAT).width = 8
+    ws.getColumn(PALL).width = 11; ws.getColumn(FOLD).width = 12
+    for (let i = 0; i < passCells.length; i++) ws.getColumn(PQ0 + i).width = 13
+    ws.getColumn(GENES).width = 48
 
     let anyGroups = false
     for (const sec of conv.sections) {
@@ -1491,8 +1473,8 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
         r++
         const hiddenCount = Math.max(0, sec.groups.length - MAX_GROUPS_PER_DIM)
         const shown = sec.groups.slice(0, MAX_GROUPS_PER_DIM)
-        const srcNote = sec.sourceSize ? `  ·  ${sec.sourceSize.toLocaleString()} source genes (÷ for "% all genes")` : '  ·  no source (no prevalence / p-values)'
-        const capNote = hiddenCount ? `   (top ${shown.length} of ${sec.groups.length} terms)` : ''
+        const srcNote = sec.sourceSize ? `  ·  ${sec.sourceSize.toLocaleString()} source genes (÷ for "% all genes")` : '  ·  no source (no prevalence / q)'
+        const capNote = hiddenCount ? `   (top ${shown.length} of ${sec.groups.length})` : ''
         const secRow = ws.addRow([`${sec.label}${capNote}${srcNote}`])
         mergeAcross(r)
         secRow.getCell(1).font = {bold: true, color: {argb: 'FF2C3E50'}}
@@ -1502,50 +1484,38 @@ function buildGeneAnalysisSheet(workbook, conv, styles) {
         shown.forEach((g, idx) => {
             const genesStr = g.genes.length > 16 ? g.genes.slice(0, 16).join(', ') + ` +${g.genes.length - 16}` : g.genes.join(', ')
             const rowVals = [g.term]
-            for (const c of cells) rowVals.push(cellStr(g.cells[c.key]))
+            for (const c of passCells) rowVals.push(tierStr(g.cells[c.key]))   // count (%) ✓
+            rowVals.push(cnt(g.cells['all|ALL']) || '')              // all·ALL (quality flag)
             rowVals.push(g.refGenes)                                 // # genes (pass)
             rowVals.push(g.catSize != null ? g.catSize : '—')        // cat size
             rowVals.push(pct(g.prevalence))                          // % all genes
-            rowVals.push(hasSamples ? g.refIndividuals : '—')        // # samples (pass)
-            rowVals.push(pct(g.pctSamples))                          // % samples
-            rowVals.push(fmtFold(g.foldS))                           // Fold (s)
-            rowVals.push(fmtP(g.pSample))                            // samp p
-            rowVals.push(fmtP(g.qSample))                            // samp q
-            rowVals.push(g.refVariants)                              // # DNMs (pass)
-            rowVals.push(pct(g.pctDnms))                             // % DNMs
-            rowVals.push(fmtFold(g.foldD))                           // Fold (d)
-            rowVals.push(fmtP(g.pDnm))                               // DNM p
-            rowVals.push(fmtP(g.qDnm))                               // DNM q
+            rowVals.push(fmtFold(g[track.foldKey]))                  // Fold (pass·ALL)
+            for (const c of passCells) rowVals.push(pqStr(g.cells[c.key]))   // p / q per tier (right)
             rowVals.push(genesStr)
             r++
             const row = ws.addRow(rowVals)
-            row.eachCell(cell => {
-                cell.border = borderThin
-                if (idx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
+            row.eachCell(cell => { cell.border = borderThin; if (idx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}} })
+            for (let i = 0; i < passCells.length; i++) row.getCell(2 + i).alignment = {horizontal: 'center'}
+            for (const col of [ALLALL, CG, CAT, PALL, FOLD]) row.getCell(col).alignment = {horizontal: 'center'}
+            for (let i = 0; i < passCells.length; i++) row.getCell(PQ0 + i).alignment = {horizontal: 'center'}
+            passCells.forEach((c, i) => {
+                if (!isSig(g.cells[c.key])) return
+                row.getCell(2 + i).font = {bold: true, color: {argb: 'FF1E8449'}}      // green count cell
+                row.getCell(PQ0 + i).font = {bold: true, color: {argb: 'FF1E8449'}}    // green p / q cell
             })
-            for (let i = 0; i < cells.length; i++) row.getCell(2 + i).alignment = {horizontal: 'center'}
-            for (const col of NUMERIC_COLS) row.getCell(col).alignment = {horizontal: 'center'}
-            if (g.foldS != null && g.foldS >= 5) row.getCell(FOLDS).font = {bold: true, color: {argb: 'FF1E8449'}}
-            if (g.foldD != null && g.foldD >= 5) row.getCell(FOLDD).font = {bold: true, color: {argb: 'FF1E8449'}}
-            if (g.qSample != null && g.qSample < 0.05) row.getCell(SQVAL).font = {bold: true, color: {argb: 'FF1E8449'}}
-            if (g.qDnm != null && g.qDnm < 0.05) row.getCell(DQVAL).font = {bold: true, color: {argb: 'FF1E8449'}}
-            // Emphasise rows with independent pass recurrence (≥2 samples).
-            if (g.refIndividuals >= 2) row.getCell(1).font = {bold: true}
+            if (g[track.foldKey] != null && g[track.foldKey] >= 5) row.getCell(FOLD).font = {bold: true, color: {argb: 'FF1E8449'}}
+            if (cnt(g.cells['pass|ALL']) >= 2) row.getCell(1).font = {bold: true}
         })
 
         if (hiddenCount) {
             r++
-            const noteRow = ws.addRow([`… ${hiddenCount} more term${hiddenCount === 1 ? '' : 's'} not shown (overlapping categories with the same genes; ranked below the top ${MAX_GROUPS_PER_DIM} by pass samples).`])
+            const noteRow = ws.addRow([`… ${hiddenCount} more categor${hiddenCount === 1 ? 'y' : 'ies'} not shown (overlapping categories with the same genes; ranked below the top ${MAX_GROUPS_PER_DIM}).`])
             mergeAcross(r)
             noteRow.getCell(1).font = {italic: true, size: 9, color: {argb: 'FF6B7D8D'}}
         }
     }
 
-    if (!anyGroups) {
-        r++
-        ws.addRow(['No convergence found — no attribute is shared by ≥2 IGV-pass samples or genes in the current export.'])
-        mergeAcross(r)
-    }
+    if (!anyGroups) { r++; ws.addRow([`No convergence found — no category is shared by ≥2 IGV-pass ${track.unitShort} or genes in the current export.`]); mergeAcross(r) }
 
     ws.views = [{state: 'frozen', ySplit: headerRowIdx}]
 }
@@ -1969,7 +1939,11 @@ app.post('/api/export/xlsx', async (req, res) => {
                     sourceUniverse, totalProbands,
                 })
                 conv.probandsWithVariant = probandsWithVariant   // for the banner (transparency)
-                buildGeneAnalysisSheet(workbook, conv, {headerFill, headerFont, borderThin})
+                // Two tabs: Samples (conservative headline, only with a sample
+                // column) then DNMs (always). Each is one unit — no more mixing.
+                const gaStyles = {headerFill, headerFont, borderThin}
+                if (conv.hasSamples) buildGeneAnalysisTab(workbook, conv, gaStyles, GA_SAMPLE_TRACK)
+                buildGeneAnalysisTab(workbook, conv, gaStyles, GA_DNM_TRACK)
             } catch (sectionErr) {
                 log.warn('Gene Analysis worksheet failed:', sectionErr.message)
                 exportErrors.push({section: 'Gene Analysis', error: sectionErr.message})
@@ -3289,3 +3263,8 @@ if (require.main === module) {
 }
 
 module.exports = app
+// Exposed for unit tests (the samples tab is otherwise only emitted when the
+// loaded data has a sample column, which the test fixtures lack).
+module.exports.buildGeneAnalysisTab = buildGeneAnalysisTab
+module.exports.GA_SAMPLE_TRACK = GA_SAMPLE_TRACK
+module.exports.GA_DNM_TRACK = GA_DNM_TRACK

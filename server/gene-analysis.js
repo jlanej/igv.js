@@ -249,9 +249,12 @@ function computeConvergence(variants, opts) {
     for (const d of dims) acc[d.id] = {}
     const cellGenes = {}, cellInds = {}, cellVars = {}
     for (const c of cells) { cellGenes[c.key] = new Set(); cellInds[c.key] = new Set(); cellVars[c.key] = 0 }
-    // Per-proband IGV-pass DNM burden (d_i) — the null expectation for the
-    // conservative sample test: more DNMs ⇒ higher chance of a category hit.
-    const passBurden = new Map()
+    // Per-pass-tier, per-proband IGV-pass DNM burden (d_i for each impact tier) —
+    // the null for the conservative SAMPLE test at each tier: more DNMs ⇒ higher
+    // chance of a category hit. Keyed by tier (HIGH ⊆ HIGH+MOD ⊆ … ⊆ ALL).
+    const passTierKeys = cells.filter(c => c.statusKey === 'pass').map(c => c.tierKey)
+    const passBurdenByTier = {}
+    for (const tk of passTierKeys) passBurdenByTier[tk] = new Map()
 
     for (const v of variants) {
         const gene = geneCol ? v[geneCol] : null
@@ -264,7 +267,6 @@ function computeConvergence(variants, opts) {
         // The independent unit: the proband/sample. Falls back to a single
         // 'all' bucket when the data has no sample column.
         const individual = sampleCol ? (v[sampleCol] || 'unknown') : 'all'
-        if (status === 'pass') passBurden.set(individual, (passBurden.get(individual) || 0) + 1)
 
         for (const c of cells) {
             if (!c.st.match(status)) continue
@@ -273,6 +275,10 @@ function computeConvergence(variants, opts) {
             cellGenes[c.key].add(upper)
             cellInds[c.key].add(individual)
             cellVars[c.key]++                        // total DNMs in this stratum
+            if (c.statusKey === 'pass') {            // per-tier proband DNM burden
+                const bm = passBurdenByTier[c.tierKey]
+                bm.set(individual, (bm.get(individual) || 0) + 1)
+            }
             for (const d of dims) {
                 const tlist = terms[d.id] || []
                 for (const term of tlist) {
@@ -286,10 +292,11 @@ function computeConvergence(variants, opts) {
         }
     }
 
-    // Pass-only denominators + the per-proband burden vector for the tests.
-    const nPassProbands = passBurden.size              // probands with ≥1 pass DNM
-    const nPassDnms = cellVars[REF_CELL]               // total pass DNMs (= Σ burden)
-    const burden = [...passBurden.values()]            // d_i for each pass proband
+    // Pass denominators + per-tier burden arrays / DNM totals for the tests.
+    const nPassProbands = passBurdenByTier['ALL'].size   // probands with ≥1 pass DNM
+    const nPassDnms = cellVars[REF_CELL]                 // total pass DNMs (= pass|ALL)
+    const burdenByTier = {}, nDnmsByTier = {}
+    for (const tk of passTierKeys) { burdenByTier[tk] = [...passBurdenByTier[tk].values()]; nDnmsByTier[tk] = cellVars['pass|' + tk] }
 
     const sections = dims.map(d => {
         const groups = []
@@ -297,9 +304,9 @@ function computeConvergence(variants, opts) {
         for (const term of Object.keys(acc[d.id])) {
             const bucket = acc[d.id][term]
             const ref = bucket[REF_CELL] || {individuals: new Set(), genes: new Set(), variants: 0}
-            const refIndividuals = ref.individuals.size   // pass probands hitting the category
-            const refGenes = ref.genes.size               // pass genes in the category
-            const refVariants = ref.variants              // pass DNMs in the category
+            const refIndividuals = ref.individuals.size   // pass|ALL probands (for keeping/sort/# genes)
+            const refGenes = ref.genes.size
+            const refVariants = ref.variants
             if (refIndividuals < minCount && refGenes < minCount) continue
             const cellCounts = {}
             for (const c of cells) {
@@ -307,50 +314,46 @@ function computeConvergence(variants, opts) {
                 cellCounts[c.key] = cd ? {individuals: cd.individuals.size, genes: cd.genes.size, variants: cd.variants}
                     : {individuals: 0, genes: 0, variants: 0}
             }
-            // Background: per-source genome prevalence (% of all genes in the
-            // category) = catSize / source universe size.
+            // Background: per-source genome prevalence = catSize / source size.
             let prevalence = null, catSize = null
             if (u && u.counts[term] != null && u.size > 0) {
                 catSize = u.counts[term]
                 prevalence = catSize / u.size
             }
-            // Two IGV-pass tracks vs the prevalence null.
-            //  DNM level: each pass DNM ~ Bernoulli(prevalence)  → binomial.
-            //  Sample level (conservative): proband i ~ Bernoulli(1-(1-prev)^d_i) → Poisson-binomial.
-            const pctDnms = nPassDnms > 0 ? refVariants / nPassDnms : null
-            const foldD = (pctDnms != null && prevalence > 0) ? pctDnms / prevalence : null
-            const pDnm = prevalence != null ? binomUpperTail(refVariants, nPassDnms, prevalence) : null
-            // Sample level needs a real proband base (no sample column ⇒ suppress).
-            // % samples is over the WHOLE cohort (all attempted probands, incl.
-            // those with 0 DNMs) — the honest denominator. The Poisson-binomial
-            // test is unchanged by 0-DNM probands (their p_i = 1-(1-prev)^0 = 0),
-            // so the burden vector need not be padded to the cohort size.
-            let pctSamples = null, foldS = null, pSample = null
-            if (sampleCol && totalProbands > 0) {
-                pctSamples = refIndividuals / totalProbands
-                if (prevalence != null && prevalence > 0) {
-                    foldS = pctSamples / prevalence
-                    pSample = poissonBinomUpperTail(refIndividuals, burden.map(dd => 1 - Math.pow(1 - prevalence, dd)))
-                }
+            // Enrichment PER PASS TIER, attached to each pass cell. SAMPLE =
+            // Poisson-binomial with that tier's per-proband burden; DNM = binomial
+            // over that tier's pass DNMs. Prevalence (a gene property) is shared.
+            for (const tk of passTierKeys) {
+                if (prevalence == null) continue
+                const cc = cellCounts['pass|' + tk]
+                // Only cells with an OBSERVED hit are real hypotheses. A 0-count cell
+                // would return the trivial p=1 (P(X≥0)) — it never displays (tierStr
+                // blanks 0-count cells) yet, left in the family, it would inflate the
+                // BH family size m and over-correct the real q's. So skip it: an
+                // unassigned p is treated as null by benjaminiHochberg (family = the
+                // actually-observed category×tier cells).
+                if (cc.variants > 0) cc.pDnm = binomUpperTail(cc.variants, nDnmsByTier[tk], prevalence)
+                if (sampleCol && cc.individuals > 0) cc.pSample = poissonBinomUpperTail(cc.individuals, burdenByTier[tk].map(dd => 1 - Math.pow(1 - prevalence, dd)))
             }
+            // Headline folds at pass|ALL (over the true cohort / total pass DNMs).
+            const refCC = cellCounts[REF_CELL]
+            const foldSampleAll = (sampleCol && prevalence > 0 && totalProbands > 0) ? (refCC.individuals / totalProbands) / prevalence : null
+            const foldDnmAll = (prevalence > 0 && nPassDnms > 0) ? (refCC.variants / nPassDnms) / prevalence : null
             groups.push({term, refIndividuals, refGenes, refVariants, catSize, prevalence,
-                cells: cellCounts, genes: [...ref.genes].sort(),
-                pctSamples, foldS, pSample, qSample: null,
-                pctDnms, foldD, pDnm, qDnm: null})
+                cells: cellCounts, genes: [...ref.genes].sort(), foldSampleAll, foldDnmAll})
         }
-        // Rank by pass recurrence (samples), then genes, then sample significance, then name.
+        // Rank by pass|ALL recurrence, then genes, then pass|ALL sample p, then name.
+        const psp = g => (g.cells[REF_CELL].pSample == null ? 1 : g.cells[REF_CELL].pSample)
         groups.sort((a, b) => b.refIndividuals - a.refIndividuals || b.refGenes - a.refGenes
-            || ((a.pSample == null ? 1 : a.pSample) - (b.pSample == null ? 1 : b.pSample))
-            || a.term.localeCompare(b.term))
+            || (psp(a) - psp(b)) || a.term.localeCompare(b.term))
+        // Benjamini-Hochberg FDR PER DIMENSION: two families (sample, DNM), each
+        // across this dimension's (category × pass tier) tests.
+        const sTests = [], dTests = []
+        for (const g of groups) for (const tk of passTierKeys) { const cc = g.cells['pass|' + tk]; sTests.push(cc); dTests.push(cc) }
+        benjaminiHochberg(sTests.map(c => c.pSample)).forEach((q, i) => { sTests[i].qSample = q })
+        benjaminiHochberg(dTests.map(c => c.pDnm)).forEach((q, i) => { dTests[i].qDnm = q })
         return {id: d.id, label: d.label, groups, sourceSize: u ? u.size : null}
     })
-
-    // Benjamini-Hochberg FDR — two families (sample tests, DNM tests) across the tab.
-    const allGroups = []
-    for (const s of sections) for (const g of s.groups) allGroups.push(g)
-    const qS = benjaminiHochberg(allGroups.map(g => g.pSample))
-    const qD = benjaminiHochberg(allGroups.map(g => g.pDnm))
-    allGroups.forEach((g, i) => { g.qSample = qS[i]; g.qDnm = qD[i] })
 
     const cellSummary = cells.map(c => ({
         key: c.key, label: c.label, statusKey: c.statusKey, tierKey: c.tierKey,

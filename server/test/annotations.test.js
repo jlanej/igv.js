@@ -317,6 +317,23 @@ describe('gene-analysis convergence (independent signals)', function () {
         expect(d.cells['pass|ALL'].individuals).to.equal(3)           // + MODIFIER + blank
     })
 
+    it('all·ALL (quality flag) counts every curation status; pass·ALL counts only pass', function () {
+        // One pass + one fail hit in the same category → all·ALL strictly exceeds
+        // pass·ALL, so a bug that made them equal (or dropped the fail) is caught.
+        const conv = computeConvergence(
+            [{gene: 'G1', s: 'P1', impact: 'HIGH', curation_status: 'pass'},
+             {gene: 'G2', s: 'P2', impact: 'HIGH', curation_status: 'fail'}],
+            {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 1,
+                geneTerms: new Map([['G1', {fam: ['D']}], ['G2', {fam: ['D']}]]),
+                dimensions: [{id: 'fam', label: 'Fam'}]})
+        const g = conv.sections.find(s => s.id === 'fam').groups.find(x => x.term === 'D')
+        expect(g.cells['pass|ALL'].variants).to.equal(1)      // only the pass hit
+        expect(g.cells['pass|ALL'].individuals).to.equal(1)
+        expect(g.cells['all|ALL'].variants).to.equal(2)       // pass + fail
+        expect(g.cells['all|ALL'].individuals).to.equal(2)
+        expect(g.cells['all|ALL'].variants).to.be.greaterThan(g.cells['pass|ALL'].variants)
+    })
+
     it('hypergeomUpperTail returns exact upper-tail probabilities', function () {
         expect(hypergeomUpperTail(0, 10, 5, 5)).to.equal(1)                 // k<=0
         expect(hypergeomUpperTail(5, 10, 5, 5)).to.be.closeTo(1 / 252, 1e-9)
@@ -368,43 +385,37 @@ describe('gene-analysis convergence (independent signals)', function () {
         expect(su.fam.counts.T).to.equal(2)                                          // A,B
     })
 
-    it('per-source prevalence + IGV-pass sample & DNM tracks attach to groups', function () {
+    it('per-source prevalence + per-pass-tier sample & DNM enrichment attach to cells', function () {
         // Source universe for dim "fam": 10 genes, term T carried by 3 (A,B,C).
         const famLib = new Map([['A', ['T']], ['B', ['T']], ['C', ['T']],
             ['D', []], ['E', []], ['F', []], ['G', []], ['H', []], ['I', []], ['J', []]])
         const srcU = sourceUniverseStats({}, {fam: famLib})
-        expect(srcU.fam.size).to.equal(10)
         expect(srcU.fam.counts.T).to.equal(3)
-        // Two pass probands (X, Y), each one pass DNM in a category gene.
+        // Two pass probands (X, Y), each one pass HIGH DNM → all 4 pass tiers = 2.
         const conv = computeConvergence(
             [{gene: 'A', s: 'X', impact: 'HIGH', curation_status: 'pass'},
              {gene: 'B', s: 'Y', impact: 'HIGH', curation_status: 'pass'}],
             {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 2,
                 geneTerms: new Map([['A', {fam: ['T']}], ['B', {fam: ['T']}]]),
                 dimensions: [{id: 'fam', label: 'Family'}], sourceUniverse: srcU, totalProbands: 20})
-        const fam = conv.sections.find(s => s.id === 'fam')
-        const grp = fam.groups.find(g => g.term === 'T')
-        expect(conv.nPassProbands).to.equal(2)
-        expect(conv.nPassDnms).to.equal(2)
-        expect(grp.refIndividuals).to.equal(2)                   // pass samples (= # samples)
-        expect(grp.refVariants).to.equal(2)                      // pass DNMs (= # DNMs)
+        const grp = conv.sections.find(s => s.id === 'fam').groups.find(g => g.term === 'T')
+        expect(grp.refIndividuals).to.equal(2)
+        expect(grp.refVariants).to.equal(2)
         expect(grp.catSize).to.equal(3)
-        expect(fam.sourceSize).to.equal(10)
-        expect(grp.prevalence).to.be.closeTo(0.3, 1e-9)          // 3/10
-        // SAMPLE track: % is over the COHORT (totalProbands=20) → 2/20; fold = 0.1/0.3.
-        // The Poisson-binomial test is unchanged by cohort size: burden [1,1] → probs [.3,.3] → PB(2)=.09.
-        expect(grp.pctSamples).to.be.closeTo(2 / 20, 1e-9)
-        expect(grp.foldS).to.be.closeTo((2 / 20) / 0.3, 1e-9)
-        expect(grp.pSample).to.be.closeTo(0.3 * 0.3, 1e-9)
-        expect(grp.qSample).to.be.closeTo(0.3 * 0.3, 1e-9)       // single test
-        // DNM track: pct = 2/2; fold = 1/0.3; binom(2,2,0.3) = 0.09
-        expect(grp.pctDnms).to.be.closeTo(1, 1e-9)
-        expect(grp.foldD).to.be.closeTo(1 / 0.3, 1e-9)
-        expect(grp.pDnm).to.be.closeTo(Math.pow(0.3, 2), 1e-9)
-        expect(grp.qDnm).to.be.closeTo(Math.pow(0.3, 2), 1e-9)
+        expect(grp.prevalence).to.be.closeTo(0.3, 1e-9)
+        // Enrichment lives on each PASS cell. burden [1,1] → probs [.3,.3] → PB(2)=.09; binom(2,2,.3)=.09.
+        for (const ck of ['pass|HIGH', 'pass|ALL']) {
+            expect(grp.cells[ck].pSample, ck).to.be.closeTo(0.3 * 0.3, 1e-9)
+            expect(grp.cells[ck].pDnm, ck).to.be.closeTo(Math.pow(0.3, 2), 1e-9)
+            expect(grp.cells[ck].qSample, ck).to.be.closeTo(0.3 * 0.3, 1e-9)   // 4 identical → q=p
+            expect(grp.cells[ck].qDnm, ck).to.be.closeTo(Math.pow(0.3, 2), 1e-9)
+        }
+        // Headline folds at pass|ALL (over the cohort / total pass DNMs).
+        expect(grp.foldSampleAll).to.be.closeTo((2 / 20) / 0.3, 1e-9)
+        expect(grp.foldDnmAll).to.be.closeTo((2 / 2) / 0.3, 1e-9)
     })
 
-    it('a dimension with no source universe gets null prevalence/p but keeps sample & DNM rates', function () {
+    it('a dimension with no source universe gets null prevalence/p on every cell', function () {
         const conv = computeConvergence(
             [{gene: 'A', s: 'X', impact: 'HIGH', curation_status: 'pass'},
              {gene: 'B', s: 'Y', impact: 'HIGH', curation_status: 'pass'}],
@@ -413,12 +424,13 @@ describe('gene-analysis convergence (independent signals)', function () {
                 dimensions: [{id: 'domain', label: 'Domain'}], sourceUniverse: {}, totalProbands: 5})
         const grp = conv.sections.find(s => s.id === 'domain').groups[0]
         expect(grp.prevalence).to.equal(null)
-        for (const f of ['foldS', 'pSample', 'qSample', 'foldD', 'pDnm', 'qDnm']) expect(grp[f], f).to.equal(null)
-        expect(grp.pctSamples).to.be.closeTo(1, 1e-9)            // rates need no source
-        expect(grp.pctDnms).to.be.closeTo(1, 1e-9)
+        expect(grp.foldSampleAll).to.equal(null)
+        expect(grp.foldDnmAll).to.equal(null)
+        for (const f of ['pSample', 'qSample', 'pDnm', 'qDnm']) expect(grp.cells['pass|ALL'][f], f).to.satisfy(v => v == null)
+        expect(grp.cells['pass|ALL'].individuals).to.equal(2)   // counts still there
     })
 
-    it('no sample column → SAMPLE track suppressed, DNM track survives', function () {
+    it('no sample column → SAMPLE cell p suppressed, DNM cell p survives', function () {
         const srcU = sourceUniverseStats({}, {fam: new Map([['A', ['T']], ['B', ['T']], ['C', ['T']], ['D', []]])})
         const conv = computeConvergence(
             [{gene: 'A', impact: 'HIGH', curation_status: 'pass'}, {gene: 'B', impact: 'HIGH', curation_status: 'pass'}],
@@ -427,11 +439,55 @@ describe('gene-analysis convergence (independent signals)', function () {
                 dimensions: [{id: 'fam', label: 'Family'}], sourceUniverse: srcU, totalProbands: 1})
         const grp = conv.sections.find(s => s.id === 'fam').groups[0]
         expect(conv.hasSamples).to.equal(false)
-        expect(grp.pSample).to.equal(null)                       // no proband base
-        expect(grp.foldS).to.equal(null)
-        expect(grp.pctSamples).to.equal(null)
-        expect(grp.pDnm).to.not.equal(null)                      // DNM track still computed
+        expect(grp.cells['pass|ALL'].pSample).to.satisfy(v => v == null)   // no proband base
+        expect(grp.foldSampleAll).to.equal(null)
+        expect(grp.cells['pass|ALL'].pDnm).to.not.equal(null)              // DNM survives
         expect(grp.prevalence).to.be.closeTo(3 / 4, 1e-9)
+    })
+
+    it('per-tier stats differ by tier, and BH is per-dimension over only OBSERVED cells', function () {
+        // Two categories with DISTINCT prevalences; T2 converges ONLY at HIGH+MOD
+        // (0 pass DNMs at the HIGH tier). This pins three properties at once:
+        //   (F4) per-tier differentiation: T1's pDnm at HIGH (0.1²) ≠ at ALL
+        //        (binom(2,4,0.1)) because nDnmsByTier grows HIGH:2 → ALL:4.
+        //   (F1) phantom exclusion: T2's 0-count pass|HIGH cell must NOT get a
+        //        trivial p=1 that would inflate the BH family (m=7, not 8).
+        //   (F3) BH scope: hand-BH over the 7 observed cells gives specific q's
+        //        that only hold for a per-dimension family excluding phantoms.
+        // Universe of 100 genes; T1 prevalence 10%, T2 prevalence 20%.
+        const srcU = {fam: {size: 100, counts: {T1: 10, T2: 20}}}
+        const conv = computeConvergence(
+            [{gene: 'GA', impact: 'HIGH', curation_status: 'pass', s: 'P1'},
+             {gene: 'GB', impact: 'HIGH', curation_status: 'pass', s: 'P2'},
+             {gene: 'GC', impact: 'MODERATE', curation_status: 'pass', s: 'P3'},
+             {gene: 'GD', impact: 'MODERATE', curation_status: 'pass', s: 'P4'}],
+            {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 2,
+                geneTerms: new Map([['GA', {fam: ['T1']}], ['GB', {fam: ['T1']}], ['GC', {fam: ['T2']}], ['GD', {fam: ['T2']}]]),
+                dimensions: [{id: 'fam', label: 'Fam'}], sourceUniverse: srcU, totalProbands: 50})
+        const sec = conv.sections.find(s => s.id === 'fam')
+        const T1 = sec.groups.find(g => g.term === 'T1')
+        const T2 = sec.groups.find(g => g.term === 'T2')
+        // F4 — per-tier differentiation (would be equal if the code ignored the tier's DNM total)
+        expect(T1.cells['pass|HIGH'].pDnm).to.be.closeTo(0.01, 1e-6)         // binom(2,2,0.1)=0.1²
+        expect(T1.cells['pass|ALL'].pDnm).to.be.closeTo(0.0523, 1e-6)        // binom(2,4,0.1)
+        expect(T1.cells['pass|HIGH'].pDnm).to.not.be.closeTo(T1.cells['pass|ALL'].pDnm, 1e-6)
+        // F1 — the 0-count pass|HIGH cell of T2 is excluded (no phantom p=1)
+        expect(T2.cells['pass|HIGH'].variants).to.equal(0)
+        expect(T2.cells['pass|HIGH'].pDnm, 'phantom p excluded').to.satisfy(v => v == null)
+        expect(T2.cells['pass|HIGH'].qDnm).to.satisfy(v => v == null)
+        expect(T2.cells['pass|HIGH'].pSample).to.satisfy(v => v == null)
+        expect(T2.cells['pass|HIGH_MOD'].pDnm).to.be.closeTo(0.1808, 1e-6)   // binom(2,4,0.2)
+        // F3 — hand-BH over the 7 observed cells [0.01,0.0523×3,0.1808×3], m=7
+        expect(T1.cells['pass|HIGH'].qDnm).to.be.closeTo(0.07, 1e-5)         // 0.01·7/1
+        expect(T1.cells['pass|ALL'].qDnm).to.be.closeTo(0.091525, 1e-5)      // 0.0523·7/4
+        expect(T2.cells['pass|ALL'].qDnm).to.be.closeTo(0.1808, 1e-5)        // 0.1808·7/7
+        // sample family is numerically identical here (every proband burden = 1)
+        expect(T1.cells['pass|HIGH'].qSample).to.be.closeTo(0.07, 1e-5)
+        expect(T1.cells['pass|ALL'].qSample).to.be.closeTo(0.091525, 1e-5)
+        // headline folds
+        expect(T1.foldDnmAll).to.be.closeTo((2 / 4) / 0.1, 1e-9)             // 5×
+        expect(T1.foldSampleAll).to.be.closeTo((2 / 50) / 0.1, 1e-9)         // 0.4×
+        expect(T2.foldDnmAll).to.be.closeTo((2 / 4) / 0.2, 1e-9)             // 2.5×
     })
 
     it('sourceUniverseStats omits constraint when no gnomad bundle (GRCh37 build gate)', function () {

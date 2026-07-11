@@ -116,21 +116,30 @@ describe('litmus: proportions are exactly reconstructable from the raw counts', 
     it('produced at least one convergence group', function () {
         expect(conv.sections.reduce((n, s) => n + s.groups.length, 0)).to.be.greaterThan(0)
     })
-    it('every proportion equals its raw-count ratio, and invariants hold', function () {
+    it('every headline proportion equals its raw-count ratio, and invariants hold', function () {
+        const passTierKeys = ['pass|HIGH', 'pass|HIGH_MOD', 'pass|HIGH_MOD_LOW', 'pass|ALL']
         for (const s of conv.sections) for (const g of s.groups) {
             if (g.prevalence != null) expect(g.prevalence).to.be.closeTo(g.catSize / s.sourceSize, 1e-9)
-            // SAMPLE track: % samples = # samples ÷ the true cohort (totalProbands)
-            expect(g.pctSamples).to.be.closeTo(g.refIndividuals / conv.totalProbands, 1e-9)
-            if (g.foldS != null) expect(g.foldS).to.be.closeTo(g.pctSamples / g.prevalence, 1e-9)
-            // DNM track (pass): % DNMs = # DNMs ÷ pass DNMs
-            expect(g.pctDnms).to.be.closeTo(g.refVariants / conv.nPassDnms, 1e-9)
-            if (g.foldD != null) expect(g.foldD).to.be.closeTo(g.pctDnms / g.prevalence, 1e-9)
+            // all·ALL (quality flag) is a superset of pass·ALL — it counts every
+            // curation status, so it can only ever meet or exceed the pass count.
+            expect(g.cells['all|ALL'].variants).to.be.at.least(g.cells['pass|ALL'].variants)
+            expect(g.cells['all|ALL'].individuals).to.be.at.least(g.cells['pass|ALL'].individuals)
+            expect(g.cells['all|ALL'].genes).to.be.at.least(g.cells['pass|ALL'].genes)
+            // Headline SAMPLE fold = (# pass·ALL samples ÷ the true cohort) ÷ prevalence
+            if (g.foldSampleAll != null) expect(g.foldSampleAll).to.be.closeTo((g.refIndividuals / conv.totalProbands) / g.prevalence, 1e-9)
+            // Headline DNM fold = (# pass·ALL DNMs ÷ pass DNMs) ÷ prevalence
+            if (g.foldDnmAll != null) expect(g.foldDnmAll).to.be.closeTo((g.refVariants / conv.nPassDnms) / g.prevalence, 1e-9)
+            // Cumulative tiers are monotonic: HIGH ⊆ HIGH+MOD ⊆ HIGH+MOD+LOW ⊆ ALL.
+            for (let i = 1; i < passTierKeys.length; i++) {
+                expect(g.cells[passTierKeys[i]].individuals).to.be.at.least(g.cells[passTierKeys[i - 1]].individuals)
+                expect(g.cells[passTierKeys[i]].variants).to.be.at.least(g.cells[passTierKeys[i - 1]].variants)
+            }
             // invariants
             if (g.prevalence != null) expect(g.prevalence).to.be.within(0, 1)
             if (g.catSize != null) expect(g.catSize).to.be.at.most(s.sourceSize)
             expect(g.refIndividuals).to.be.at.most(conv.nPassProbands)
             expect(g.refVariants).to.be.at.most(conv.nPassDnms)
-            for (const q of [g.qSample, g.qDnm]) if (q != null) expect(q).to.be.within(0, 1)
+            for (const tk of passTierKeys) for (const q of [g.cells[tk].qSample, g.cells[tk].qDnm]) if (q != null) expect(q).to.be.within(0, 1)
         }
     })
 })
@@ -152,7 +161,7 @@ describe('litmus: independent-individual dedup holds', function () {
 })
 
 describe('litmus: the full XLSX export pipeline produces a valid workbook', function () {
-    it('emits Read Me + Gene Summary + Gene Analysis with the descriptive columns', async function () {
+    it('emits Read Me + Gene Summary + the Gene Analysis (DNMs) matrix tab', async function () {
         this.timeout(20000)
         const res = await request(app)
             .post('/api/export/xlsx')
@@ -171,13 +180,14 @@ describe('litmus: the full XLSX export pipeline produces a valid workbook', func
         const wb = new ExcelJS.Workbook()
         await wb.xlsx.load(res.body)
         const names = wb.worksheets.map(w => w.name)
-        expect(names, names.join(',')).to.include.members(['Read Me', 'Gene Summary', 'Gene Analysis'])
+        // The DNM tab is always emitted; the samples tab only when a sample column exists.
+        expect(names, names.join(',')).to.include.members(['Read Me', 'Gene Summary', 'Gene Analysis (DNMs)'])
 
-        // The Gene Analysis sheet must carry the two-level pass column headers.
-        const ws = wb.getWorksheet('Gene Analysis')
+        // The Gene Analysis matrix must carry the category × pass-tier headers.
+        const ws = wb.getWorksheet('Gene Analysis (DNMs)')
         const seen = new Set()
         ws.eachRow(row => row.eachCell(cell => { if (typeof cell.value === 'string') seen.add(cell.value) }))
-        for (const col of ['% all genes', 'cat size', '# samples', '% samples', 'Fold (s)', 'samp p', 'samp q', '# DNMs', '% DNMs', 'Fold (d)', 'DNM p', 'DNM q']) {
+        for (const col of ['Category', 'pass·HIGH', 'pass·ALL', 'all·ALL', '# genes', 'cat size', '% all genes', 'Fold (pass·ALL)', 'ALL p/q', 'Genes']) {
             expect(seen.has(col), `Gene Analysis header "${col}"`).to.equal(true)
         }
     })

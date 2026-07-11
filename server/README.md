@@ -27,16 +27,18 @@ OpenDemand desktop access).
   (LOEUF/pLI), ClinVar P/LP counts, and Yes/No gene-list membership (e.g. COSMIC)
 - **Impact counts** – per-gene counts of HIGH/MODERATE/LOW/ALL-impact variants
   passing review, on the Gene Summary sheet
-- **Gene convergence** – a Gene Analysis tab showing whether singleton genes
-  stack up on a shared attribute across **eight dimensions** (gnomAD constraint
+- **Gene convergence** – two matching Gene Analysis tabs showing whether singleton
+  genes stack up on a shared attribute across **eight dimensions** (gnomAD constraint
   tier, ClinVar history, GenCC inheritance, protein domain, plus Reactome &
-  WikiPathways pathways, HGNC gene families, and MSigDB Hallmark processes). All
-  stats are **IGV-pass** only and reported at two levels — **sample** (distinct
-  probands, conservative) and **DNM** — each with a count, %, fold, and a p +
-  Benjamini-Hochberg FDR q against the category's **genome-wide prevalence** ("% of
-  all genes"), so a "1% of genes but 50% of samples" contrast is visible at a
-  glance. The sample test is proband-burden-aware (a hypermutated proband can't
-  fake it); the curation × impact grid is kept as a quality flag
+  WikiPathways pathways, HGNC gene families, and MSigDB Hallmark processes). Both are
+  **IGV-pass** only; **Gene Analysis (samples)** counts distinct probands (the
+  conservative headline) and **Gene Analysis (DNMs)** counts pass DNMs. Each is a
+  category × **cumulative impact-tier** matrix (HIGH ⊆ HIGH+MOD ⊆ HIGH+MOD+LOW ⊆ ALL)
+  of **`count (%)`** (with a green ✓ for FDR q<0.05, and the exact p/q in columns to
+  the right) against the category's **genome-wide prevalence** ("% of all genes"), plus
+  a headline fold, so a "1% of genes but 50% of samples" contrast is visible at a
+  glance. The sample test is proband-burden-aware (a hypermutated proband can't fake
+  it); an `all·ALL` column flags noisy (non-pass) pools
 - **Contamination metrics** – per-variant kraken2 species/contamination summary
   in the Variants sheet and above each per-variant IGV screenshot
 - **Sample QC** – load a per-sample QC file (e.g. VerifyBamID freemix) to
@@ -513,15 +515,16 @@ The **Export XLSX** button generates a publication-ready workbook containing:
 - **Gene Summary** sheet – gene-level statistics (total, samples, pass/fail/
   uncertain/pending), **impact counts passing review** (Pass HIGH / MODERATE /
   LOW / ALL), and gene-level annotations (see *Gene annotations* below).
-- **Gene Analysis** sheet – gene *convergence*: which shared attributes (gnomAD
-  constraint, ClinVar history, GenCC inheritance, protein domain; Reactome &
-  WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes) the
-  review's genes stack up on. **IGV-pass** stats at two levels — **sample**
-  (distinct probands, conservative) and **DNM** — each with count, %, fold, and
-  p/FDR q against the category's **genome-wide prevalence** ("% all genes"), so a
-  "1% of genes but 50% of samples" contrast is visible at a glance. A curation
-  {pass, all} × impact tier grid is kept as a quality flag. See *Gene convergence*
-  below.
+- **Gene Analysis (samples)** & **Gene Analysis (DNMs)** sheets – gene
+  *convergence*: which shared attributes (gnomAD constraint, ClinVar history, GenCC
+  inheritance, protein domain; Reactome & WikiPathways pathways, HGNC gene families,
+  MSigDB Hallmark processes) the review's genes stack up on. Two matching **IGV-pass**
+  tabs — the **(samples)** tab counts distinct probands (conservative headline), the
+  **(DNMs)** tab counts pass DNMs — each a category × cumulative impact-tier matrix of
+  `count (%)` (green ✓ for FDR q<0.05, exact p/q at right) plus a headline fold against
+  the category's **genome-wide prevalence** ("% all genes"), so a "1% of genes but 50% of samples" contrast is
+  visible at a glance. An `all·ALL` column flags noisy (non-pass) pools. The samples
+  tab is omitted when the data has no sample column. See *Gene convergence* below.
 - **Sample Summary** sheet – per-sample variant counts by impact group and
   frequency threshold, plus cohort statistics (mean, median, std dev)
 - **Sample QC** sheet – trio-aggregated QC metrics (if QC data is loaded)
@@ -566,9 +569,9 @@ from disk.
 | **Visual Elements** | IGV Screenshots, Lollipop Plots, Protein Domains |
 | **Gene Annotations** | Enable/Disable, Gene Name, Summary, OMIM, Pathways, Gene Type; gnomAD constraint; ClinVar P/LP; GenCC MOI + validity; gene-list membership |
 | **Impact Counts** | Pass HIGH/MODERATE/LOW/ALL (on), HIGH/MODERATE/LOW/ALL totals (off) |
-| **Gene Analysis** | Convergence dimensions (constraint/ClinVar/GenCC/domain + Reactome/WikiPathways/HGNC-family/MSigDB-Hallmark), IGV-pass sample + DNM stats with p/FDR q, min-count |
+| **Gene Analysis** | Convergence dimensions (constraint/ClinVar/GenCC/domain + Reactome/WikiPathways/HGNC-family/MSigDB-Hallmark) as two IGV-pass tabs (samples + DNMs), category × pass-tier `count (%)` matrix (✓ for FDR q<0.05, exact p/q at right), min-count |
 | **Contamination** | Per-variant species columns + screenshot panel (when `--bed-tracks` set) |
-| **Worksheets** | Variants (always included), Read Me, Gene Summary, Gene Analysis, Sample Summary, Sample QC, Applied Filters, Annotation Status |
+| **Worksheets** | Variants (always included), Read Me, Gene Summary, Gene Analysis (samples), Gene Analysis (DNMs), Sample Summary, Sample QC, Applied Filters, Annotation Status |
 | **Variant Columns** | Core (chrom/pos/ref/alt), Gene Info, Frequency, Quality, Genotypes, Allelic Depth, Genotype Quality, Sample Info, File Paths, Other Annotations |
 
 Most options default to **enabled**.  The variant column categories allow
@@ -631,55 +634,63 @@ the same source, so they align exactly) and is fetched per-chromosome to avoid
 the ~100 GB genome-wide `protein2ipr`; with it absent, domain terms fall back to
 MyGene (no background). Complex Portal, GO-slim, and HPO are future additions.
 
-### Gene convergence (Gene Analysis tab)
+### Gene convergence (Gene Analysis tabs)
 
 When de novo hits are singletons scattered across many genes, the **Gene
-Analysis** tab shows whether they *converge* on a shared attribute. For each
-grouping dimension it inverts `term → genes` and reports the shared terms:
+Analysis** tabs show whether they *converge* on a shared attribute. For each
+grouping dimension the engine inverts `term → genes` and reports the shared
+terms across **two matching tabs**, both **IGV-pass only**:
 
-- **IGV-pass stats** – every summary column (right of the grid) is computed on
-  **IGV-pass variants only**. Categories are kept when ≥2 pass samples **or** ≥2
-  pass genes share them.
-- **Grid (context, all statuses)** – each term's counts split by curation
-  {pass, all} × cumulative impact tier {HIGH, HIGH+MOD, HIGH+MOD+LOW, ALL}; every
-  cell shows distinct probands **and their % of all cohort probands**. The
-  **all·\*** rows are kept as a **quality flag**: a category with many `all` but
-  few `pass` (all·ALL ≫ pass·ALL) began with a lot of poor-quality calls — treat
-  it with suspicion. (Without a `sample_id`/`trio_id` column, cells show a bare
-  DNM count.)
-- **Two pass tracks vs prevalence** – `% all genes` is the category's *prevalence
-  within its own source* (`cat size` ÷ the source's gene count, shown per
-  section) — the chance rate. Each term is then reported at two IGV-pass levels:
-  - **Sample (conservative, headline):** `# samples` = distinct pass probands
-    with a category DNM (= the pass·ALL grid cell); `% samples` = ÷ the **true
-    cohort** (every attempted trio incl. those with 0 DNMs — the Sample-QC trio
-    count when loaded, else the distinct probands in the callset); `Fold(s)` =
-    % samples ÷ % all genes. A hypermutated proband counts once, so it
-    can't inflate this. **`samp p`** is a Poisson-binomial test whose expected
-    accounts for each proband's pass-DNM burden (so a many-DNM proband is
-    *expected* to hit and its single hit isn't surprising); **`samp q`** = BH FDR.
-  - **DNM:** `# DNMs` = pass DNMs in the category (can exceed `# samples`);
-    `% DNMs` = ÷ pass DNMs; `Fold(d)`; **`DNM p`** = binomial over pass DNMs;
-    **`DNM q`** = BH FDR. Less robust than the sample track (not deduped by
-    proband).
-  - The striking case is a small `% all genes` next to a large `% samples`/`Fold` —
-    "1% of genes but 50% of samples." Every proportion reconstructs from the raw
-    count columns (`# samples`, `# DNMs`, `cat size`) and the banner denominators.
+- **Two tabs, one unit each** – **Gene Analysis (samples)** counts distinct pass
+  **probands** (the conservative, robust headline: a hypermutated proband counts
+  once and can't fake convergence); **Gene Analysis (DNMs)** counts pass **DNMs**
+  (the variant-level companion; a proband with several hits inflates it). Same
+  categories, same background, same layout — only the counted unit and its test
+  differ. The samples tab is omitted when the data has no `sample_id`/`trio_id`
+  column. Categories are kept when ≥2 pass samples **or** ≥2 pass genes share them.
+- **Category × pass-tier matrix** – the four `pass·…` columns are **cumulative
+  impact tiers** (HIGH ⊆ HIGH+MOD ⊆ HIGH+MOD+LOW ⊆ ALL; ALL includes
+  MODIFIER/blank). Each cell is **`count (%)`** — the tab's unit in a category gene at
+  that tier and, in parens, their % of the base (the cohort probands on the samples
+  tab, the total pass DNMs on the DNMs tab) — with a green **✓** when that tier's FDR
+  q<0.05 (blank = 0). Reading across the tiers shows whether the convergence is
+  concentrated in high-impact variants or only appears once low-impact hits are
+  included.
+- **The `…p/q` columns (right)** – the exact statistics behind each ✓, kept to the
+  right so the cells stay scannable: `p / q` = the uncorrected p-value and the
+  Benjamini-Hochberg FDR q for that tier (green when q<0.05; `—` for an empty tier or
+  a dimension with no background). On the **samples** tab p is a **Poisson-binomial**
+  whose expected accounts for each proband's own pass-DNM burden at that tier (a
+  many-DNM proband is *expected* to hit, so its single hit isn't surprising); on the
+  **DNMs** tab a **binomial** over that tier's pass DNMs (not deduped by proband, so
+  less robust). Each tab's *q* is BH-corrected **per dimension** across its
+  (category × tier) tests.
+- **Background & fold** – `% all genes` is the category's *prevalence within its own
+  source* (`cat size` ÷ the source's gene count, shown per section) — the chance
+  rate. **`Fold (pass·ALL)`** is the headline effect size: the observed pass·ALL
+  rate ÷ that prevalence. On the samples tab the rate is # pass·ALL probands ÷ the
+  **true cohort** (every attempted trio incl. those with 0 DNMs — the Sample-QC trio
+  count when loaded, else distinct probands in the callset); on the DNMs tab it is #
+  pass·ALL DNMs ÷ total pass DNMs. Bold-green at ≥5×. The striking case is a small
+  `% all genes` next to a large fold — "1% of genes but 50% of samples."
+- **`all·ALL` quality flag** – the tab's unit hitting the category at *any* curation
+  status. A large gap (all·ALL ≫ pass·ALL) means the pass signal came from a noisy,
+  poor-quality pool — treat that row with suspicion.
 - **Dimensions (8, all offline)** – constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9),
   ClinVar P/LP history, **GenCC Mode of Inheritance**, **protein domain**
   (InterPro, human gene→domain bundled from Ensembl/InterPro — terms and
   background from the same source), **Reactome** & **WikiPathways** pathways,
   **HGNC gene families**, **MSigDB Hallmark** processes. On **GRCh37/hg19** exports the
-  constraint dimension shows `—` for prevalence/fold/p (the bundled constraint
+  constraint dimension shows `—` for prevalence/fold/q (the bundled constraint
   universe is gnomAD v4.1/GRCh38 only). Pathway dimensions overlap heavily, so
-  only the top 25 terms per dimension (by pass samples) are shown; the rest is
+  only the top 25 terms per dimension (by pass·ALL count) are shown; the rest is
   noted, never silently dropped.
-- **Method** – descriptive proportions (prevalence vs the pass sample/DNM rates)
-  are the primary read; the **sample** p/q is the conservative statistical
-  backstop and the **DNM** p/q a less-robust companion. A gene-count null only
-  approximates the de-novo mutation-rate null, so treat marginal q gently — a
-  mutation-rate model (e.g. **denovolyzeR**, at build time) is the principled next
-  step once a multi-proband cohort accrues.
+- **Method** – the counts vs `% all genes` (the fold) are the primary read; the
+  **samples** tab's q is the conservative statistical backstop and the **DNMs** tab's
+  q a less-robust companion. A gene-count null only approximates the de-novo
+  mutation-rate null, so treat marginal q gently — a mutation-rate model (e.g.
+  **denovolyzeR**, at build time) is the principled next step once a multi-proband
+  cohort accrues.
 
 If IGV has not yet been loaded (no variant clicked), exports are generated
 with data sheets only (no screenshots).

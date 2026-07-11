@@ -3639,12 +3639,60 @@ describe('Gene Summary impact counts and annotations', function () {
             .buffer(true).parse(binaryParser).expect(200)
         const wb = new ExcelJS.Workbook()
         await wb.xlsx.load(res.body)
-        const ga = wb.getWorksheet('Gene Analysis')
-        expect(ga, 'Gene Analysis sheet present').to.not.be.undefined
+        const ga = wb.getWorksheet('Gene Analysis (DNMs)')
+        expect(ga, 'Gene Analysis (DNMs) sheet present').to.not.be.undefined
         const text = []
         ga.eachRow(r => r.eachCell(c => { if (c.value != null) text.push(String(c.value)) }))
         const joined = text.join(' | ')
-        expect(joined).to.contain('distinct probands')   // the independent-signal method note
-        expect(joined).to.contain('% all genes')          // the per-source prevalence column
+        expect(joined).to.contain('CUMULATIVE impact tiers')   // the pass-tier matrix method note
+        expect(joined).to.contain('% all genes')               // the per-source prevalence column
+        expect(joined).to.contain('Fold (pass·ALL)')           // the headline fold column
+    })
+
+    it('the SAMPLE track builds a "Gene Analysis (samples)" tab wired to proband counts', function () {
+        // The samples tab is only emitted end-to-end when the data has a sample
+        // column (the fixtures lack one), so drive the exported builder directly
+        // with a real ExcelJS worksheet to cover its unit/fold/q wiring.
+        const {computeConvergence} = require('../gene-analysis')
+        const {buildGeneAnalysisTab, GA_SAMPLE_TRACK} = require('../server')
+        const conv = computeConvergence(
+            [{gene: 'G1', s: 'P1', impact: 'HIGH', curation_status: 'pass'},
+             {gene: 'G2', s: 'P2', impact: 'HIGH', curation_status: 'pass'}],
+            {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 2,
+                geneTerms: new Map([['G1', {fam: ['T']}], ['G2', {fam: ['T']}]]),
+                dimensions: [{id: 'fam', label: 'Fam'}],
+                sourceUniverse: {fam: {size: 100, counts: {T: 10}}}, totalProbands: 20})
+        conv.probandsWithVariant = 2
+        expect(conv.hasSamples).to.equal(true)
+
+        const wb = new ExcelJS.Workbook()
+        const styles = {headerFill: {}, headerFont: {}, borderThin: {}}
+        buildGeneAnalysisTab(wb, conv, styles, GA_SAMPLE_TRACK)
+        const ws = wb.getWorksheet('Gene Analysis (samples)')
+        expect(ws, 'samples tab created').to.not.be.undefined
+
+        const text = []
+        ws.eachRow(r => r.eachCell(c => { if (c.value != null) text.push(String(c.value)) }))
+        const joined = text.join(' | ')
+        expect(joined).to.contain('SAMPLE convergence')          // the conservative-track banner
+        expect(joined).to.contain('distinct PASS probands')      // the sample unit
+        // The header row + a data row for category T with the pass·ALL cell = "2 (q)".
+        const hdr = []
+        let dataRow = null
+        ws.eachRow(r => {
+            const first = r.getCell(1).value
+            if (first === 'Category') r.eachCell(c => hdr.push(String(c.value)))
+            if (first === 'T') dataRow = r
+        })
+        expect(hdr).to.include.members(['Category', 'pass·ALL', 'all·ALL', 'Fold (pass·ALL)', 'ALL p/q'])
+        expect(dataRow, 'data row for T').to.not.be.null
+        // Pass-tier cell = "count (% of cohort) ✓" — 2 probands, 10% of 20, q=0.01<0.05.
+        const passAllCol = hdr.indexOf('pass·ALL') + 1
+        expect(String(dataRow.getCell(passAllCol).value)).to.equal('2 (10%) ✓')
+        const foldCol = hdr.indexOf('Fold (pass·ALL)') + 1
+        expect(String(dataRow.getCell(foldCol).value)).to.equal('1.0×')       // (2/20)/0.1
+        // Exact stats moved off to the right: p / q for the ALL tier.
+        const pqCol = hdr.indexOf('ALL p/q') + 1
+        expect(String(dataRow.getCell(pqCol).value)).to.equal('0.010 / 0.010')
     })
 })
