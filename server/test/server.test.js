@@ -3647,6 +3647,8 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(joined).to.contain('CUMULATIVE impact tiers')   // the pass-tier matrix method note
         expect(joined).to.contain('% all genes')               // the per-source prevalence column
         expect(joined).to.contain('Fold (pass·ALL)')           // the headline fold column
+        expect(joined).to.contain('P(X≥k)')                    // the derivation column header
+        expect(joined).to.contain('BINOMDIST')                 // the live-formula derivation banner
     })
 
     it('the SAMPLE track builds a "Gene Analysis (samples)" tab wired to proband counts', function () {
@@ -3684,7 +3686,7 @@ describe('Gene Summary impact counts and annotations', function () {
             if (first === 'Category') r.eachCell(c => hdr.push(String(c.value)))
             if (first === 'T') dataRow = r
         })
-        expect(hdr).to.include.members(['Category', 'pass·ALL', 'all·ALL', 'Fold (pass·ALL)', 'ALL p/q'])
+        expect(hdr).to.include.members(['Category', 'pass·ALL', 'all·ALL', 'Fold (pass·ALL)', 'ALL p/q', 'k (probands)', 'n (at-risk)', 'Expected Σpᵢ', 'P(X≥k)'])
         expect(dataRow, 'data row for T').to.not.be.null
         // Pass-tier cell = "count (% of cohort) ✓" — 2 probands, 10% of 20, q=0.01<0.05.
         const passAllCol = hdr.indexOf('pass·ALL') + 1
@@ -3694,5 +3696,13 @@ describe('Gene Summary impact counts and annotations', function () {
         // Exact stats moved off to the right: p / q for the ALL tier.
         const pqCol = hdr.indexOf('ALL p/q') + 1
         expect(String(dataRow.getCell(pqCol).value)).to.equal('0.010 / 0.010')
+        // Derivation columns: exact inputs + a LIVE Excel formula.
+        expect(dataRow.getCell(hdr.indexOf('k (probands)') + 1).value).to.equal(2)         // probands hitting
+        expect(dataRow.getCell(hdr.indexOf('n (at-risk)') + 1).value).to.equal(2)          // probands with a pass DNM
+        expect(dataRow.getCell(hdr.indexOf('Expected Σpᵢ') + 1).value).to.be.closeTo(0.2, 1e-9)   // 0.1 + 0.1
+        const pFormula = dataRow.getCell(hdr.indexOf('P(X≥k)') + 1).value
+        expect(pFormula).to.be.an('object')                          // exceljs formula cell
+        expect(pFormula.formula).to.match(/^1-BINOMDIST\(.*TRUE\)$/)  // live, reproducible
+        expect(pFormula.result).to.be.closeTo(0.01, 1e-9)            // binom(2,2,0.1)=0.1²
     })
 })

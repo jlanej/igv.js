@@ -665,6 +665,29 @@ terms across **two matching tabs**, both **IGV-pass only**:
   **DNMs** tab a **binomial** over that tier's pass DNMs (not deduped by proband, so
   less robust). Each tab's *q* is BH-corrected **per dimension** across its
   (category × tier) tests.
+- **Derivation columns + a live Excel formula** – so the p-value is fully transparent,
+  each row also shows the exact test inputs for the pass·ALL tier and a **live Excel
+  formula** anyone can recompute:
+  - **DNMs tab** — the test is `X ~ Binomial(n, p)`: `k` = category pass DNMs,
+    `n` = total pass DNMs, `p` = the category's genome prevalence (`% all genes`),
+    `Expected` = n·p. The `P(X≥k)` cell is the live formula
+    `=1−BINOMDIST(k−1, n, p, TRUE)`, which reproduces the `ALL p/q` value exactly.
+    *Rationale:* under the null each pass DNM independently lands in a category gene
+    with probability p, so we ask whether more landed there than chance.
+  - **samples tab** — the test is a **Poisson-binomial** `X = Σ Bernoulli(pᵢ)` over the
+    at-risk probands, each with `pᵢ = 1−(1−p)^{dᵢ}` (dᵢ = that proband's pass-DNM
+    burden): `k` = probands hitting, `n` = at-risk probands, `Expected` = Σpᵢ. Excel
+    has no Poisson-binomial, so `P(X≥k)` is a live binomial approximation
+    `=1−BINOMDIST(k−1, n, Expected/n, TRUE)` that is conservative (≥ the exact value)
+    where significance lives — observed `k` above `Expected`; for `k` below `Expected`
+    it can run slightly under. The **exact** value is always the `ALL p/q` column.
+    *Rationale:* dedups per proband and credits a many-DNM proband with a higher chance,
+    so a hypermutant can't fake it.
+
+  On the **DNMs** tab any tier is reproducible with the same formula (p is
+  tier-independent and the per-tier `n` is in the banner). On the **samples** tab only
+  the worked pass·ALL tier is shown, because the per-tier `Expected` (Σpᵢ) is not
+  tabulated. Tiny values render in scientific notation so they never round to `0`.
 - **Background & fold** – `% all genes` is the category's *prevalence within its own
   source* (`cat size` ÷ the source's gene count, shown per section) — the chance
   rate. Each source uses its **own** gene universe (sizes range ~4k–31k), so compare

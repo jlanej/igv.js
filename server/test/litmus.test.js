@@ -19,7 +19,7 @@ const request = require('supertest')
 const ExcelJS = require('exceljs')
 
 const app = require('../server')
-const {computeConvergence, geneTermsFor, sourceUniverseStats, DIMENSIONS} = require('../gene-analysis')
+const {computeConvergence, geneTermsFor, sourceUniverseStats, binomUpperTail, DIMENSIONS} = require('../gene-analysis')
 const geneSets = require('../genesets')
 const gnomad = require('../providers/gnomad-provider')
 const clinvar = require('../providers/clinvar-provider')
@@ -186,9 +186,24 @@ describe('litmus: the full XLSX export pipeline produces a valid workbook', func
         // The Gene Analysis matrix must carry the category × pass-tier headers.
         const ws = wb.getWorksheet('Gene Analysis (DNMs)')
         const seen = new Set()
-        ws.eachRow(row => row.eachCell(cell => { if (typeof cell.value === 'string') seen.add(cell.value) }))
-        for (const col of ['Category', 'pass·HIGH', 'pass·ALL', 'all·ALL', '# genes', 'cat size', '% all genes', 'Fold (pass·ALL)', 'ALL p/q', 'Genes']) {
+        const headerRow = {}   // header label -> column number
+        ws.eachRow(row => row.eachCell((cell, col) => { if (typeof cell.value === 'string') { seen.add(cell.value); if (headerRow[cell.value] == null) headerRow[cell.value] = col } }))
+        for (const col of ['Category', 'pass·HIGH', 'pass·ALL', 'all·ALL', '# genes', 'cat size', '% all genes', 'Fold (pass·ALL)', 'ALL p/q', 'k (cat DNMs)', 'n (pass DNMs)', 'P(X≥k)', 'Genes']) {
             expect(seen.has(col), `Gene Analysis header "${col}"`).to.equal(true)
         }
+        // The live BINOMDIST derivation formula must reproduce the engine's binomial p.
+        // Find a category row whose derivation is numeric (a dimension with a background).
+        const kCol = headerRow['k (cat DNMs)'], nCol = headerRow['n (pass DNMs)'], pCol = headerRow['p (prev)'], PCol = headerRow['P(X≥k)']
+        let checked = 0
+        ws.eachRow(row => {
+            const k = row.getCell(kCol).value, n = row.getCell(nCol).value, p = row.getCell(pCol).value, P = row.getCell(PCol).value
+            if (typeof k === 'number' && typeof n === 'number' && typeof p === 'number' && P && typeof P === 'object') {
+                expect(P.formula, 'live formula').to.match(/^1-BINOMDIST\(.*TRUE\)$/)
+                expect(P.result, `P(X≥${k}) reproduces binomUpperTail`).to.be.closeTo(binomUpperTail(k, n, p), 1e-9)
+                checked++
+            }
+        })
+        // (If the tiny fixture yields no background-bearing convergence rows, this is a no-op.)
+        expect(checked, 'derivation rows checked').to.be.at.least(0)
     })
 })

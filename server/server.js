@@ -21,7 +21,7 @@ const {generateLollipopSvg} = require('./lollipop')
 const {fetchProteinDomains} = require('./pfam')
 const {fetchGeneAnnotationsBatch} = require('./gene-annotations')
 const annotationRegistry = require('./annotation-registry')
-const {computeConvergence, geneTermsFor, sourceUniverseStats, DIMENSIONS} = require('./gene-analysis')
+const {computeConvergence, geneTermsFor, sourceUniverseStats, binomUpperTail, DIMENSIONS} = require('./gene-analysis')
 const geneSets = require('./genesets')
 const gnomadProvider = require('./providers/gnomad-provider')
 const clinvarProvider = require('./providers/clinvar-provider')
@@ -1348,6 +1348,8 @@ function buildReadmeSheet(workbook, opts) {
         row('Purpose', 'For each grouping dimension, shows which shared attributes (categories) your genes converge on — the signal when de novo hits are singletons scattered across genes. Everything on both tabs is IGV-PASS only.')
         row('Pass-tier cells: count (%) ✓', 'The four "pass·…" columns are CUMULATIVE impact tiers (HIGH ⊆ HIGH+MOD ⊆ HIGH+MOD+LOW ⊆ ALL; ALL includes MODIFIER/blank). Each cell = the count of the tab\'s unit (probands or DNMs) in a category gene at that tier, and in parens their % of the base (the cohort probands on the samples tab, the total pass DNMs on the DNMs tab). A green "✓" marks a tier whose FDR q<0.05. Blank = 0. Reading across the tiers shows whether the convergence is concentrated in high-impact variants or only appears once low-impact hits are included.', 'impact tier × category')
         row('“…p/q” columns (right)', 'The exact statistics behind each tier\'s ✓, kept to the right so the cells stay scannable: "p / q" = the uncorrected p-value and the Benjamini-Hochberg FDR q for that tier (green when q<0.05; "—" for an empty tier or a dimension with no background). Samples tab p: Poisson-binomial — probability of ≥ this many pass probands hitting the category by chance, where each proband\'s expected hit-rate uses its OWN pass-DNM burden at that tier (a proband with many DNMs is expected to hit, so its single hit is not surprising). DNMs tab p: binomial — each pass DNM at that tier is an independent draw at the "% all genes" rate (not deduped by proband, so less robust). Each tab\'s q is BH-corrected PER DIMENSION across its (category × tier) tests.', 'Poisson-binomial / binomial + BH')
+        row('Derivation columns + Excel formula (DNMs tab)', 'To make the DNM p-value fully transparent, each row also shows the exact test inputs for the pass·ALL tier and a LIVE Excel formula. The DNM test is a BINOMIAL: X ~ Binomial(n, p), where k = "k (cat DNMs)" = pass·ALL DNMs in a category gene; n = "n (pass DNMs)" = total pass DNMs; p = "p (prev)" = the category\'s genome prevalence ("% all genes" as a fraction). RATIONALE: under the null, each of the n pass DNMs independently lands in a category gene with probability p (the fraction of genes in the category), so we test whether MORE landed there than chance. The p-value is the upper tail P(X ≥ k), written in the "P(X≥k)" cell as the live Excel formula  =1−BINOMDIST(k−1, n, p, TRUE)  (it recomputes to the same number as the "ALL p/q" column). "Expected n·p" = the chance-expected count for comparison to k. For a different tier, reuse the formula with that tier\'s k and its total pass DNMs (listed in the banner).', 'X ~ Binomial(n, p); P(X≥k)=1−BINOMDIST(k−1,n,p,TRUE)')
+        row('Derivation columns + Excel formula (samples tab)', 'The SAMPLE test is a POISSON-BINOMIAL (a binomial whose trials have different success probabilities): X = Σ Bernoulli(pᵢ) over the at-risk probands, where each proband i with dᵢ pass DNMs at the tier hits a category gene by chance with pᵢ = 1−(1−p)^dᵢ (p = "% all genes"). Columns: k = "k (probands)" = probands observed hitting; n = "n (at-risk)" = probands with ≥1 pass DNM; "Expected Σpᵢ" = the chance mean Σpᵢ. RATIONALE: this dedups per proband and credits a high-DNM proband with a higher chance, so a hypermutant can\'t fake convergence. The p-value is P(X ≥ k); Excel has no Poisson-binomial function, so the "P(X≥k)" cell holds a LIVE BINOMIAL approximation  =1−BINOMDIST(k−1, n, Expected/n, TRUE)  (n trials at the mean per-proband rate). It is conservative (≥ the exact value) where significance lives — observed k above the Expected count — and can run slightly under for k below Expected; the EXACT Poisson-binomial value is always the "ALL p/q" column. The worked example is the pass·ALL tier only (other tiers use the same test but their per-proband burdens aren\'t tabulated). The DNMs tab\'s BINOMDIST is the single-probability analogue and reproduces every tier.', 'X = ΣBernoulli(pᵢ); P(X≥k) exact = Poisson-binomial')
         row('all·ALL', 'QUALITY FLAG (all curation statuses, any impact): the tab\'s unit hitting the category regardless of IGV status. A large gap (all·ALL ≫ pass·ALL) means the category\'s pass signal was drawn from a pool with many poor-quality/non-pass calls — treat that row with suspicion.', 'curation quality check')
         row('cat size / % all genes', 'The BACKGROUND (chance rate). cat size = genes in the category within its own source universe; % all genes = cat size ÷ that source\'s gene count (shown in each section header) — e.g. % of gnomAD-scored genes at pLI≥0.9, a pathway\'s size ÷ the genes its library annotates, or a protein domain\'s size ÷ ~19k human genes with any domain. Each source uses its OWN gene universe (sizes range ~4k–31k), so Fold and % all genes are comparable WITHIN a dimension, not across dimensions. Shows "—" when a dimension has no offline background — constraint on GRCh37 exports (the bundle is gnomAD v4.1/GRCh38 only), or the protein domain when the InterPro bundle is absent (MyGene fallback).', 'per-source universe')
         row('Fold (pass·ALL)', 'The headline effect size at the pass·ALL tier: the observed pass·ALL rate ÷ "% all genes". On the samples tab the rate is # pass·ALL probands ÷ the TRUE cohort size — max(distinct probands in the callset, the Sample-QC trio count) so it can never undercount below the observed probands (every attempted trio incl. 0-DNM ones; shown in the banner). On the DNMs tab it is # pass·ALL DNMs ÷ total pass DNMs. Bold-green when ≥5× AND backed by ≥2 units (a big fold on a single unit / tiny cohort is left un-bolded). "1% of genes but 50% of samples" is the striking case.')
@@ -1406,15 +1408,27 @@ function buildGeneAnalysisTab(workbook, conv, styles, track) {
     const probandsWithVariant = conv.probandsWithVariant || totalProbands
     const nPassDnms = conv.nPassDnms || 0
     // Columns: Category | 4 pass-tier "count (%) ✓" | all·ALL | # genes | cat size |
-    // % all genes | Fold | 4 pass-tier "p / q" | Genes.
+    // % all genes | Fold | 4 pass-tier "p / q" | derivation (pass·ALL: k, n[, p], Expected,
+    // P(X≥k) live formula) | Genes.
     const base = 1 + passCells.length
     const ALLALL = base + 1, CG = base + 2, CAT = base + 3, PALL = base + 4, FOLD = base + 5
     const PQ0 = base + 6                          // first per-tier "p / q" column
-    const GENES = PQ0 + passCells.length
+    const DER0 = PQ0 + passCells.length          // first derivation column (pass·ALL worked example)
+    const nDeriv = track.conservative ? 4 : 5    // sample: k,n,E,P   DNM: k,n,p,E,P
+    const GENES = DER0 + nDeriv
     const nCols = GENES
 
     // % base for the count cells: cohort probands (samples) or total pass DNMs (DNMs).
     const pctBase = track.conservative ? totalProbands : nPassDnms
+    const nDnmsByTier = conv.nDnmsByTier || {}, nProbandsByTier = conv.nProbandsByTier || {}
+
+    // A1-style column reference (for the live Excel formulas below).
+    const colLetter = (n) => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26) } return s }
+    // Derivation-cell number formats — conditional so a tiny value renders in scientific
+    // notation instead of rounding to "0.0" (Excel: [<x]fmtA;fmtB → fmtA when value<x).
+    const FMT_PVAL = '[<0.001]0.0E+00;0.000'     // P(X≥k): scientific when tiny, else 3 dp
+    const FMT_PREV = '[<0.001]0.0E+00;0.0000'    // p (prevalence)
+    const FMT_EXP = '[<0.05]0.0E+00;0.0'         // Expected count — never collapse to 0.0
 
     const fmtP = (p) => p == null ? '—' : (p < 0.001 ? p.toExponential(1) : p.toFixed(3))
     const pct = (x) => { if (x == null) return '—'; const v = x * 100; return `${v.toFixed(v < 0.1 ? 2 : (v < 1 ? 1 : 0))}%` }
@@ -1442,6 +1456,14 @@ function buildGeneAnalysisTab(workbook, conv, styles, track) {
         ? 'The SAMPLE test is the conservative, robust read: its expected accounts for EACH proband\'s per-tier pass-DNM burden, so a single hypermutated proband can\'t fake convergence (it dedups to one sample AND is expected to hit). A category kept via ≥2 GENES can still show a ✓ on a count of 1 — that is ONE proband hitting ≥2 genes that share the term (within-proband gene convergence), not recurrence across samples; check the "# genes" column. A gene-count null only approximates the de-novo mutation-rate null, so treat marginal q gently. The companion "Gene Analysis (DNMs)" tab gives the variant-level view.'
         : 'The DNM test is a binomial over pass DNMs at each tier — LESS robust than the samples tab (a hypermutated proband inflates it; it is not deduped by proband). Enrichment is upper-tail only (depletion is not tested). Use "Gene Analysis (samples)" as the headline and this for the variant-level view.',
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    // Derivation columns (right of Genes' left neighbour): show the exact test inputs
+    // for the pass·ALL tier + a LIVE Excel formula so the p-value is fully reproducible.
+    const tierN = track.conservative ? nProbandsByTier : nDnmsByTier
+    const tierNStr = passCells.map(c => `${c.label.replace('pass·', '')}=${tierN[c.tierKey] != null ? tierN[c.tierKey] : 0}`).join(', ')
+    addBanner(track.conservative
+        ? `Per-row DERIVATION (worked for the pass·ALL tier only): the SAMPLE test is a Poisson-binomial — each at-risk proband i with dᵢ pass DNMs hits a category gene by chance with pᵢ = 1−(1−p)^dᵢ (p = "% all genes"). Columns: "k" = probands observed hitting; "n" = at-risk probands (≥1 pass DNM); "Expected" = Σpᵢ (the chance mean). Excel has no Poisson-binomial, so "P(X≥k)" is a LIVE binomial approximation  =1−BINOMDIST(k−1, n, Expected/n, TRUE)  that is conservative (≥ the exact value) where significance lives — observed k ABOVE the Expected count; for k below Expected it can run slightly under. The EXACT Poisson-binomial value is always the "ALL p/q" column. (Other tiers use the same test but their per-proband burdens aren't tabulated; at-risk n per tier: ${tierNStr}.)`
+        : `Per-row DERIVATION (worked for the pass·ALL tier): the DNM test is Binomial(n, p) — each pass DNM independently lands in a category gene with p = "% all genes". Columns: "k" = category pass DNMs; "n" = total pass DNMs; "p" = prevalence; "Expected" = n·p. "P(X≥k)" is a LIVE Excel formula  =1−BINOMDIST(k−1, n, p, TRUE)  that reproduces the "ALL p/q" p-value exactly. Any tier is reproducible: use the same formula with that tier's k (the pass column) and its total pass DNMs: ${tierNStr}.`,
+        {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
 
     // Headline: strongest pass·ALL convergence per dimension (in this unit).
     const headBits = []
@@ -1454,8 +1476,11 @@ function buildGeneAnalysisTab(workbook, conv, styles, track) {
         {bold: true, size: 11, color: {argb: 'FF2C3E50'}})
     r++; ws.addRow([])   // spacer
 
+    const derivHeaders = track.conservative
+        ? ['k (probands)', 'n (at-risk)', 'Expected Σpᵢ', 'P(X≥k)']
+        : ['k (cat DNMs)', 'n (pass DNMs)', 'p (prev)', 'Expected n·p', 'P(X≥k)']
     const headerLabels = ['Category', ...passCells.map(c => c.label), 'all·ALL', '# genes', 'cat size', '% all genes', 'Fold (pass·ALL)',
-        ...passCells.map(c => `${c.label.replace('pass·', '')} p/q`), 'Genes']
+        ...passCells.map(c => `${c.label.replace('pass·', '')} p/q`), ...derivHeaders, 'Genes']
     r++
     const hdr = ws.addRow(headerLabels)
     hdr.eachCell(cell => { cell.fill = headerFill; cell.font = headerFont; cell.border = borderThin; cell.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true} })
@@ -1466,6 +1491,7 @@ function buildGeneAnalysisTab(workbook, conv, styles, track) {
     ws.getColumn(ALLALL).width = 8; ws.getColumn(CG).width = 8; ws.getColumn(CAT).width = 8
     ws.getColumn(PALL).width = 11; ws.getColumn(FOLD).width = 12
     for (let i = 0; i < passCells.length; i++) ws.getColumn(PQ0 + i).width = 13
+    for (let i = 0; i < nDeriv; i++) ws.getColumn(DER0 + i).width = 12
     ws.getColumn(GENES).width = 48
 
     let anyGroups = false
@@ -1484,6 +1510,7 @@ function buildGeneAnalysisTab(workbook, conv, styles, track) {
         secRow.getCell(1).border = borderThin
 
         shown.forEach((g, idx) => {
+            const rowNum = r + 1                                     // this row's 1-based index (for formula refs)
             const genesStr = g.genes.length > 16 ? g.genes.slice(0, 16).join(', ') + ` +${g.genes.length - 16}` : g.genes.join(', ')
             const rowVals = [g.term]
             for (const c of passCells) rowVals.push(tierStr(g.cells[c.key]))   // count (%) ✓
@@ -1493,6 +1520,25 @@ function buildGeneAnalysisTab(workbook, conv, styles, track) {
             rowVals.push(pct(g.prevalence))                          // % all genes
             rowVals.push(fmtFold(g[track.foldKey]))                  // Fold (pass·ALL)
             for (const c of passCells) rowVals.push(pqStr(g.cells[c.key]))   // p / q per tier (right)
+            // Derivation (pass·ALL worked example): exact inputs + a LIVE Excel formula.
+            if (g.prevalence == null) {
+                for (let i = 0; i < nDeriv; i++) rowVals.push('—')
+            } else if (track.conservative) {
+                const k = cnt(g.cells['pass|ALL']), nAt = nProbandsByTier['ALL'] || 0, E = g.expSampleAll
+                const kA = colLetter(DER0) + rowNum, nA = colLetter(DER0 + 1) + rowNum, eA = colLetter(DER0 + 2) + rowNum
+                rowVals.push(k, nAt, E != null ? E : '—')
+                rowVals.push((nAt > 0 && E != null && k > 0)
+                    ? {formula: `1-BINOMDIST(${kA}-1,${nA},${eA}/${nA},TRUE)`, result: binomUpperTail(k, nAt, E / nAt)}
+                    : '—')
+            } else {
+                const k = cnt(g.cells['pass|ALL']), n = nPassDnms, p = g.prevalence
+                const kA = colLetter(DER0) + rowNum, nA = colLetter(DER0 + 1) + rowNum, pA = colLetter(DER0 + 2) + rowNum
+                rowVals.push(k, n, p)
+                rowVals.push({formula: `${nA}*${pA}`, result: n * p})
+                rowVals.push((k > 0 && n > 0)
+                    ? {formula: `1-BINOMDIST(${kA}-1,${nA},${pA},TRUE)`, result: g.cells['pass|ALL'].pDnm}
+                    : '—')
+            }
             rowVals.push(genesStr)
             r++
             const row = ws.addRow(rowVals)
@@ -1500,6 +1546,13 @@ function buildGeneAnalysisTab(workbook, conv, styles, track) {
             for (let i = 0; i < passCells.length; i++) row.getCell(2 + i).alignment = {horizontal: 'center'}
             for (const col of [ALLALL, CG, CAT, PALL, FOLD]) row.getCell(col).alignment = {horizontal: 'center'}
             for (let i = 0; i < passCells.length; i++) row.getCell(PQ0 + i).alignment = {horizontal: 'center'}
+            for (let i = 0; i < nDeriv; i++) row.getCell(DER0 + i).alignment = {horizontal: 'center'}
+            // Magnitude-preserving formats: switch to scientific for tiny values so a
+            // small prevalence / expected count / p-value never collapses to "0.0".
+            if (g.prevalence != null) {
+                if (track.conservative) { row.getCell(DER0 + 2).numFmt = FMT_EXP; row.getCell(DER0 + 3).numFmt = FMT_PVAL }
+                else { row.getCell(DER0 + 2).numFmt = FMT_PREV; row.getCell(DER0 + 3).numFmt = FMT_EXP; row.getCell(DER0 + 4).numFmt = FMT_PVAL }
+            }
             passCells.forEach((c, i) => {
                 if (!isSig(g.cells[c.key])) return
                 row.getCell(2 + i).font = {bold: true, color: {argb: 'FF1E8449'}}      // green count cell

@@ -295,8 +295,12 @@ function computeConvergence(variants, opts) {
     // Pass denominators + per-tier burden arrays / DNM totals for the tests.
     const nPassProbands = passBurdenByTier['ALL'].size   // probands with ≥1 pass DNM
     const nPassDnms = cellVars[REF_CELL]                 // total pass DNMs (= pass|ALL)
-    const burdenByTier = {}, nDnmsByTier = {}
-    for (const tk of passTierKeys) { burdenByTier[tk] = [...passBurdenByTier[tk].values()]; nDnmsByTier[tk] = cellVars['pass|' + tk] }
+    const burdenByTier = {}, nDnmsByTier = {}, nProbandsByTier = {}
+    for (const tk of passTierKeys) {
+        burdenByTier[tk] = [...passBurdenByTier[tk].values()]
+        nDnmsByTier[tk] = cellVars['pass|' + tk]         // binomial n (DNM test) for this tier
+        nProbandsByTier[tk] = passBurdenByTier[tk].size  // at-risk probands (sample test) for this tier
+    }
 
     const sections = dims.map(d => {
         const groups = []
@@ -339,8 +343,13 @@ function computeConvergence(variants, opts) {
             const refCC = cellCounts[REF_CELL]
             const foldSampleAll = (sampleCol && prevalence > 0 && totalProbands > 0) ? (refCC.individuals / totalProbands) / prevalence : null
             const foldDnmAll = (prevalence > 0 && nPassDnms > 0) ? (refCC.variants / nPassDnms) / prevalence : null
+            // SAMPLE expected at pass|ALL = Σ pᵢ over at-risk probands (pᵢ = 1-(1-prev)^dᵢ).
+            // This is the mean of the Poisson-binomial null — the "expected # probands
+            // hitting by chance" that the sheet shows next to the observed count.
+            const expSampleAll = (sampleCol && prevalence != null && prevalence > 0)
+                ? burdenByTier['ALL'].reduce((s, dd) => s + (1 - Math.pow(1 - prevalence, dd)), 0) : null
             groups.push({term, refIndividuals, refGenes, refVariants, catSize, prevalence,
-                cells: cellCounts, genes: [...ref.genes].sort(), foldSampleAll, foldDnmAll})
+                cells: cellCounts, genes: [...ref.genes].sort(), foldSampleAll, foldDnmAll, expSampleAll})
         }
         // Rank by pass|ALL recurrence, then genes, then pass|ALL sample p, then name.
         const psp = g => (g.cells[REF_CELL].pSample == null ? 1 : g.cells[REF_CELL].pSample)
@@ -361,9 +370,11 @@ function computeConvergence(variants, opts) {
     }))
 
     // Denominators for the proportions: grid % uses cohort probands; the pass
-    // summary uses pass probands / pass DNMs.
+    // summary uses pass probands / pass DNMs. Per-tier n's (nDnmsByTier = binomial n
+    // for the DNM test; nProbandsByTier = at-risk n for the sample test) are exported
+    // so the sheet can show the exact test inputs / a reproducible Excel formula.
     return {cells: cellSummary, sections, hasSamples: !!sampleCol,
-        totalProbands, nPassProbands, nPassDnms}
+        totalProbands, nPassProbands, nPassDnms, nDnmsByTier, nProbandsByTier}
 }
 
 /**
