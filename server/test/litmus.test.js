@@ -48,7 +48,7 @@ describe('litmus: bundled data loads with expected magnitudes', function () {
         expect(geneSets.available().map(a => a.id)).to.include.members(['reactome', 'wikipathways', 'hgncFamily', 'msigdbHallmark', 'domain'])
         expect(gsLibs.reactome.size).to.be.greaterThan(8000)
         expect(gsLibs.wikipathways.size).to.be.greaterThan(6000)
-        expect(gsLibs.hgncFamily.size).to.be.greaterThan(20000)
+        expect(gsLibs.hgncFamily.size).to.be.within(14000, 18000)   // ~15.5k PROTEIN-CODING genes (non-coding loci excluded)
         expect(gsLibs.msigdbHallmark.size).to.be.greaterThan(3000)
         expect(gsLibs.domain.size, 'InterPro domain').to.be.greaterThan(15000)   // ~19k human genes
         // the domain library is a base-dim source (not a new convergence section)

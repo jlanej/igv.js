@@ -254,7 +254,7 @@ async function buildGeneSets() {
     if (!hgncResp.ok) throw new Error(`HGNC HTTP ${hgncResp.status}`)
     const hgncLines = (await hgncResp.text()).split('\n')
     const hh = hgncLines[0].split('\t')
-    const hi = {sym: hh.indexOf('symbol'), grp: hh.indexOf('gene_group'), ent: hh.indexOf('entrez_id')}
+    const hi = {sym: hh.indexOf('symbol'), grp: hh.indexOf('gene_group'), ent: hh.indexOf('entrez_id'), lt: hh.indexOf('locus_type')}
     const entrez2sym = {}, hgncFamily = {}
     for (let i = 1; i < hgncLines.length; i++) {
         const c = hgncLines[i].split('\t')
@@ -262,15 +262,23 @@ async function buildGeneSets() {
         if (!sym) continue
         const up = sym.toUpperCase()
         const ent = (c[hi.ent] || '').trim()
-        if (ent) entrez2sym[ent] = up
+        if (ent) entrez2sym[ent] = up   // full map (all loci) — WikiPathways Entrez→symbol lookup
+        // Gene-family convergence is a PROTEIN-CODING background. HGNC also groups
+        // lncRNA / miRNA / pseudogene / tRNA / snoRNA loci into families (~12k of the
+        // ~28k grouped genes); including them pads the prevalence denominator ~1.8× and
+        // overstates every coding family's fold / anti-conservatively inflates its q. A
+        // de novo coding DNM can realistically only hit a coding gene, so restrict the
+        // family universe to locus_type 'gene with protein product'.
         const grp = (c[hi.grp] || '').trim().replace(/^"|"$/g, '')
-        if (grp) for (const g of grp.split('|')) { const t = g.trim(); if (t) (hgncFamily[up] || (hgncFamily[up] = [])).push(t) }
+        const isCoding = (c[hi.lt] || '').trim() === 'gene with protein product'
+        if (grp && isCoding) for (const g of grp.split('|')) { const t = g.trim(); if (t) (hgncFamily[up] || (hgncFamily[up] = [])).push(t) }
     }
     writeGeneSet('hgnc_family', {
         id: 'hgncFamily', label: 'Gene family (HGNC)', source: 'HGNC gene groups',
         version: 'hgnc_complete_set', url: 'https://www.genenames.org/download/statistics-and-files/',
         license: 'Custom — no restrictions on use; attribution requested',
         licenseUrl: 'https://www.genenames.org/about/', builtWith: 'build-annotation-data.js buildGeneSets',
+        note: 'Protein-coding genes only (HGNC locus_type "gene with protein product") — non-coding loci excluded so the prevalence background is the coding genome.',
     }, hgncFamily)
 
     // Reactome (symbols; zipped GMT, Homo sapiens R-HSA rows).

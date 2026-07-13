@@ -622,7 +622,7 @@ belongs to many pathways). All are offline and cleanly licensed:
 |---------|------|--------|---------|
 | **Reactome** | curated pathways | `ReactomePathways.gmt` (Homo sapiens) | CC0 1.0 |
 | **WikiPathways** | community pathways | WikiPathways GMT (Entrez→symbol via HGNC) | CC0 1.0 |
-| **HGNC gene families** | curated gene families/superfamilies | HGNC `gene_group` | attribution |
+| **HGNC gene families** | curated gene families/superfamilies (protein-coding genes only — `locus_type` "gene with protein product") | HGNC `gene_group` | attribution |
 | **MSigDB Hallmark** | 50 broad, well-separated processes | MSigDB `h.all` (symbols) | CC BY 4.0 |
 | **InterPro domain** | protein domains — the *background* for the existing "Protein domain" dimension (`interpro_domain.json.gz`, ~19k human genes) | Ensembl BioMart `interpro_description` (byte-identical to MyGene's `.desc`), per-chromosome | InterPro CC0 / EMBL-EBI |
 
@@ -667,30 +667,39 @@ terms across **two matching tabs**, both **IGV-pass only**:
   (category × tier) tests.
 - **Background & fold** – `% all genes` is the category's *prevalence within its own
   source* (`cat size` ÷ the source's gene count, shown per section) — the chance
-  rate. **`Fold (pass·ALL)`** is the headline effect size: the observed pass·ALL
-  rate ÷ that prevalence. On the samples tab the rate is # pass·ALL probands ÷ the
-  **true cohort** (every attempted trio incl. those with 0 DNMs — the Sample-QC trio
-  count when loaded, else distinct probands in the callset); on the DNMs tab it is #
-  pass·ALL DNMs ÷ total pass DNMs. Bold-green at ≥5×. The striking case is a small
-  `% all genes` next to a large fold — "1% of genes but 50% of samples."
+  rate. Each source uses its **own** gene universe (sizes range ~4k–31k), so compare
+  Fold **within** a dimension, not across dimensions. **`Fold (pass·ALL)`** is the
+  headline effect size: the observed pass·ALL rate ÷ that prevalence. On the samples
+  tab the rate is # pass·ALL probands ÷ the **true cohort** —
+  `max(distinct probands in the callset, Sample-QC trio count)`, so it never
+  undercounts below the observed probands (every attempted trio incl. those with 0
+  DNMs); on the DNMs tab it is # pass·ALL DNMs ÷ total pass DNMs. Bold-green when
+  ≥5× **and** backed by ≥2 units (a big fold on a single unit / tiny cohort is left
+  un-bolded). The striking case is a small `% all genes` next to a large fold —
+  "1% of genes but 50% of samples."
 - **`all·ALL` quality flag** – the tab's unit hitting the category at *any* curation
   status. A large gap (all·ALL ≫ pass·ALL) means the pass signal came from a noisy,
   poor-quality pool — treat that row with suspicion.
-- **Dimensions (8, all offline)** – constraint tail (gnomAD LOEUF<0.6 / pLI≥0.9),
-  ClinVar P/LP history, **GenCC Mode of Inheritance**, **protein domain**
-  (InterPro, human gene→domain bundled from Ensembl/InterPro — terms and
-  background from the same source), **Reactome** & **WikiPathways** pathways,
-  **HGNC gene families**, **MSigDB Hallmark** processes. On **GRCh37/hg19** exports the
-  constraint dimension shows `—` for prevalence/fold/q (the bundled constraint
-  universe is gnomAD v4.1/GRCh38 only). Pathway dimensions overlap heavily, so
-  only the top 25 terms per dimension (by pass·ALL count) are shown; the rest is
-  noted, never silently dropped.
+- **Dimensions (8, offline for hg38 with the bundles present)** – constraint tail
+  (gnomAD LOEUF<0.6 / pLI≥0.9), ClinVar P/LP history, **GenCC Mode of Inheritance**,
+  **protein domain** (InterPro, human gene→domain bundled from Ensembl/InterPro —
+  terms and background from the same source), **Reactome** & **WikiPathways**
+  pathways, **HGNC gene families** (**protein-coding genes only** — non-coding loci
+  excluded so the background is the coding genome), **MSigDB Hallmark** processes. On
+  **GRCh37/hg19** exports the constraint TERMS come from the live gnomAD API and the
+  dimension shows `—` for prevalence/fold/q (the bundled constraint universe is
+  gnomAD v4.1/GRCh38 only); if the InterPro bundle is absent the domain TERMS fall
+  back to live MyGene (no background). Pathway dimensions overlap heavily, so only
+  the top 25 terms per dimension (by pass·ALL **distinct-proband count**, a single
+  ranking shared by both tabs) are shown; the rest is noted, never silently dropped.
 - **Method** – the counts vs `% all genes` (the fold) are the primary read; the
   **samples** tab's q is the conservative statistical backstop and the **DNMs** tab's
-  q a less-robust companion. A gene-count null only approximates the de-novo
-  mutation-rate null, so treat marginal q gently — a mutation-rate model (e.g.
-  **denovolyzeR**, at build time) is the principled next step once a multi-proband
-  cohort accrues.
+  q a less-robust companion. Enrichment is **upper-tail only** (depletion is not
+  tested), FDR is controlled **within each dimension** (don't pool ✓ across
+  dimensions), and the nested cumulative pass tiers make each tier's q conservative.
+  A gene-count null only approximates the de-novo mutation-rate null, so treat
+  marginal q gently — a mutation-rate model (e.g. **denovolyzeR**, at build time) is
+  the principled next step once a multi-proband cohort accrues.
 
 If IGV has not yet been loaded (no variant clicked), exports are generated
 with data sheets only (no screenshots).
