@@ -44,6 +44,17 @@ describe('litmus: bundled data loads with expected magnitudes', function () {
         expect(cvB.size, 'ClinVar').to.be.greaterThan(25000)    // ~31k
         expect(gcB.size, 'GenCC').to.be.greaterThan(5000)       // ~6.1k
     })
+    it('gnomAD bundle carries per-gene mutation rates (μ) in a sane magnitude band', function () {
+        // Guards the fnum rounding regression (μ≈1e-6 must NOT collapse to 0) and the μ merge.
+        const tsc2 = gnB.get('TSC2')
+        expect(tsc2, 'TSC2 in gnomAD bundle').to.exist
+        expect(tsc2.muLof, 'TSC2 lof.mu').to.be.within(1e-8, 1e-4)
+        expect(tsc2.chr, 'TSC2 chromosome').to.equal('16')
+        expect(gnomad.getMu('MTOR').muMis, 'MTOR mis.mu').to.be.within(1e-8, 1e-3)
+        let withMu = 0
+        for (const rec of gnB.values()) if (rec && typeof rec.muLof === 'number' && rec.muLof > 0) withMu++
+        expect(withMu, 'genes with μ').to.be.greaterThan(15000)
+    })
     it('all gene-set libraries + the InterPro domain background are present and non-trivial', function () {
         expect(geneSets.available().map(a => a.id)).to.include.members(['reactome', 'wikipathways', 'hgncFamily', 'msigdbHallmark', 'domain'])
         expect(gsLibs.reactome.size).to.be.greaterThan(8000)

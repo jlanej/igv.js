@@ -43,7 +43,10 @@ const DEFAULT_EXPORT_CONFIG = {
         reactome: true,           // Reactome pathway convergence (CC0)
         wikipathways: true,       // WikiPathways pathway convergence (CC0)
         hgncFamily: true,         // HGNC gene-family convergence (attribution)
-        msigdbHallmark: true      // MSigDB Hallmark process convergence (CC BY)
+        msigdbHallmark: true,     // MSigDB Hallmark process convergence (CC BY)
+        // Test B: de novo mutation-rate enrichment (separate "DNM Rate" tab).
+        // De-novo-only (needs an `inheritance` column) + gnomAD μ (GRCh38); self-skips otherwise.
+        dnmRateTest: true         // λ = 2·N·μ Poisson enrichment (Samocha framework, gnomAD v4.1 rates)
     },
 
     // Per-gene impact counts on the Gene Summary tab (curation-derived, not

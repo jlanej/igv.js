@@ -3705,4 +3705,85 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(pFormula.formula).to.match(/^1-BINOMDIST\(.*TRUE\)$/)  // live, reproducible
         expect(pFormula.result).to.be.closeTo(0.01, 1e-9)            // binom(2,2,0.1)=0.1²
     })
+
+    it('the DNM Rate tab builds with a live POISSON formula reproducing the Poisson engine (real μ)', function () {
+        const {computeModelEnrichment, categoryMuSums, DE_NOVO, poissonUpperTail} = require('../dnm-enrichment')
+        const {buildDnmRateCategoryTab} = require('../server')
+        const gnomad = require('../providers/gnomad-provider')
+        const gnB = gnomad.getBundle()
+        expect(gnB.get('TSC2') && gnB.get('TSC2').muLof, 'real μ present').to.be.a('number')
+        // Two real pass de novo SNVs in TSC2 (autosomal, has μ).
+        const fam = new Map([['TSC2', ['TSC complex']]])
+        const geneTerms = new Map([['TSC2', {fam: ['TSC complex']}]])
+        const variants = [
+            {gene: 'TSC2', impact: 'HIGH', curation_status: 'pass', inheritance: 'de_novo', ref: 'C', alt: 'T', chrom: 'chr16', sample: 'P1'},
+            {gene: 'TSC2', impact: 'HIGH', curation_status: 'pass', inheritance: 'de_novo', ref: 'G', alt: 'A', chrom: 'chr16', sample: 'P2'}
+        ]
+        const dnm = computeModelEnrichment(variants, {model: DE_NOVO, geneCol: 'gene', impactCol: 'impact',
+            sampleCol: 'sample', chromCol: 'chrom', refCol: 'ref', altCol: 'alt', inheritanceCol: 'inheritance',
+            geneTerms, dimensions: [{id: 'fam', label: 'Fam'}], muByGene: gnB,
+            categoryMu: categoryMuSums({gnomad: gnB}, {fam}), N: 100, nReliable: true, minCount: 1})
+        expect(dnm.meta.nUsed).to.equal(2)
+        const wb = new ExcelJS.Workbook()
+        buildDnmRateCategoryTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
+        const ws = wb.getWorksheet('DNM Rate (gene-set)')
+        expect(ws, 'DNM Rate tab created').to.not.be.undefined
+        const hdr = []; let dataRow = null
+        ws.eachRow(r => { const f = r.getCell(1).value; if (f === 'Category') r.eachCell(c => hdr.push(String(c.value))); if (f === 'TSC complex') dataRow = r })
+        expect(hdr).to.include.members(['Category', 'HIGH', 'HIGH+MOD', 'k (HIGH+MOD)', 'λ = 2·N·μ', 'P(X≥k)'])
+        expect(hdr).to.not.include('HIGH+MOD+LOW')                      // synonymous is calibration-only
+        expect(dataRow, 'TSC complex row').to.not.be.null
+        const kCell = dataRow.getCell(hdr.indexOf('k (HIGH+MOD)') + 1).value
+        const lamCell = dataRow.getCell(hdr.indexOf('λ = 2·N·μ') + 1).value
+        const pCell = dataRow.getCell(hdr.indexOf('P(X≥k)') + 1).value
+        expect(kCell).to.equal(2)
+        expect(lamCell.formula).to.match(/^2\*100\*/)                    // λ = 2·N·Σμ live formula
+        expect(pCell.formula).to.match(/^1-POISSON\(.*TRUE\)$/)          // live, reproducible
+        expect(pCell.result).to.be.closeTo(poissonUpperTail(kCell, lamCell.result), 1e-12)
+    })
+
+    it('the DNM Rate tab withholds ✓ and warns when N is provisional (no Sample-QC)', function () {
+        const {buildDnmRateCategoryTab} = require('../server')
+        // Hand-built dnm result with a significant q but nReliable:false.
+        const dnm = {meta: {model: 'de_novo', N: 5, nReliable: false, nUsed: 3, nDistinctProbands: 3,
+                exclIndel: 0, exclXY: 0, exclNonCoding: 0, exclNoMu: 0, exclNoClassMu: 0,
+                byClass: {lof: 3, mis: 0, syn: 0}, calibration: {syn: {obs: 0, exp: 0, ratio: null}, mis: {}, lof: {}}},
+            perCategory: {tiers: [{key: 'HIGH', label: 'HIGH', classes: ['lof']}, {key: 'HIGH_MOD', label: 'HIGH+MOD', classes: ['lof', 'mis']}],
+                sections: [{id: 'fam', label: 'Fam', muSource: true, groups: [
+                    {term: 'T', probands: 3, genes: ['A', 'B', 'C'], kTop: 3,
+                        cells: {HIGH: {k: 3, lambda: 0.01, catMu: 5e-5, p: 1e-6, q: 1e-5}, HIGH_MOD: {k: 3, lambda: 0.02, catMu: 1e-4, p: 2e-6, q: 2e-5}}}]}]}}
+        const wb = new ExcelJS.Workbook()
+        buildDnmRateCategoryTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
+        const ws = wb.getWorksheet('DNM Rate (gene-set)')
+        const text = []
+        ws.eachRow(r => r.eachCell(c => { if (c.value != null) text.push(String(c.value)) }))
+        const joined = text.join(' | ')
+        expect(joined).to.contain('PROVISIONAL')                       // banner warns
+        expect(joined).to.not.contain('✓')                             // ✓ withheld despite q<0.05
+    })
+
+    it('Test B is suppressed on a GRCh37/hg19 export (gnomAD μ is GRCh38-only)', async function () {
+        this.timeout(10000)
+        const res = await request(app).post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4], exportConfig: {genomeBuild: 'hg19',
+                geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false, gnomadConstraint: {enabled: false}, clinvar: {enabled: false}},
+                geneAnalysis: {enabled: true, domain: false}}})
+            .buffer(true).parse(binaryParser).expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        expect(wb.worksheets.map(w => w.name)).to.not.include('DNM Rate (gene-set)')
+    })
+
+    it('xlsx emits the DNM Rate tab when the data has an inheritance column + gnomAD μ', async function () {
+        this.timeout(10000)
+        const exportConfig = {geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false},
+            geneAnalysis: {enabled: true, domain: false}}
+        const res = await request(app).post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4], exportConfig})
+            .buffer(true).parse(binaryParser).expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        const names = wb.worksheets.map(w => w.name)
+        expect(names, names.join(',')).to.include('DNM Rate (gene-set)')   // wiring runs (placeholder genes ⇒ empty, but the tab exists)
+    })
 })

@@ -520,3 +520,133 @@ describe('gene-set libraries (convergence dimensions)', function () {
         for (const t of terms) expect(t).to.not.match(/^KEGG_|^BIOCARTA_/i)
     })
 })
+
+describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
+    const {computeModelEnrichment, categoryMuSums, poissonUpperTail, DE_NOVO, MODELS} = require('../dnm-enrichment')
+    const {computeConvergence} = require('../gene-analysis')
+
+    it('poissonUpperTail is exact for small λ and keeps precision for tiny p', function () {
+        expect(poissonUpperTail(0, 1.5)).to.equal(1)
+        expect(poissonUpperTail(1, 0.7)).to.be.closeTo(1 - Math.exp(-0.7), 1e-12)
+        expect(poissonUpperTail(2, 0.5)).to.be.closeTo(1 - Math.exp(-0.5) * 1.5, 1e-12)   // 1-e^-λ(1+λ)
+        expect(poissonUpperTail(1, 0)).to.equal(0)                                        // k≥1, zero expectation
+        expect(poissonUpperTail(1, null)).to.equal(null)
+        expect(poissonUpperTail(3, 1)).to.be.lessThan(poissonUpperTail(2, 1))            // monotone in k
+        // tail summation (k≫λ) keeps a tiny p instead of flooring to 0: P(X≥6 | 0.001) ≈ (0.001^6)/6!
+        const tiny = poissonUpperTail(6, 0.001)
+        expect(tiny).to.be.greaterThan(0).and.to.be.lessThan(1e-18)
+        expect(tiny).to.be.closeTo(Math.pow(0.001, 6) / 720, 1e-24)
+    })
+
+    // Synthetic gnomAD-shaped bundle: G1/G2/G3 autosomal with μ; GX on chrX.
+    const gnomad = new Map([
+        ['G1', {muLof: 1e-6, muMis: 5e-6, muSyn: 3e-6, chr: '1', pli: 0.95, loeuf: 0.3}],
+        ['G2', {muLof: 2e-6, muMis: 4e-6, muSyn: 2e-6, chr: '2'}],
+        ['G3', {muLof: 1e-6, muMis: 1e-6, muSyn: 1e-6, chr: '3'}],
+        ['GX', {muLof: 1e-6, muMis: 1e-6, muSyn: 1e-6, chr: 'X'}]
+    ])
+    const fam = new Map([['G1', ['T']], ['G2', ['T']], ['G3', []]])
+
+    it('categoryMuSums excludes non-autosomal genes and sums per class', function () {
+        const cmu = categoryMuSums({gnomad}, {fam})
+        expect(cmu.total.lof).to.be.closeTo(4e-6, 1e-18)     // G1+G2+G3 (not GX)
+        expect(cmu.byDim.fam.T.lof).to.be.closeTo(3e-6, 1e-18)   // G1+G2
+        expect(cmu.byDim.fam.T.mis).to.be.closeTo(9e-6, 1e-18)
+        expect(cmu.byDim.constraint['pLI ≥ 0.9'].lof).to.be.closeTo(1e-6, 1e-18)   // G1 only
+    })
+
+    const geneTerms = new Map([['G1', {fam: ['T']}], ['G2', {fam: ['T']}], ['G3', {fam: []}]])
+    const V = (o) => Object.assign({curation_status: 'pass', inh: 'de_novo', ref: 'A', alt: 'G', chrom: '1', s: 'P?'}, o)
+    const opts = (extra) => Object.assign({model: DE_NOVO, geneCol: 'gene', impactCol: 'impact', sampleCol: 's',
+        chromCol: 'chrom', refCol: 'ref', altCol: 'alt', inheritanceCol: 'inh', geneTerms,
+        dimensions: [{id: 'fam', label: 'Fam'}], muByGene: gnomad,
+        categoryMu: categoryMuSums({gnomad}, {fam}), N: 100, nReliable: true, minCount: 1}, extra)
+
+    it('gates to pass de novo SNV autosomal coding, and λ = 2·N·μ', function () {
+        const variants = [
+            V({gene: 'G1', impact: 'HIGH', s: 'P1'}),                                   // used lof
+            V({gene: 'G2', impact: 'MODERATE', chrom: '2', ref: 'C', alt: 'T', s: 'P2'}), // used mis
+            V({gene: 'G1', impact: 'HIGH', ref: 'AT', alt: 'A', s: 'P3'}),               // indel → excluded
+            V({gene: 'GX', impact: 'HIGH', chrom: 'X', s: 'P4'}),                        // chrX → excluded
+            V({gene: 'G1', impact: 'HIGH', inh: 'inherited', s: 'P5'}),                  // not de novo
+            V({gene: 'G1', impact: 'MODIFIER', s: 'P6'})                                 // non-coding → excluded
+        ]
+        const res = computeModelEnrichment(variants, opts())
+        const m = res.meta
+        expect(m.nPassDeNovo).to.equal(5)          // P1,P2,indel,X,MODIFIER (P5 inherited excluded)
+        expect(m.exclIndel).to.equal(1)
+        expect(m.exclXY).to.equal(1)
+        expect(m.exclNonCoding).to.equal(1)
+        expect(m.nUsed).to.equal(2)
+        expect(m.byClass).to.deep.equal({lof: 1, mis: 1, syn: 0})
+        const T = res.perCategory.sections.find(s => s.id === 'fam').groups.find(g => g.term === 'T')
+        expect(res.perCategory.tiers.map(t => t.key)).to.deep.equal(['HIGH', 'HIGH_MOD'])   // no synonymous tier
+        expect(T.cells.HIGH.k).to.equal(1)
+        expect(T.cells.HIGH.lambda).to.be.closeTo(2 * 100 * 3e-6, 1e-12)     // 2·N·μ_lof(T)
+        expect(T.cells.HIGH.p).to.be.closeTo(poissonUpperTail(1, 2 * 100 * 3e-6), 1e-12)
+        expect(T.cells.HIGH_MOD.k).to.equal(2)                               // lof + mis
+        expect(T.cells.HIGH.q).to.be.a('number')                            // BH applied
+    })
+
+    it('per-class μ gate: a LoF de novo in a gene with null lof.mu is excluded (k↔λ stay consistent)', function () {
+        const gp = new Map([['GP', {muLof: null, muMis: 5e-6, muSyn: 3e-6, chr: '1'}]])
+        const res = computeModelEnrichment([V({gene: 'GP', impact: 'HIGH', s: 'PA'})], Object.assign(opts(), {
+            muByGene: gp, categoryMu: categoryMuSums({gnomad: gp}, {fam: new Map([['GP', ['T']]])}),
+            geneTerms: new Map([['GP', {fam: ['T']}]])
+        }))
+        expect(res.meta.exclNoClassMu).to.equal(1)   // LoF variant, but gene has no lof.mu → no modelable target
+        expect(res.meta.nUsed).to.equal(0)
+        // a missense de novo in the SAME gene IS counted (it has mis.mu)
+        const res2 = computeModelEnrichment([V({gene: 'GP', impact: 'MODERATE', s: 'PB'})], Object.assign(opts(), {
+            muByGene: gp, categoryMu: categoryMuSums({gnomad: gp}, {fam: new Map([['GP', ['T']]])}),
+            geneTerms: new Map([['GP', {fam: ['T']}]])
+        }))
+        expect(res2.meta.nUsed).to.equal(1)
+        expect(res2.meta.exclNoClassMu).to.equal(0)
+    })
+
+    it('k=0 tier cells stay out of the BH family (p=null), matching Test A', function () {
+        // T2 carries a single missense de novo → its HIGH tier (LoF) has k=0. Keep the
+        // numerator (geneTerms) and denominator (categoryMu) membership consistent.
+        const fam2 = new Map([['G1', ['T']], ['G2', ['T2']]])
+        const res = computeModelEnrichment([V({gene: 'G2', impact: 'MODERATE', chrom: '2', s: 'P2'})],
+            Object.assign(opts(), {geneTerms: new Map([['G1', {fam: ['T']}], ['G2', {fam: ['T2']}]]),
+                categoryMu: categoryMuSums({gnomad}, {fam: fam2})}))
+        const t2 = res.perCategory.sections.find(s => s.id === 'fam').groups.find(g => g.term === 'T2')
+        expect(t2.cells.HIGH.k).to.equal(0)
+        expect(t2.cells.HIGH.p).to.equal(null)      // not a real hypothesis → excluded from FDR family
+        expect(t2.cells.HIGH_MOD.k).to.equal(1)
+        expect(t2.cells.HIGH_MOD.p).to.be.a('number')
+    })
+
+    it('synonymous calibration control is computed genome-wide (obs ÷ 2N·Σsyn.μ)', function () {
+        const variants = [
+            V({gene: 'G3', impact: 'LOW', chrom: '3', s: 'P1'}),   // syn de novo (G3 has syn.mu, no fam term)
+            V({gene: 'G1', impact: 'HIGH', s: 'P2'})               // lof (not synonymous)
+        ]
+        const res = computeModelEnrichment(variants, opts())
+        const cmu = categoryMuSums({gnomad}, {fam})
+        expect(res.meta.byClass.syn).to.equal(1)
+        expect(res.meta.calibration.syn.exp).to.be.closeTo(2 * 100 * cmu.total.syn, 1e-12)
+        expect(res.meta.calibration.syn.ratio).to.be.closeTo(1 / (2 * 100 * cmu.total.syn), 1e-6)
+    })
+
+    it('Test A captures the indel that Test B excludes (no variant is dropped)', function () {
+        const indel = {gene: 'G1', impact: 'HIGH', curation_status: 'pass', inh: 'de_novo', ref: 'AT', alt: 'A', chrom: '1', s: 'P1'}
+        // Test B excludes it (SNV-only)
+        const b = computeModelEnrichment([indel], opts())
+        expect(b.meta.exclIndel).to.equal(1)
+        expect(b.meta.nUsed).to.equal(0)
+        // Test A counts it (origin/type-agnostic)
+        const a = computeConvergence([indel], {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 1,
+            geneTerms: new Map([['G1', {fam: ['T']}]]), dimensions: [{id: 'fam', label: 'Fam'}], totalProbands: 1})
+        const g = a.sections.find(s => s.id === 'fam').groups.find(x => x.term === 'T')
+        expect(g.cells['pass|ALL'].variants).to.equal(1)   // the indel is represented in Test A
+    })
+
+    it('non-de-novo model is registered but not computed (extension stub)', function () {
+        const res = computeModelEnrichment([], {model: MODELS.recessive_hom, dimensions: [], N: 100})
+        expect(res.perCategory.sections).to.have.lengthOf(0)
+        expect(res.meta.notImplemented).to.equal('frequency')
+    })
+})

@@ -208,6 +208,18 @@ function toRow(obj, cfg) {
 /** The loaded constraint bundle Map (for background-frequency stats). */
 function getBundle() { loadBundle(); return bundle }
 
+/**
+ * Per-gene, per-consequence mutation rates (μ) + chromosome for the de novo
+ * mutation-rate enrichment (λ = 2·N·μ). Bundle-only (GRCh38); the live API path
+ * does not expose μ, so this returns null there. {muLof, muMis, muSyn, chr} | null.
+ */
+function getMu(gene) {
+    loadBundle()
+    const rec = gene ? bundle.get(String(gene).toUpperCase()) : null
+    if (!rec || (rec.muLof == null && rec.muMis == null && rec.muSyn == null)) return null
+    return {muLof: rec.muLof ?? null, muMis: rec.muMis ?? null, muSyn: rec.muSyn ?? null, chr: rec.chr ?? null}
+}
+
 /** Clear caches / force reload (testing helper). */
 function reset() { cache.clear(); bundle = null; bundleAvailable = false; bundleLoadAttempted = false }
 
@@ -215,5 +227,5 @@ module.exports = {
     id: 'gnomad',
     attribution: 'gnomAD v4 gene constraint (LOEUF/pLI), bundled offline, CC0 — https://gnomad.broadinstitute.org',
     isEnabled, fetchBatch, columns, toRow,
-    parseConstraint, isConstrained, refGenome, reset, getBundle, BUNDLE_FILE
+    parseConstraint, isConstrained, refGenome, reset, getBundle, getMu, BUNDLE_FILE
 }

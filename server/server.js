@@ -22,6 +22,7 @@ const {fetchProteinDomains} = require('./pfam')
 const {fetchGeneAnnotationsBatch} = require('./gene-annotations')
 const annotationRegistry = require('./annotation-registry')
 const {computeConvergence, geneTermsFor, sourceUniverseStats, binomUpperTail, DIMENSIONS} = require('./gene-analysis')
+const {computeModelEnrichment, categoryMuSums, DE_NOVO} = require('./dnm-enrichment')
 const geneSets = require('./genesets')
 const gnomadProvider = require('./providers/gnomad-provider')
 const clinvarProvider = require('./providers/clinvar-provider')
@@ -1289,6 +1290,7 @@ function buildReadmeSheet(workbook, opts) {
     row('Variants', 'One row per exported variant. Rows are colour-coded by curation status (Pass/Fail/Uncertain/Pending). When --bed-tracks (kraken2 species BEDs) are configured, adds contamination columns: Contamination (assessment), Nonhuman %, Contam Reads, Nonhuman Reads, Top Taxa.')
     if (hasGene && exportCfg.sheets.geneSummary) row('Gene Summary', 'One row per gene: curation counts, impact-passing counts, and gene-level annotations. See the column dictionary below.')
     if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis (samples) / (DNMs)', 'Convergence, in two matching tabs: which shared attributes (gnomAD constraint, ClinVar history, protein domain, GenCC inheritance; Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes) your genes stack up on. Both are IGV-pass; the "(samples)" tab counts distinct probands (conservative headline), the "(DNMs)" tab counts pass DNMs. Each is a category × cumulative-impact-tier matrix of "count (%)" (with a green ✓ for FDR q<0.05, and the exact p/q to the right) against the category\'s genome-wide prevalence ("% all genes"), so you can see "1% of genes but 50% of samples". An all·ALL column flags noisy (non-pass) pools. See the dictionary below.')
+    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled && exportCfg.geneAnalysis.dnmRateTest !== false) row('DNM Rate (gene-set)', 'De novo mutation-rate enrichment (Test B): whether a gene set carries more DE NOVO variants than the gnomAD germline mutation rate predicts for N trios — Poisson λ = 2·N·μ, with a live =1−POISSON(k−1,λ,TRUE) derivation. De-novo-only; appears only when the data has an `inheritance` column and gnomAD μ (GRCh38). Complements the origin-agnostic Gene Analysis tabs. See the Methods dictionary below.')
     if (exportCfg.sheets.sampleSummary) row('Sample Summary', 'Per-sample variant counts by impact group and frequency threshold, with cohort mean/median.')
     if (hasSampleQc && exportCfg.sheets.sampleQc) row('Sample QC', 'Per-sample sequencing QC metrics with threshold-based pass/warn/fail assessment.')
     if (exportCfg.sheets.appliedFilters) row('Applied Filters', 'The filters and export settings used to produce this report (self-documenting).')
@@ -1356,7 +1358,20 @@ function buildReadmeSheet(workbook, opts) {
         row('# genes / Genes', 'Distinct PASS genes in the category (pass·ALL), and their symbols (locus heterogeneity). A category is shown only if ≥2 pass samples OR ≥2 pass genes share it; a row is bold when ≥2 pass·ALL units share it. Note: a category kept via ≥2 GENES with only 1 proband can still earn a ✓ on the samples tab — that is within-proband gene convergence, not cross-sample recurrence.')
         row('Dimensions', 'All 8 offline for an hg38 export with the bundles present: gnomAD constraint tail (LOEUF<0.6 / pLI≥0.9), ClinVar P/LP history, GenCC Mode-of-Inheritance, protein domain (InterPro, human gene→domain bundled from Ensembl/InterPro — terms + background from the same source), Reactome & WikiPathways pathways, HGNC gene families (PROTEIN-CODING genes only — non-coding loci excluded so the background is the coding genome), MSigDB Hallmark processes. On GRCh37/hg19 the constraint TERMS come from the live gnomAD API; if the InterPro bundle is absent the domain TERMS fall back to live MyGene (no background).', '8 dimensions')
         row('Reading pathways', 'Pathway dimensions overlap heavily (a gene sits in many pathways), so many near-identical rows can share the same genes — only the top 25 per dimension (by pass·ALL distinct-proband count, a single ranking shared by both tabs) are shown and the remainder is noted. Judge convergence by the gene list + the counts, not by the number of rows.')
-        row('Method', 'The counts vs "% all genes" (the fold) are the primary read — you decide if a contrast is striking. The SAMPLE tab\'s q is the conservative statistical backstop; the DNM tab\'s q is a less-robust companion. Enrichment is upper-tail only (depletion is not tested), and FDR is controlled WITHIN each dimension (don\'t pool ✓ across dimensions); the nested pass tiers make each tier\'s q conservative. A gene-count null only approximates the de-novo mutation-rate null, so treat marginal q gently; a mutation-rate model (e.g. denovolyzeR) is the principled next step once a multi-proband cohort accrues.')
+        row('Method', 'The counts vs "% all genes" (the fold) are the primary read — you decide if a contrast is striking. The SAMPLE tab\'s q is the conservative statistical backstop; the DNM tab\'s q is a less-robust companion. Enrichment is upper-tail only (depletion is not tested), and FDR is controlled WITHIN each dimension (don\'t pool ✓ across dimensions); the nested pass tiers make each tier\'s q conservative. This is a GENE-COUNT (distributional) null — it is origin-agnostic (de novo or inherited) and captures ALL variant types incl. indels. The complementary mutation-rate null lives on the separate "DNM Rate (gene-set)" tab (Test B, de novo only).')
+    }
+
+    // --- De Novo Mutation-Rate Enrichment (Test B) — publication-grade methods ---
+    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled && exportCfg.geneAnalysis.dnmRateTest !== false) {
+        section('DNM Rate (gene-set) — de novo mutation-rate enrichment (Test B)')
+        row('Purpose & scope', 'A SECOND, complementary test (its own tab) asking whether more DE NOVO variants fall in a gene set than the germline mutation rate predicts for a cohort of N trios — the classic de novo enrichment framework. DE-NOVO-ONLY: suppressed unless the data has an `inheritance` column (only `de_novo` variants are counted) and gnomAD μ is available (GRCh38). The Gene Analysis samples/DNMs tabs (Test A) are the origin-agnostic clustering test and are unaffected; every variant type (incl. indels) remains represented there.')
+        row('Model & formula', 'For a category × cumulative PROTEIN-ALTERING tier (HIGH = LoF; HIGH+MOD = LoF+missense), the observed count k of curation-pass de novo SNVs is modelled as Poisson with mean λ = 2·N·μ_set, where N = trio count and μ_set = Σ over the category\'s AUTOSOMAL genes of the gnomAD per-gene mutation rate μ for the tier\'s consequence classes (over exactly the genes counted in k). p = P(X ≥ k) = 1 − POISSON(k−1, λ, TRUE) (shown as a live Excel formula). Constant 2 = the two parental transmissions at risk per proband. Only cells with an observed hit enter the per-dimension FDR family.', 'X ~ Poisson(2·N·μ); P(X≥k)=1−POISSON(k−1,λ,TRUE)')
+        row('Rates (μ)', 'gnomAD v4.1 per-gene, per-consequence, per-transmission mutation rates lof.mu / mis.mu / syn.mu (MANE Select) — the neutral mutational target. NOT gnomAD `exp` (a standing-variant count) and NOT LOEUF/pLI (selection metrics).', 'gnomAD v4.1 lof.mu/mis.mu/syn.mu')
+        row('Consequence mapping', 'Only VEP severity exists (HIGH/MODERATE/LOW; no molecular consequence), so HIGH→LoF (lof.mu), MODERATE→missense (mis.mu), LOW→synonymous (syn.mu) — an approximation; frameshift/inframe indels in HIGH/MODERATE are excluded by the SNV-only rule. LoF and missense are the DISCOVERY classes; synonymous is only the genome-wide calibration control (never a per-category discovery column).')
+        row('Inclusion / exclusion', 'Counted: curation-PASS + `inheritance==de_novo` + SNV (ref/alt length 1) + autosomal + HIGH/MOD/LOW + gene with gnomAD μ FOR THAT consequence class. Excluded (STILL analysed by Test A): indels (μ is SNV-only), chrX/Y (2·N assumes two autosomal copies; proband sex unknown), MODIFIER/non-coding (no coding μ), genes without μ, and genes lacking μ for the variant\'s own class (no modelable target → would inflate k without λ). Exact excluded counts print on the tab.')
+        row('Cohort N', 'N = the Sample-QC trio count when a --sample-qc file is loaded (counts 0-DNM trios — the correct denominator). Without it, N falls back to distinct probands in the callset, which UNDERCOUNTS (omits 0-DNM trios) → λ too small → anti-conservative p; the tab then marks results PROVISIONAL and withholds the ✓.')
+        row('Multiple testing & calibration', 'FDR q = Benjamini-Hochberg per dimension across its OBSERVED (category × tier) cells; ✓ = q<0.05 (withheld when N is provisional). A synonymous calibration control (observed vs 2·N·Σsyn.μ) is reported: ≈1 ⇒ complete ascertainment; a ratio a little above 1 is expected because LOW-impact over-counts true synonymous, and a provisional N inflates it further. Power comes largely from recurrence, so category singletons rarely survive FDR.')
+        row('References', 'Samocha et al. Nat Genet 2014;46:944 (framework + rate model); Ware et al. Curr Protoc Hum Genet 2015 (denovolyzeR); Karczewski et al. Nature 2020;581:434 & Chen et al. Nature 2024;625:92 (gnomAD rates); Benjamini & Hochberg JRSS-B 1995;57:289 (FDR).')
     }
 
     // --- Data sources & licensing ---
@@ -1574,6 +1589,111 @@ function buildGeneAnalysisTab(workbook, conv, styles, track) {
 
     if (!anyGroups) { r++; ws.addRow([`No convergence found — no category is shared by ≥2 IGV-pass ${track.unitShort} or genes in the current export.`]); mergeAcross(r) }
 
+    ws.views = [{state: 'frozen', ySplit: headerRowIdx}]
+}
+
+/**
+ * "DNM Rate (gene-set)" tab — the de novo mutation-rate enrichment (Test B).
+ * Category × cumulative coding tier: observed k pass de novo SNVs vs a Poisson null
+ * λ = 2·N·μ, with a live =1-POISSON(k-1, λ, TRUE) derivation. Publication-grade:
+ * the banner carries the full method, inputs, exclusions, and synonymous calibration.
+ * `dnm` = computeModelEnrichment() output. Wrapped by the caller in try/catch.
+ */
+function buildDnmRateCategoryTab(workbook, dnm, styles) {
+    const {headerFill, headerFont, borderThin} = styles
+    const ws = workbook.addWorksheet('DNM Rate (gene-set)')
+    const meta = dnm.meta, sections = dnm.perCategory.sections, tiers = dnm.perCategory.tiers
+    const N = meta.N || 0, reliable = !!meta.nReliable
+    const colLetter = (n) => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26) } return s }
+    const FMT_PVAL = '[<0.001]0.0E+00;0.000', FMT_MU = '0.00E+00', FMT_LAM = '[<0.05]0.0E+00;0.000'
+    const fmtP = (p) => p == null ? '—' : (p < 0.001 ? p.toExponential(1) : p.toFixed(3))
+    const fmtR = (x) => x == null ? '—' : x.toFixed(2)
+    const isSig = (cc) => reliable && cc && cc.q != null && cc.q < 0.05       // ✓ withheld when N provisional
+    const kStr = (cc) => { if (!cc || !cc.k) return ''; return isSig(cc) ? `${cc.k} ✓` : `${cc.k}` }
+    const pqStr = (cc) => { if (!cc || cc.p == null) return '—'; return `${fmtP(cc.p)} / ${fmtP(cc.q)}` }
+    const MAX_GROUPS_PER_DIM = 25
+
+    // Columns: Category | 3 tier "k ✓" | # genes | # probands | 3 tier "p/q" | k | Σμ | λ | P(X≥k) | Genes
+    const T0 = 2, nT = tiers.length
+    const CG = 1 + nT + 1, CP = CG + 1, PQ0 = CP + 1
+    const DK = PQ0 + nT, DMU = DK + 1, DLAM = DMU + 1, DP = DLAM + 1, GENES = DP + 1
+    const nCols = GENES
+    const headTier = tiers[nT - 1]           // the broadest coding tier = the derivation worked example
+
+    const mergeAcross = (r) => ws.mergeCells(r, 1, r, nCols)
+    let r = 0
+    const banner = (text, font) => { r++; const row = ws.addRow([text]); mergeAcross(r); row.getCell(1).font = font; row.getCell(1).alignment = {wrapText: true, vertical: 'top'}; return row }
+
+    banner('Gene Analysis — DE NOVO MUTATION-RATE enrichment (Test B)', {bold: true, size: 14, color: {argb: 'FF2C3E50'}})
+    banner(`This is the DE-NOVO-ONLY, mutation-rate test — distinct from the origin-agnostic "Gene Analysis (samples/DNMs)" tabs (Test A). Model: the # of de novo SNVs in a category is Poisson with mean λ = 2·N·μ, N = ${N} trios (${reliable ? 'Sample-QC trio count, includes 0-DNM trios' : 'PROVISIONAL — no Sample-QC file, N is a lower bound'}), μ = gnomAD v4.1 per-gene per-consequence mutation rate. Consequence: HIGH→LoF (lof.mu), MODERATE→missense (mis.mu); the two columns are CUMULATIVE PROTEIN-ALTERING tiers (HIGH ⊆ HIGH+MOD). Synonymous (LOW) is the calibration control only — NOT a discovery column. Each cell = # observed de novo SNVs; ✓ = Benjamini-Hochberg FDR q<0.05 (per dimension).`,
+        {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    banner(`Derivation (worked for the ${headTier.label} tier): "k" = observed de novo SNVs; "Σμ" = summed gnomAD μ over the category's autosomal genes (same genes as k); "λ = 2·N·Σμ" = the chance expectation; "P(X≥k)" is a LIVE Excel formula  =1−POISSON(k−1, λ, TRUE)  that reproduces the "${headTier.label} p/q" value. p/q for every tier are in their own columns.`,
+        {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    banner(`Observed: ${meta.nUsed} curation-pass de novo SNVs (${meta.byClass.lof} LoF, ${meta.byClass.mis} missense, ${meta.byClass.syn} synonymous) across ${meta.nDistinctProbands} probands. Excluded from Test B (still analysed by Test A): ${meta.exclIndel} indels, ${meta.exclXY} chrX/Y, ${meta.exclNonCoding} non-coding/MODIFIER, ${meta.exclNoMu} genes without gnomAD μ, ${meta.exclNoClassMu} with no μ for the variant's own class. SNV-only + autosomal-only are required because μ is SNV-only and 2·N assumes two autosomal copies.`,
+        {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    const cal = meta.calibration || {}
+    banner(`Synonymous CALIBRATION control (not a discovery track): observed ${cal.syn ? cal.syn.obs : 0} vs expected ${cal.syn && cal.syn.exp != null ? cal.syn.exp.toFixed(1) : '—'} synonymous de novo SNVs → ratio ${cal.syn ? fmtR(cal.syn.ratio) : '—'}. Interpretation: ≈1 ⇒ de novo ascertainment is well-calibrated. A ratio a little ABOVE 1 is expected because LOW-impact over-counts true synonymous (LOW also holds splice-region/stop-retained)${reliable ? '' : ', and a PROVISIONAL N inflates it further'}; far from 1 ⇒ interpret discovery q with caution. Refs: Samocha 2014 Nat Genet 46:944; gnomAD Chen 2024 Nature 625:92; Benjamini-Hochberg 1995.`,
+        {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    if (!reliable) banner('⚠ PROVISIONAL: no Sample-QC trio file, so N excludes 0-DNM trios and is a lower bound → λ is too small → p-values are ANTI-CONSERVATIVE. The ✓ significance flag is withheld. Load a --sample-qc file for a defensible N.',
+        {bold: true, italic: true, size: 10, color: {argb: 'FFB03A2E'}})
+    r++; ws.addRow([])
+
+    const headers = ['Category', ...tiers.map(t => t.label), '# genes', '# probands', ...tiers.map(t => `${t.label} p/q`),
+        `k (${headTier.label})`, 'Σμ', 'λ = 2·N·μ', 'P(X≥k)', 'Genes']
+    r++
+    const hdr = ws.addRow(headers)
+    hdr.eachCell(c => { c.fill = headerFill; c.font = headerFont; c.border = borderThin; c.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true} })
+    hdr.height = 26
+    const headerRowIdx = r
+    ws.getColumn(1).width = 34
+    for (let i = 0; i < nT; i++) ws.getColumn(T0 + i).width = 13
+    ws.getColumn(CG).width = 8; ws.getColumn(CP).width = 10
+    for (let i = 0; i < nT; i++) ws.getColumn(PQ0 + i).width = 14
+    ws.getColumn(DK).width = 8; ws.getColumn(DMU).width = 11; ws.getColumn(DLAM).width = 11; ws.getColumn(DP).width = 11
+    ws.getColumn(GENES).width = 48
+
+    let any = false
+    for (const sec of sections) {
+        if (!sec.groups.length) continue
+        any = true
+        r++
+        const hidden = Math.max(0, sec.groups.length - MAX_GROUPS_PER_DIM)
+        const shown = sec.groups.slice(0, MAX_GROUPS_PER_DIM)
+        const note = sec.muSource ? '' : '  ·  no gnomAD μ for this dimension\'s genes'
+        const secRow = ws.addRow([`${sec.label}${hidden ? `   (top ${shown.length} of ${sec.groups.length})` : ''}${note}`])
+        mergeAcross(r)
+        secRow.getCell(1).font = {bold: true, color: {argb: 'FF2C3E50'}}
+        for (let c = 1; c <= nCols; c++) secRow.getCell(c).fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFEBDEF0'}}
+
+        shown.forEach((g, idx) => {
+            const rowNum = r + 1
+            const hc = g.cells[headTier.key]
+            const genesStr = g.genes.length > 16 ? g.genes.slice(0, 16).join(', ') + ` +${g.genes.length - 16}` : g.genes.join(', ')
+            const vals = [g.term]
+            for (const t of tiers) vals.push(kStr(g.cells[t.key]))
+            vals.push(g.genes.length, g.probands)
+            for (const t of tiers) vals.push(pqStr(g.cells[t.key]))
+            // derivation (headTier), with live Excel formulas
+            const kA = colLetter(DK) + rowNum, muA = colLetter(DMU) + rowNum, lamA = colLetter(DLAM) + rowNum
+            vals.push(hc.k, hc.catMu)
+            vals.push({formula: `2*${N}*${muA}`, result: hc.lambda})
+            vals.push((hc.k > 0 && hc.lambda != null)
+                ? {formula: `1-POISSON(${kA}-1,${lamA},TRUE)`, result: hc.p}
+                : '—')
+            vals.push(genesStr)
+            r++
+            const row = ws.addRow(vals)
+            row.eachCell(c => { c.border = borderThin; if (idx % 2 === 1) c.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}} })
+            for (let i = 0; i < nT; i++) row.getCell(T0 + i).alignment = {horizontal: 'center'}
+            for (const c of [CG, CP, DK, DMU, DLAM, DP]) row.getCell(c).alignment = {horizontal: 'center'}
+            for (let i = 0; i < nT; i++) row.getCell(PQ0 + i).alignment = {horizontal: 'center'}
+            row.getCell(DMU).numFmt = FMT_MU; row.getCell(DLAM).numFmt = FMT_LAM; row.getCell(DP).numFmt = FMT_PVAL
+            tiers.forEach((t, i) => { if (isSig(g.cells[t.key])) { row.getCell(T0 + i).font = {bold: true, color: {argb: 'FF6C3483'}}; row.getCell(PQ0 + i).font = {bold: true, color: {argb: 'FF6C3483'}} } })
+            if (hc.k >= 2) row.getCell(1).font = {bold: true}
+        })
+        if (hidden) { r++; const nr = ws.addRow([`… ${hidden} more categor${hidden === 1 ? 'y' : 'ies'} not shown (ranked below the top ${MAX_GROUPS_PER_DIM} by p-value).`]); mergeAcross(r); nr.getCell(1).font = {italic: true, size: 9, color: {argb: 'FF6B7D8D'}} }
+    }
+    if (!any) { r++; ws.addRow(['No category has an observed de novo SNV with a gnomAD mutation rate in the current export.']); mergeAcross(r) }
     ws.views = [{state: 'frozen', ySplit: headerRowIdx}]
 }
 
@@ -2001,6 +2121,38 @@ app.post('/api/export/xlsx', async (req, res) => {
                 const gaStyles = {headerFill, headerFont, borderThin}
                 if (conv.hasSamples) buildGeneAnalysisTab(workbook, conv, gaStyles, GA_SAMPLE_TRACK)
                 buildGeneAnalysisTab(workbook, conv, gaStyles, GA_DNM_TRACK)
+
+                // --- Test B: de novo mutation-rate enrichment (separate, gated) ---
+                // A DE-NOVO-ONLY test (λ = 2·N·μ, gnomAD rates). Suppressed when de novo
+                // status is unknown (no `inheritance` column) or μ is unavailable
+                // (GRCh37 / bundle lacks mutation rates). Isolated try — never affects Test A.
+                if (gaCfg.dnmRateTest !== false) {
+                    try {
+                        const inheritanceCol = headerColumns.includes('inheritance') ? 'inheritance' : null
+                        const gnMu = gnomadProvider.refGenome(exportCfg) === 'GRCh38' ? gnomadProvider.getBundle() : null
+                        const muAvailable = gnMu && gnMu.size && [...gnMu.values()].some(r => r && (r.muLof != null || r.muMis != null || r.muSyn != null))
+                        if (!inheritanceCol) {
+                            exportErrors.push({section: 'DNM Rate Enrichment', error: 'skipped — no `inheritance` column, so de novo status is unknown (the mutation-rate model applies only to de novo variants)'})
+                        } else if (!muAvailable) {
+                            exportErrors.push({section: 'DNM Rate Enrichment', error: 'skipped — gnomAD per-gene mutation rates unavailable (GRCh37 export, or the bundle predates μ; rebuild with `node scripts/build-annotation-data.js gnomad`)'})
+                        } else {
+                            const nReliable = (sampleQcTrios.length || 0) > 0
+                            const categoryMu = categoryMuSums({gnomad: gnMu, clinvar: clinvarProvider.getGenes(), gencc: genccProvider.getGenes()}, gsLibs)
+                            const dnm = computeModelEnrichment(filtered, {
+                                model: DE_NOVO, geneCol, impactCol: gaImpactCol, statusCol: 'curation_status',
+                                sampleCol: xlsSampleCol, chromCol: 'chrom', refCol: 'ref', altCol: 'alt', inheritanceCol,
+                                geneTerms, dimensions, muByGene: gnMu, categoryMu,
+                                // totalProbands = max(distinct probands in callset, Sample-QC trio count)
+                                // — never undercounts below observed probands even in the reliable path.
+                                N: totalProbands, nReliable, minCount: 1,
+                            })
+                            buildDnmRateCategoryTab(workbook, dnm, gaStyles)
+                        }
+                    } catch (dnmErr) {
+                        log.warn('DNM Rate Enrichment failed:', dnmErr.message)
+                        exportErrors.push({section: 'DNM Rate Enrichment', error: dnmErr.message})
+                    }
+                }
             } catch (sectionErr) {
                 log.warn('Gene Analysis worksheet failed:', sectionErr.message)
                 exportErrors.push({section: 'Gene Analysis', error: sectionErr.message})
@@ -3325,3 +3477,4 @@ module.exports = app
 module.exports.buildGeneAnalysisTab = buildGeneAnalysisTab
 module.exports.GA_SAMPLE_TRACK = GA_SAMPLE_TRACK
 module.exports.GA_DNM_TRACK = GA_DNM_TRACK
+module.exports.buildDnmRateCategoryTab = buildDnmRateCategoryTab

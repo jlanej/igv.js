@@ -99,6 +99,15 @@ function fnum(x) {
     return Number.isFinite(v) ? Math.round(v * 10000) / 10000 : null
 }
 
+// Precision-preserving numeric parse — for the per-gene mutation rates (μ ≈ 1e-6…1e-7),
+// which fnum's round-to-4dp would collapse to 0. Keeps the full source value.
+function ffloat(x) {
+    const t = String(x).trim()
+    if (t === '' || t === 'NA' || t === 'NaN') return null
+    const v = parseFloat(t)
+    return Number.isFinite(v) ? v : null
+}
+
 async function buildGnomad() {
     process.stdout.write(`Fetching ${GNOMAD_URL} (~95 MB) …\n`)
     const resp = await fetch(GNOMAD_URL, {headers: {'Accept': 'text/tab-separated-values'}})
@@ -112,11 +121,15 @@ async function buildGnomad() {
     // Columns resolved by name (robust to position): MANE Select transcripts only.
     const cGene = idx['gene'], cMane = idx['mane_select']
     const cLoeuf = idx['lof.oe_ci.upper'], cPli = idx['lof.pLI'], cMisz = idx['mis.z_score']
+    // Per-consequence per-gene mutation rates (μ) + chromosome — for the de novo
+    // mutation-rate enrichment (λ = 2·N·μ). μ is SNV-only, per transmission.
+    const cMuLof = idx['lof.mu'], cMuMis = idx['mis.mu'], cMuSyn = idx['syn.mu'], cChr = idx['chromosome']
+    const need = Math.max(cMisz, cMuLof, cMuMis, cMuSyn, cChr)
 
     const genes = {}
     for (let i = 1; i < lines.length; i++) {
         const c = lines[i].split('\t')
-        if (c.length <= cMisz) continue
+        if (c.length <= need) continue
         if (String(c[cMane]).trim().toLowerCase() !== 'true') continue
         const sym = c[cGene].trim()
         if (!sym) continue
@@ -125,7 +138,16 @@ async function buildGnomad() {
         if (loeuf !== null) rec.loeuf = loeuf
         if (pli !== null) rec.pli = pli
         if (misZ !== null) rec.misZ = misZ
-        if (Object.keys(rec).length > 0) genes[sym.toUpperCase()] = rec  // MANE is unique per gene
+        // Gene set is UNCHANGED (genes with ≥1 constraint estimate) so Test A's
+        // constraint universe stays identical; μ/chr just decorate those genes.
+        if (Object.keys(rec).length === 0) continue
+        const muLof = ffloat(c[cMuLof]), muMis = ffloat(c[cMuMis]), muSyn = ffloat(c[cMuSyn])
+        if (muLof !== null) rec.muLof = muLof
+        if (muMis !== null) rec.muMis = muMis
+        if (muSyn !== null) rec.muSyn = muSyn
+        const chr = String(c[cChr] || '').trim().replace(/^chr/i, '').toUpperCase()   // '1'…'22','X','Y'
+        if (chr) rec.chr = chr
+        genes[sym.toUpperCase()] = rec  // MANE is unique per gene
     }
 
     const payload = {
@@ -133,7 +155,8 @@ async function buildGnomad() {
             _source: 'gnomAD v4.1 constraint_metrics.tsv (MANE Select transcripts)',
             _license: 'CC0 (attribution requested)',
             _build: 'GRCh38',
-            _fields: {loeuf: 'lof.oe_ci.upper', pli: 'lof.pLI', misZ: 'mis.z_score'}
+            _fields: {loeuf: 'lof.oe_ci.upper', pli: 'lof.pLI', misZ: 'mis.z_score',
+                muLof: 'lof.mu', muMis: 'mis.mu', muSyn: 'syn.mu', chr: 'chromosome'}
         },
         genes
     }
