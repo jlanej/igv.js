@@ -3740,6 +3740,21 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(lamCell.formula).to.match(/^2\*100\*/)                    // λ = 2·N·Σμ live formula
         expect(pCell.formula).to.match(/^1-POISSON\(.*TRUE\)$/)          // live, reproducible
         expect(pCell.result).to.be.closeTo(poissonUpperTail(kCell, lamCell.result), 1e-12)
+
+        // per-gene tab: same test at gene level (TSC2 LoF), live POISSON reproduces the engine
+        const {buildDnmRatePerGeneTab} = require('../server')
+        const wb2 = new ExcelJS.Workbook()
+        buildDnmRatePerGeneTab(wb2, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
+        const pgws = wb2.getWorksheet('DNM Rate (per-gene)')
+        expect(pgws, 'per-gene tab created').to.not.be.undefined
+        const phdr = []; let tscRow = null
+        pgws.eachRow(r => { const f = r.getCell(1).value; if (f === 'Gene') r.eachCell(c => phdr.push(String(c.value))); if (/^TSC2/.test(String(f))) tscRow = r })
+        expect(phdr).to.deep.equal(['Gene', 'k (de novo SNVs)', 'μ', 'λ = 2·N·μ', 'P(X≥k)', 'q'])
+        expect(tscRow, 'TSC2 row').to.not.be.null
+        const pgP = tscRow.getCell(phdr.indexOf('P(X≥k)') + 1).value
+        const pgLam = tscRow.getCell(phdr.indexOf('λ = 2·N·μ') + 1).value
+        expect(pgP.formula).to.match(/^1-POISSON\(.*TRUE\)$/)
+        expect(pgP.result).to.be.closeTo(poissonUpperTail(tscRow.getCell(2).value, pgLam.result), 1e-12)
     })
 
     it('the DNM Rate tab withholds ✓ and warns when N is provisional (no Sample-QC)', function () {
@@ -3771,7 +3786,7 @@ describe('Gene Summary impact counts and annotations', function () {
             .buffer(true).parse(binaryParser).expect(200)
         const wb = new ExcelJS.Workbook()
         await wb.xlsx.load(res.body)
-        expect(wb.worksheets.map(w => w.name)).to.not.include('DNM Rate (gene-set)')
+        expect(wb.worksheets.map(w => w.name)).to.not.include.members(['DNM Rate (gene-set)', 'DNM Rate (per-gene)'])
     })
 
     it('xlsx emits the DNM Rate tab when the data has an inheritance column + gnomAD μ', async function () {
@@ -3784,6 +3799,6 @@ describe('Gene Summary impact counts and annotations', function () {
         const wb = new ExcelJS.Workbook()
         await wb.xlsx.load(res.body)
         const names = wb.worksheets.map(w => w.name)
-        expect(names, names.join(',')).to.include('DNM Rate (gene-set)')   // wiring runs (placeholder genes ⇒ empty, but the tab exists)
+        expect(names, names.join(',')).to.include.members(['DNM Rate (gene-set)', 'DNM Rate (per-gene)'])   // both tabs wired (placeholder genes ⇒ empty, but present)
     })
 })

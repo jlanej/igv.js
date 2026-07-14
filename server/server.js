@@ -1291,6 +1291,7 @@ function buildReadmeSheet(workbook, opts) {
     if (hasGene && exportCfg.sheets.geneSummary) row('Gene Summary', 'One row per gene: curation counts, impact-passing counts, and gene-level annotations. See the column dictionary below.')
     if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis (samples) / (DNMs)', 'Convergence, in two matching tabs: which shared attributes (gnomAD constraint, ClinVar history, protein domain, GenCC inheritance; Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes) your genes stack up on. Both are IGV-pass; the "(samples)" tab counts distinct probands (conservative headline), the "(DNMs)" tab counts pass DNMs. Each is a category × cumulative-impact-tier matrix of "count (%)" (with a green ✓ for FDR q<0.05, and the exact p/q to the right) against the category\'s genome-wide prevalence ("% all genes"), so you can see "1% of genes but 50% of samples". An all·ALL column flags noisy (non-pass) pools. See the dictionary below.')
     if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled && exportCfg.geneAnalysis.dnmRateTest !== false) row('DNM Rate (gene-set)', 'De novo mutation-rate enrichment (Test B): whether a gene set carries more DE NOVO variants than the gnomAD germline mutation rate predicts for N trios — Poisson λ = 2·N·μ, with a live =1−POISSON(k−1,λ,TRUE) derivation. De-novo-only; appears only when the data has an `inheritance` column and gnomAD μ (GRCh38). Complements the origin-agnostic Gene Analysis tabs. See the Methods dictionary below.')
+    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled && exportCfg.geneAnalysis.dnmRateTest !== false) row('DNM Rate (per-gene)', 'The same de novo mutation-rate test at GENE level: one row per (gene, track) with an observed de novo SNV, k vs Poisson λ = 2·N·μ, live =1−POISSON(k−1,λ,TRUE). LoF / missense / protein-altering are separate Benjamini-Hochberg discovery families; synonymous is the calibration control. Power comes from recurrence (≥2 de novos/gene).')
     if (exportCfg.sheets.sampleSummary) row('Sample Summary', 'Per-sample variant counts by impact group and frequency threshold, with cohort mean/median.')
     if (hasSampleQc && exportCfg.sheets.sampleQc) row('Sample QC', 'Per-sample sequencing QC metrics with threshold-based pass/warn/fail assessment.')
     if (exportCfg.sheets.appliedFilters) row('Applied Filters', 'The filters and export settings used to produce this report (self-documenting).')
@@ -1371,6 +1372,7 @@ function buildReadmeSheet(workbook, opts) {
         row('Inclusion / exclusion', 'Counted: curation-PASS + `inheritance==de_novo` + SNV (ref/alt length 1) + autosomal + HIGH/MOD/LOW + gene with gnomAD μ FOR THAT consequence class. Excluded (STILL analysed by Test A): indels (μ is SNV-only), chrX/Y (2·N assumes two autosomal copies; proband sex unknown), MODIFIER/non-coding (no coding μ), genes without μ, and genes lacking μ for the variant\'s own class (no modelable target → would inflate k without λ). Exact excluded counts print on the tab.')
         row('Cohort N', 'N = the Sample-QC trio count when a --sample-qc file is loaded (counts 0-DNM trios — the correct denominator). Without it, N falls back to distinct probands in the callset, which UNDERCOUNTS (omits 0-DNM trios) → λ too small → anti-conservative p; the tab then marks results PROVISIONAL and withholds the ✓.')
         row('Multiple testing & calibration', 'FDR q = Benjamini-Hochberg per dimension across its OBSERVED (category × tier) cells; ✓ = q<0.05 (withheld when N is provisional). A synonymous calibration control (observed vs 2·N·Σsyn.μ) is reported: ≈1 ⇒ complete ascertainment; a ratio a little above 1 is expected because LOW-impact over-counts true synonymous, and a provisional N inflates it further. Power comes largely from recurrence, so category singletons rarely survive FDR.')
+        row('Two tabs', '"DNM Rate (gene-set)" tests gene-SET categories (the dimensions above). "DNM Rate (per-gene)" runs the same λ = 2·N·μ Poisson at GENE level — one row per (gene, track) with an observed de novo SNV. There, LoF / missense / protein-altering (LoF+missense) are SEPARATE Benjamini-Hochberg discovery families (each across the tested genes; family sizes printed) and synonymous is the calibration control (no discovery q). Per-gene λ is tiny, so power comes from RECURRENCE (≥2 de novos in one gene) — a single hit rarely survives FDR.', 'category-level + gene-level')
         row('References', 'Samocha et al. Nat Genet 2014;46:944 (framework + rate model); Ware et al. Curr Protoc Hum Genet 2015 (denovolyzeR); Karczewski et al. Nature 2020;581:434 & Chen et al. Nature 2024;625:92 (gnomAD rates); Benjamini & Hochberg JRSS-B 1995;57:289 (FDR).')
     }
 
@@ -1694,6 +1696,77 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
         if (hidden) { r++; const nr = ws.addRow([`… ${hidden} more categor${hidden === 1 ? 'y' : 'ies'} not shown (ranked below the top ${MAX_GROUPS_PER_DIM} by p-value).`]); mergeAcross(r); nr.getCell(1).font = {italic: true, size: 9, color: {argb: 'FF6B7D8D'}} }
     }
     if (!any) { r++; ws.addRow(['No category has an observed de novo SNV with a gnomAD mutation rate in the current export.']); mergeAcross(r) }
+    ws.views = [{state: 'frozen', ySplit: headerRowIdx}]
+}
+
+/**
+ * "DNM Rate (per-gene)" tab — the de novo mutation-rate enrichment at GENE level.
+ * One row per (gene, track) with an observed de novo SNV: k vs Poisson λ = 2·N·μ,
+ * live =1-POISSON(k-1, λ, TRUE). LoF / missense / protein-altering are separate BH
+ * discovery families; synonymous is the calibration control (no discovery q). `dnm` =
+ * computeModelEnrichment() output (needs dnm.perGene). Wrapped by the caller in try/catch.
+ */
+function buildDnmRatePerGeneTab(workbook, dnm, styles) {
+    const {headerFill, headerFont, borderThin} = styles
+    const ws = workbook.addWorksheet('DNM Rate (per-gene)')
+    const meta = dnm.meta, pg = dnm.perGene, N = meta.N || 0, reliable = !!meta.nReliable
+    const colLetter = (n) => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26) } return s }
+    const FMT_PVAL = '[<0.001]0.0E+00;0.000', FMT_MU = '0.00E+00', FMT_LAM = '[<0.05]0.0E+00;0.000'
+    const isSig = (row) => reliable && row.discovery && row.q != null && row.q < 0.05   // ✓ withheld when provisional
+    const MAX_PER_TRACK = 100
+
+    const G = 1, K = 2, MU = 3, LAM = 4, P = 5, Q = 6, nCols = 6
+    const mergeAcross = (rr) => ws.mergeCells(rr, 1, rr, nCols)
+    let r = 0
+    const banner = (text, font) => { r++; const row = ws.addRow([text]); mergeAcross(r); row.getCell(1).font = font; row.getCell(1).alignment = {wrapText: true, vertical: 'top'}; return row }
+
+    banner('Gene Analysis — DE NOVO MUTATION-RATE enrichment, PER GENE (Test B)', {bold: true, size: 14, color: {argb: 'FF2C3E50'}})
+    banner(`Per-gene view of the same test as "DNM Rate (gene-set)". One row per (gene, track) with an observed curation-pass de novo SNV: k ~ Poisson(λ = 2·N·μ), N = ${N} trios${reliable ? '' : ' (PROVISIONAL — no Sample-QC file)'}, μ = the gene's gnomAD v4.1 mutation rate for that track (a single class, or LoF+missense summed for protein-altering). "P(X≥k)" is a LIVE Excel formula  =1−POISSON(k−1, λ, TRUE). LoF, missense and protein-altering (LoF+missense) are SEPARATE Benjamini-Hochberg discovery families (q per family, sizes below); synonymous is the CALIBRATION control (no discovery q). ✓ = q<0.05. See "DNM Rate (gene-set)" for the full Methods + references.`,
+        {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    banner(`Per-gene λ is tiny, so a single de novo hit rarely survives FDR — power comes from RECURRENCE (≥2 de novos in one gene). Discovery family sizes (genes tested): LoF ${pg.familySizes.lof || 0}, missense ${pg.familySizes.mis || 0}, protein-altering ${pg.familySizes.protein_altering || 0}.`,
+        {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    if (!reliable) banner('⚠ PROVISIONAL: N excludes 0-DNM trios (no Sample-QC file) → λ too small → anti-conservative p; ✓ withheld.', {bold: true, italic: true, size: 10, color: {argb: 'FFB03A2E'}})
+    r++; ws.addRow([])
+
+    const headers = ['Gene', 'k (de novo SNVs)', 'μ', 'λ = 2·N·μ', 'P(X≥k)', 'q']
+    r++
+    const hdr = ws.addRow(headers)
+    hdr.eachCell(c => { c.fill = headerFill; c.font = headerFont; c.border = borderThin; c.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true} })
+    hdr.height = 26
+    const headerRowIdx = r
+    ws.getColumn(G).width = 20; ws.getColumn(K).width = 15; ws.getColumn(MU).width = 12
+    ws.getColumn(LAM).width = 12; ws.getColumn(P).width = 12; ws.getColumn(Q).width = 12
+
+    let any = false
+    for (const tr of pg.tracks) {
+        const rows = pg.rows.filter(x => x.track === tr.key)
+        if (!rows.length) continue
+        any = true
+        r++
+        const shown = rows.slice(0, MAX_PER_TRACK)
+        const note = tr.discovery ? `discovery family — Benjamini-Hochberg over ${rows.length} gene${rows.length === 1 ? '' : 's'}` : 'CALIBRATION control — no discovery q'
+        const secRow = ws.addRow([`${tr.label}   ·   ${note}${rows.length > MAX_PER_TRACK ? `   (top ${MAX_PER_TRACK} of ${rows.length})` : ''}`])
+        mergeAcross(r)
+        secRow.getCell(1).font = {bold: true, color: {argb: 'FF2C3E50'}}
+        for (let c = 1; c <= nCols; c++) secRow.getCell(c).fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFEBDEF0'}}
+
+        shown.forEach((row, idx) => {
+            const rowNum = r + 1
+            const muA = colLetter(MU) + rowNum, kA = colLetter(K) + rowNum, lamA = colLetter(LAM) + rowNum
+            const vals = [isSig(row) ? `${row.gene} ✓` : row.gene, row.k, row.mu,
+                {formula: `2*${N}*${muA}`, result: row.lambda},
+                (row.k > 0 && row.lambda != null) ? {formula: `1-POISSON(${kA}-1,${lamA},TRUE)`, result: row.p} : '—',
+                tr.discovery ? (row.q == null ? '—' : row.q) : 'cal']
+            r++
+            const xr = ws.addRow(vals)
+            xr.eachCell(c => { c.border = borderThin; if (idx % 2 === 1) c.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}} })
+            for (const c of [K, MU, LAM, P, Q]) xr.getCell(c).alignment = {horizontal: 'center'}
+            xr.getCell(MU).numFmt = FMT_MU; xr.getCell(LAM).numFmt = FMT_LAM; xr.getCell(P).numFmt = FMT_PVAL
+            if (tr.discovery && typeof vals[Q - 1] === 'number') xr.getCell(Q).numFmt = FMT_PVAL
+            if (isSig(row)) { xr.getCell(G).font = {bold: true, color: {argb: 'FF6C3483'}}; xr.getCell(Q).font = {bold: true, color: {argb: 'FF6C3483'}} }
+        })
+    }
+    if (!any) { r++; ws.addRow(['No gene has an observed de novo SNV with a gnomAD mutation rate in the current export.']); mergeAcross(r) }
     ws.views = [{state: 'frozen', ySplit: headerRowIdx}]
 }
 
@@ -2147,6 +2220,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                                 N: totalProbands, nReliable, minCount: 1,
                             })
                             buildDnmRateCategoryTab(workbook, dnm, gaStyles)
+                            buildDnmRatePerGeneTab(workbook, dnm, gaStyles)
                         }
                     } catch (dnmErr) {
                         log.warn('DNM Rate Enrichment failed:', dnmErr.message)
@@ -3478,3 +3552,4 @@ module.exports.buildGeneAnalysisTab = buildGeneAnalysisTab
 module.exports.GA_SAMPLE_TRACK = GA_SAMPLE_TRACK
 module.exports.GA_DNM_TRACK = GA_DNM_TRACK
 module.exports.buildDnmRateCategoryTab = buildDnmRateCategoryTab
+module.exports.buildDnmRatePerGeneTab = buildDnmRatePerGeneTab

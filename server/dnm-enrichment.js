@@ -83,6 +83,14 @@ const CODING_TIERS = [
     {key: 'HIGH', label: 'HIGH', classes: ['lof']},
     {key: 'HIGH_MOD', label: 'HIGH+MOD', classes: ['lof', 'mis']}
 ]
+// Per-gene tracks (Stage 2). LoF / missense / protein-altering are separate DISCOVERY
+// families (BH per track across genes); synonymous is a calibration track (no discovery q).
+const PER_GENE_TRACKS = [
+    {key: 'lof', label: 'LoF', classes: ['lof'], discovery: true},
+    {key: 'mis', label: 'missense', classes: ['mis'], discovery: true},
+    {key: 'protein_altering', label: 'protein-altering', classes: ['lof', 'mis'], discovery: true},
+    {key: 'syn', label: 'synonymous (cal)', classes: ['syn'], discovery: false}
+]
 
 // ---- extensible genetic-model registry ----
 // Each descriptor: {id, label, nullType, gate(v, cols) -> bool}. computeModelEnrichment
@@ -264,15 +272,41 @@ function computeModelEnrichment(variants, opts) {
         for (const g of groups) for (const tier of CODING_TIERS) tests.push(g.cells[tier.key])
         benjaminiHochberg(tests.map(c => c.p)).forEach((q, i) => { tests[i].q = q })
         // rank by strongest (smallest) top-tier p, then k, then term
-        const pTop = g => (g.cells['HIGH_MOD_LOW'].p == null ? 1 : g.cells['HIGH_MOD_LOW'].p)
+        const pTop = g => (g.cells[TOP].p == null ? 1 : g.cells[TOP].p)
         groups.sort((a, b) => pTop(a) - pTop(b) || b.kTop - a.kTop || a.term.localeCompare(b.term))
         return {id: d.id, label: d.label, groups, muSource: !!catMu[d.id]}
     })
 
-    return {perCategory: {sections, tiers: CODING_TIERS}, meta}
+    // --- per-gene enrichment: gene × class, λ = 2·N·μ (Stage 2) ---
+    const geneK = {}   // gene -> {lof, mis, syn}
+    for (const u of used) { const g = geneK[u.gene] || (geneK[u.gene] = {lof: 0, mis: 0, syn: 0}); g[u.cls]++ }
+    const perGeneRows = []
+    for (const gene of Object.keys(geneK)) {
+        const rec = muByGene ? muByGene.get(gene) : null
+        if (!rec) continue
+        for (const tr of PER_GENE_TRACKS) {
+            const k = tr.classes.reduce((s, c) => s + (geneK[gene][c] || 0), 0)
+            if (k <= 0) continue                         // only OBSERVED (gene, track) rows
+            const mu = tr.classes.reduce((s, c) => s + (rec[MU_FIELD[c]] || 0), 0)
+            const lambda = (N > 0 && mu > 0) ? 2 * N * mu : null
+            perGeneRows.push({gene, track: tr.key, trackLabel: tr.label, discovery: tr.discovery,
+                k, mu, lambda, p: (lambda != null && k > 0) ? poissonUpperTail(k, lambda) : null, q: null})
+        }
+    }
+    // BH-FDR per discovery track (LoF / missense / protein-altering are SEPARATE families
+    // across genes); synonymous is a calibration track — no discovery q.
+    const familySizes = {}
+    for (const tr of PER_GENE_TRACKS) {
+        const fam = perGeneRows.filter(r => r.track === tr.key)
+        if (tr.discovery) benjaminiHochberg(fam.map(r => r.p)).forEach((q, i) => { fam[i].q = q })
+        familySizes[tr.key] = fam.filter(r => r.p != null).length   // = the BH family m (tested rows)
+    }
+    perGeneRows.sort((a, b) => (a.p == null ? 1 : a.p) - (b.p == null ? 1 : b.p) || b.k - a.k || a.gene.localeCompare(b.gene))
+
+    return {perCategory: {sections, tiers: CODING_TIERS}, perGene: {tracks: PER_GENE_TRACKS, rows: perGeneRows, familySizes}, meta}
 }
 
 module.exports = {
     computeModelEnrichment, categoryMuSums, poissonUpperTail,
-    MODELS, DE_NOVO, CONSEQUENCE_MAP, CODING_TIERS, isAutosome, isSnv
+    MODELS, DE_NOVO, CONSEQUENCE_MAP, CODING_TIERS, PER_GENE_TRACKS, isAutosome, isSnv
 }

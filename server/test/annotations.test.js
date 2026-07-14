@@ -649,4 +649,25 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(res.perCategory.sections).to.have.lengthOf(0)
         expect(res.meta.notImplemented).to.equal('frequency')
     })
+
+    it('per-gene: LoF/missense/protein-altering are separate discovery families; synonymous is calibration', function () {
+        const variants = [
+            V({gene: 'G1', impact: 'HIGH', s: 'P1'}),                                    // G1 LoF
+            V({gene: 'G2', impact: 'MODERATE', chrom: '2', ref: 'C', alt: 'T', s: 'P2'}), // G2 missense
+            V({gene: 'G3', impact: 'LOW', chrom: '3', s: 'P7'})                          // G3 synonymous
+        ]
+        const pg = computeModelEnrichment(variants, opts()).perGene
+        const row = (g, t) => pg.rows.find(r => r.gene === g && r.track === t)
+        // G1 LoF: k=1, μ=lof.mu, λ=2·N·μ
+        expect(row('G1', 'lof').k).to.equal(1)
+        expect(row('G1', 'lof').lambda).to.be.closeTo(2 * 100 * 1e-6, 1e-12)
+        expect(row('G1', 'lof').p).to.be.closeTo(poissonUpperTail(1, 2 * 100 * 1e-6), 1e-12)
+        expect(row('G1', 'lof').q).to.be.a('number')                 // discovery FDR
+        // G1 protein-altering: μ = lof.mu + mis.mu
+        expect(row('G1', 'protein_altering').mu).to.be.closeTo(6e-6, 1e-18)
+        expect(row('G1', 'mis')).to.equal(undefined)                 // no observed missense in G1 → no row
+        // synonymous is a calibration row: q stays null
+        expect(row('G3', 'syn').q).to.equal(null)
+        expect(pg.familySizes).to.deep.equal({lof: 1, mis: 1, protein_altering: 2, syn: 1})
+    })
 })
