@@ -532,10 +532,12 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(poissonUpperTail(1, 0)).to.equal(0)                                        // k≥1, zero expectation
         expect(poissonUpperTail(1, null)).to.equal(null)
         expect(poissonUpperTail(3, 1)).to.be.lessThan(poissonUpperTail(2, 1))            // monotone in k
-        // tail summation (k≫λ) keeps a tiny p instead of flooring to 0: P(X≥6 | 0.001) ≈ (0.001^6)/6!
+        // tail summation (k≫λ) keeps a tiny p instead of flooring to 0.
         const tiny = poissonUpperTail(6, 0.001)
-        expect(tiny).to.be.greaterThan(0).and.to.be.lessThan(1e-18)
-        expect(tiny).to.be.closeTo(Math.pow(0.001, 6) / 720, 1e-24)
+        expect(tiny).to.be.greaterThan(0).and.to.be.lessThan(1e-18)   // kept precision, not floored to 0
+        // value ≈ the leading Poisson term e^−λ·λ⁶/6! (higher terms add only ~λ/7 ≈ 1.4e-4)
+        const lead = Math.exp(-0.001) * Math.pow(0.001, 6) / 720
+        expect(tiny).to.be.closeTo(lead, lead * 2e-3)
     })
 
     // Synthetic gnomAD-shaped bundle: G1/G2/G3 autosomal with μ; GX on chrX.

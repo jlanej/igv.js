@@ -3770,11 +3770,20 @@ describe('Gene Summary impact counts and annotations', function () {
         const wb = new ExcelJS.Workbook()
         buildDnmRateCategoryTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
         const ws = wb.getWorksheet('DNM Rate (gene-set)')
-        const text = []
-        ws.eachRow(r => r.eachCell(c => { if (c.value != null) text.push(String(c.value)) }))
-        const joined = text.join(' | ')
-        expect(joined).to.contain('PROVISIONAL')                       // banner warns
-        expect(joined).to.not.contain('✓')                             // ✓ withheld despite q<0.05
+        // banner warns provisional (the banner legend legitimately mentions "✓" — so check DATA cells, not banner text)
+        let bannerText = '', hdr = [], dataRow = null
+        ws.eachRow(r => {
+            const f = r.getCell(1).value
+            if (typeof f === 'string' && f.includes('PROVISIONAL')) bannerText = f
+            if (f === 'Category') r.eachCell(c => hdr.push(String(c.value)))
+            if (f === 'T') dataRow = r
+        })
+        expect(bannerText, 'provisional banner').to.contain('PROVISIONAL')
+        expect(dataRow, 'T row').to.not.be.null
+        // the tier cells carry a q<0.05 but N is provisional → ✓ is withheld (count only)
+        const highCell = String(dataRow.getCell(hdr.indexOf('HIGH') + 1).value)
+        expect(highCell).to.equal('3')                                 // "3", not "3 ✓"
+        expect(String(dataRow.getCell(hdr.indexOf('HIGH+MOD') + 1).value)).to.equal('3')
     })
 
     it('Test B is suppressed on a GRCh37/hg19 export (gnomAD μ is GRCh38-only)', async function () {
