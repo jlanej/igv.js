@@ -721,8 +721,11 @@ terms across **two matching tabs**, both **IGV-pass only**:
   included.
 - **The `…p/q` columns (right)** – the exact statistics behind each ✓, kept to the
   right so the cells stay scannable: `p / q` = the uncorrected p-value and the
-  Benjamini-Hochberg FDR q for that tier (green when q<0.05; `—` for an empty tier or
-  a dimension with no background). On the **samples** tab p is a **Poisson-binomial**
+  Benjamini-Hochberg FDR q for that tier (green when q<0.05). An **empty tier reads
+  `1.000 / 1.000`** — not `—` — because a tier with no hit is still a tested hypothesis
+  whose exact p is `P(X≥0) = 1`; `—` now means only that the test was undefined (a
+  dimension with no background, or a tier with no pass DNMs cohort-wide). On the
+  **samples** tab p is a **Poisson-binomial**
   whose expected accounts for each proband's own pass-DNM burden at that tier (a
   many-DNM proband is *expected* to hit, so its single hit isn't surprising); on the
   **DNMs** tab a **binomial** over that tier's pass DNMs (not deduped by proband, so
@@ -784,8 +787,50 @@ terms across **two matching tabs**, both **IGV-pass only**:
   tested), FDR is controlled **within each dimension** (don't pool ✓ across
   dimensions), and the nested cumulative pass tiers make each tier's q conservative.
   A gene-count null only approximates the de-novo mutation-rate null, so treat
-  marginal q gently — a mutation-rate model (e.g. **denovolyzeR**, at build time) is
-  the principled next step once a multi-proband cohort accrues.
+  marginal q gently — the mutation-rate model is the separate *DNM Rate* tab.
+
+##### The BH family (what q corrects for)
+
+Per dimension, the Benjamini-Hochberg family is the **a-priori grid**: **every category
+in the source library** × all four cumulative pass tiers — not just the categories a
+cohort variant happened to touch. Its size **m is printed in each section header**.
+
+- A category with **no hit was still scanned**, and has the exact `p = P(X≥0) = 1` at
+  every tier. It can never be rejected, but it **does** count toward m.
+- The **display filters run after the correction** — the ≥2-samples-or-genes keep-rule
+  and the top-25-per-dimension cap never change a q. A row hidden from the sheet was
+  still tested and still counted.
+
+This is load-bearing, not pedantry. Letting the observed data pick the family — at
+either level, the *cells* that were hit or the *categories* that were hit — makes q
+anti-conservative, and the effect is large:
+
+| family | real FDR at nominal α=0.05 |
+|---|---|
+| hit cells only (`k>0`) | **~35%** |
+| hit categories only | **~15%** (HGNC families; ~6% Reactome) |
+| a-priori library grid | **~1–2%** ✓ |
+
+It bites hardest on exactly the sparse libraries we bundle (Reactome, WikiPathways,
+HGNC families, MitoPathways) where most categories go unhit, so the hit set is a small
+random subset. Dense dimensions (constraint tail, GenCC MoI, MSigDB Hallmark) were
+already close to correct. A genuinely enriched category is still detected 100% of the
+time in simulation — the cost is false positives, not power.
+
+The same principle governs the **DNM Rate** tabs: the per-gene scan is **exome-wide**
+(each track's m counts every autosomal gene with a modelable μ, ~17k — matching the
+exome-wide correction standard in the de novo literature), and the gene-set tab
+corrects across every library category with a modelable μ. Only rows with k≥1 are
+listed; the remainder are all p=1.
+
+Because most cells are exactly p=1, the procedure is **conservative** — measured ~1–2%
+against a 5% nominal. That is the price of validity under discreteness, and it is
+deliberate: the alternative is a green ✓ that does not mean what it says.
+
+**Validity:** BH controls FDR under independence and under positive regression
+dependence (Benjamini & Yekutieli, *Ann. Statist.* 2001). The nested tiers and the
+overlapping gene sets within a dimension are positively dependent — that case, not the
+adversarial one. For arbitrary dependence, BY would scale q by Σ(1/i).
 
 If IGV has not yet been loaded (no variant clicked), exports are generated
 with data sheets only (no screenshots).

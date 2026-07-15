@@ -445,15 +445,16 @@ describe('gene-analysis convergence (independent signals)', function () {
         expect(grp.prevalence).to.be.closeTo(3 / 4, 1e-9)
     })
 
-    it('per-tier stats differ by tier, and BH is per-dimension over only OBSERVED cells', function () {
+    it('per-tier stats differ by tier, and BH covers the FULL category × tier family', function () {
         // Two categories with DISTINCT prevalences; T2 converges ONLY at HIGH+MOD
         // (0 pass DNMs at the HIGH tier). This pins three properties at once:
         //   (F4) per-tier differentiation: T1's pDnm at HIGH (0.1²) ≠ at ALL
         //        (binom(2,4,0.1)) because nDnmsByTier grows HIGH:2 → ALL:4.
-        //   (F1) phantom exclusion: T2's 0-count pass|HIGH cell must NOT get a
-        //        trivial p=1 that would inflate the BH family (m=7, not 8).
-        //   (F3) BH scope: hand-BH over the 7 observed cells gives specific q's
-        //        that only hold for a per-dimension family excluding phantoms.
+        //   (F1) no data-dependent family: T2's 0-count pass|HIGH cell IS a tested
+        //        hypothesis and gets its exact p = P(X≥0) = 1, counting toward m=8.
+        //        Gating on an observed hit would let the data pick the family and
+        //        push the real FDR far above nominal.
+        //   (F3) BH scope: hand-BH over all 8 cells [0.01, 0.0523×3, 0.1808×3, 1], m=8.
         // Universe of 100 genes; T1 prevalence 10%, T2 prevalence 20%.
         const srcU = {fam: {size: 100, counts: {T1: 10, T2: 20}}}
         const conv = computeConvergence(
@@ -471,23 +472,85 @@ describe('gene-analysis convergence (independent signals)', function () {
         expect(T1.cells['pass|HIGH'].pDnm).to.be.closeTo(0.01, 1e-6)         // binom(2,2,0.1)=0.1²
         expect(T1.cells['pass|ALL'].pDnm).to.be.closeTo(0.0523, 1e-6)        // binom(2,4,0.1)
         expect(T1.cells['pass|HIGH'].pDnm).to.not.be.closeTo(T1.cells['pass|ALL'].pDnm, 1e-6)
-        // F1 — the 0-count pass|HIGH cell of T2 is excluded (no phantom p=1)
+        // F1 — the 0-count pass|HIGH cell of T2 is a TESTED hypothesis: exact p=P(X≥0)=1.
         expect(T2.cells['pass|HIGH'].variants).to.equal(0)
-        expect(T2.cells['pass|HIGH'].pDnm, 'phantom p excluded').to.satisfy(v => v == null)
-        expect(T2.cells['pass|HIGH'].qDnm).to.satisfy(v => v == null)
-        expect(T2.cells['pass|HIGH'].pSample).to.satisfy(v => v == null)
+        expect(T2.cells['pass|HIGH'].pDnm, 'k=0 ⇒ exact p=1, in the family').to.equal(1)
+        expect(T2.cells['pass|HIGH'].qDnm).to.equal(1)
+        expect(T2.cells['pass|HIGH'].pSample).to.equal(1)
         expect(T2.cells['pass|HIGH_MOD'].pDnm).to.be.closeTo(0.1808, 1e-6)   // binom(2,4,0.2)
-        // F3 — hand-BH over the 7 observed cells [0.01,0.0523×3,0.1808×3], m=7
-        expect(T1.cells['pass|HIGH'].qDnm).to.be.closeTo(0.07, 1e-5)         // 0.01·7/1
-        expect(T1.cells['pass|ALL'].qDnm).to.be.closeTo(0.091525, 1e-5)      // 0.0523·7/4
-        expect(T2.cells['pass|ALL'].qDnm).to.be.closeTo(0.1808, 1e-5)        // 0.1808·7/7
+        // F3 — hand-BH over ALL 8 cells [0.01, 0.0523×3, 0.1808×3, 1], m=8 (2 cats × 4 tiers)
+        expect(sec.mDnm, 'BH family spans every category × tier').to.equal(8)
+        expect(sec.mSample).to.equal(8)
+        expect(T1.cells['pass|HIGH'].qDnm).to.be.closeTo(0.08, 1e-5)         // 0.01·8/1
+        expect(T1.cells['pass|ALL'].qDnm).to.be.closeTo(0.1046, 1e-5)        // 0.0523·8/4
+        expect(T2.cells['pass|ALL'].qDnm).to.be.closeTo(0.206629, 1e-5)      // 0.1808·8/7
         // sample family is numerically identical here (every proband burden = 1)
-        expect(T1.cells['pass|HIGH'].qSample).to.be.closeTo(0.07, 1e-5)
-        expect(T1.cells['pass|ALL'].qSample).to.be.closeTo(0.091525, 1e-5)
+        expect(T1.cells['pass|HIGH'].qSample).to.be.closeTo(0.08, 1e-5)
+        expect(T1.cells['pass|ALL'].qSample).to.be.closeTo(0.1046, 1e-5)
         // headline folds
         expect(T1.foldDnmAll).to.be.closeTo((2 / 4) / 0.1, 1e-9)             // 5×
         expect(T1.foldSampleAll).to.be.closeTo((2 / 50) / 0.1, 1e-9)         // 0.4×
         expect(T2.foldDnmAll).to.be.closeTo((2 / 4) / 0.2, 1e-9)             // 2.5×
+    })
+
+    it('the display filter does NOT shrink the BH family (q is corrected for every category tested)', function () {
+        // T3 is a singleton (1 gene, 1 proband) so it is filtered OUT of the displayed
+        // rows by minCount — but it WAS tested, so it must still count toward m. If the
+        // keep-rule were allowed to define the family, the data would be choosing the
+        // hypotheses and every surviving q would be too small.
+        const srcU = {fam: {size: 100, counts: {T1: 10, T2: 20, T3: 5}}}
+        const conv = computeConvergence(
+            [{gene: 'GA', impact: 'HIGH', curation_status: 'pass', s: 'P1'},
+             {gene: 'GB', impact: 'HIGH', curation_status: 'pass', s: 'P2'},
+             {gene: 'GC', impact: 'MODERATE', curation_status: 'pass', s: 'P3'},
+             {gene: 'GD', impact: 'MODERATE', curation_status: 'pass', s: 'P4'},
+             {gene: 'GE', impact: 'HIGH', curation_status: 'pass', s: 'P5'}],   // singleton → T3
+            {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 2,
+                geneTerms: new Map([['GA', {fam: ['T1']}], ['GB', {fam: ['T1']}], ['GC', {fam: ['T2']}],
+                    ['GD', {fam: ['T2']}], ['GE', {fam: ['T3']}]]),
+                dimensions: [{id: 'fam', label: 'Fam'}], sourceUniverse: srcU, totalProbands: 50})
+        const sec = conv.sections.find(s => s.id === 'fam')
+        // T3 is NOT displayed …
+        expect(sec.groups.map(g => g.term).sort()).to.deep.equal(['T1', 'T2'])
+        // … but it IS in the family: 3 categories × 4 tiers = 12, not 8.
+        expect(sec.mDnm, 'singleton still counted in m').to.equal(12)
+        expect(sec.mSample).to.equal(12)
+        expect(sec.nCategories, 'categories tested (pre-display-filter)').to.equal(3)
+        // And its presence genuinely costs the survivors significance. The exact value is
+        // the assertion that bites: BH is a step-up, so T1|HIGH (rank 1) does NOT take its
+        // own 0.028·12/1 = 0.336 — it inherits the smaller q from rank 4 (0.08146·12/4 =
+        // 0.24438) via the running min. If T3 were dropped from the family (m=8) this cell
+        // would read 0.16292 instead, so pin the number, not an inequality.
+        const T1 = sec.groups.find(g => g.term === 'T1')
+        expect(T1.cells['pass|HIGH'].pDnm).to.be.closeTo(0.028, 1e-6)     // binom(2,3,0.1)
+        expect(T1.cells['pass|HIGH'].qDnm).to.be.closeTo(0.24438, 1e-5)   // = 0.08146·12/4, inherited by step-up
+        expect(T1.cells['pass|HIGH'].qDnm, 'must NOT be the filter-before-BH value (m=8)').to.not.be.closeTo(0.16292, 1e-4)
+    })
+
+    it('UNHIT library categories still count toward m (the family is a-priori, not data-defined)', function () {
+        // The library defines 5 categories; the cohort only ever touches T1. The other
+        // four were still scanned — each has k=0 ⇒ exact p=1 — so m must be 5×4 tiers,
+        // NOT 1×4. Correcting across only the hit category is the anti-conservative
+        // failure mode (measured ~15% real FDR at nominal 5% on the sparse libraries we
+        // bundle, where most categories go unhit).
+        const conv = computeConvergence(
+            [{gene: 'GA', impact: 'HIGH', curation_status: 'pass', s: 'P1'},
+             {gene: 'GB', impact: 'HIGH', curation_status: 'pass', s: 'P2'}],
+            {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 2,
+                geneTerms: new Map([['GA', {fam: ['T1']}], ['GB', {fam: ['T1']}]]),
+                dimensions: [{id: 'fam', label: 'Fam'}],
+                // T9a..T9d exist in the library but no cohort gene belongs to them.
+                sourceUniverse: {fam: {size: 100, counts: {T1: 10, T9a: 5, T9b: 5, T9c: 5, T9d: 5}}},
+                totalProbands: 50})
+        const sec = conv.sections.find(s => s.id === 'fam')
+        expect(sec.nCategories, 'only T1 is hit').to.equal(1)
+        expect(sec.mDnm, 'm spans all 5 LIBRARY categories × 4 tiers').to.equal(20)
+        expect(sec.mSample).to.equal(20)
+        const T1 = sec.groups.find(g => g.term === 'T1')
+        expect(T1.cells['pass|HIGH'].pDnm).to.be.closeTo(0.01, 1e-9)
+        // q = p·m/rank = 0.01·20/1. Had the 4 unhit categories been dropped (m=4) this
+        // would read 0.04 — i.e. 5× more significant than the scan actually justifies.
+        expect(T1.cells['pass|HIGH'].qDnm).to.be.closeTo(0.05, 1e-9)
     })
 
     it('sourceUniverseStats omits constraint when no gnomad bundle (GRCh37 build gate)', function () {
@@ -607,18 +670,27 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(res2.meta.exclNoClassMu).to.equal(0)
     })
 
-    it('k=0 tier cells stay out of the BH family (p=null), matching Test A', function () {
+    it('k=0 tier cells ARE in the BH family with their exact p=1, matching Test A', function () {
         // T2 carries a single missense de novo → its HIGH tier (LoF) has k=0. Keep the
         // numerator (geneTerms) and denominator (categoryMu) membership consistent.
         const fam2 = new Map([['G1', ['T']], ['G2', ['T2']]])
         const res = computeModelEnrichment([V({gene: 'G2', impact: 'MODERATE', chrom: '2', s: 'P2'})],
             Object.assign(opts(), {geneTerms: new Map([['G1', {fam: ['T']}], ['G2', {fam: ['T2']}]]),
                 categoryMu: categoryMuSums({gnomad}, {fam: fam2})}))
-        const t2 = res.perCategory.sections.find(s => s.id === 'fam').groups.find(g => g.term === 'T2')
+        const sec = res.perCategory.sections.find(s => s.id === 'fam')
+        const t2 = sec.groups.find(g => g.term === 'T2')
         expect(t2.cells.HIGH.k).to.equal(0)
-        expect(t2.cells.HIGH.p).to.equal(null)      // not a real hypothesis → excluded from FDR family
+        // The tier WAS tested; P(X≥0)=1 exactly. It can never be rejected, but dropping it
+        // would let the observed data shrink m — the anti-conservative failure mode.
+        expect(t2.cells.HIGH.p, 'k=0 ⇒ exact p=1, still a member of the family').to.equal(1)
+        expect(t2.cells.HIGH.q).to.equal(1)
         expect(t2.cells.HIGH_MOD.k).to.equal(1)
         expect(t2.cells.HIGH_MOD.p).to.be.a('number')
+        // m spans the A-PRIORI grid: both LIBRARY categories (T and T2) × both coding
+        // tiers = 4 — even though only T2 carries an observed de novo.
+        expect(sec.m, 'family spans library category × tier, incl. unhit + no-hit cells').to.equal(4)
+        expect(sec.nCategories, 'only T2 was hit').to.equal(1)
+        expect(t2.cells.HIGH_MOD.q).to.be.closeTo(t2.cells.HIGH_MOD.p * 4, 1e-9)   // rank 1 of m=4
     })
 
     it('synonymous calibration control is computed genome-wide (obs ÷ 2N·Σsyn.μ)', function () {
@@ -670,6 +742,13 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(row('G1', 'mis')).to.equal(undefined)                 // no observed missense in G1 → no row
         // synonymous is a calibration row: q stays null
         expect(row('G3', 'syn').q).to.equal(null)
-        expect(pg.familySizes).to.deep.equal({lof: 1, mis: 1, protein_altering: 2, syn: 1})
+        // The scan is EXOME-WIDE: m counts every AUTOSOMAL gene with a μ for that track
+        // (G1/G2/G3 — GX is chrX and excluded), not just the genes with an observed de
+        // novo. Correcting only across observed genes would let the data pick the family.
+        expect(pg.familySizes).to.deep.equal({lof: 3, mis: 3, protein_altering: 3, syn: 3})
+        // …while only the observed (gene, track) rows are materialised for display.
+        expect(pg.observedRows).to.deep.equal({lof: 1, mis: 1, protein_altering: 2, syn: 1})
+        // q is corrected against the exome-wide m, not the 1 observed LoF row.
+        expect(row('G1', 'lof').q).to.be.closeTo(row('G1', 'lof').p * 3, 1e-12)
     })
 })

@@ -248,7 +248,7 @@ function computeModelEnrichment(variants, opts) {
             }
         }
         const TOP = CODING_TIERS[CODING_TIERS.length - 1].key
-        const groups = []
+        const allGroups = []
         for (const term of Object.keys(obs)) {
             const o = obs[term]
             const muT = dimMu[term] || {lof: 0, mis: 0, syn: 0}
@@ -257,24 +257,43 @@ function computeModelEnrichment(variants, opts) {
                 const k = tier.classes.reduce((s, c) => s + (o[c] || 0), 0)
                 const sumMu = tier.classes.reduce((s, c) => s + (muT[c] || 0), 0)
                 const lambda = (N > 0 && sumMu > 0) ? 2 * N * sumMu : null
-                // p only for OBSERVED cells (k>0). A k=0 cell would give the trivial p=1;
-                // leaving p=null keeps it out of the BH family (benjaminiHochberg skips
-                // null) so m isn't inflated — matching Test A's guard.
-                const p = (lambda != null && k > 0) ? poissonUpperTail(k, lambda) : null
+                // EVERY modelable cell is a tested hypothesis. k=0 yields the exact
+                // p = P(X≥0) = 1: it can never be rejected, but it must count toward m.
+                // Gating on k>0 would let the observed data define the family and push the
+                // real FDR far above nominal (see gene-analysis.js's BH note).
+                const p = lambda != null ? poissonUpperTail(k, lambda) : null
                 cells[tier.key] = {k, lambda, catMu: sumMu, p, q: null}
             }
-            const kTop = cells[TOP].k
-            if (kTop < minCount) continue                // categories with ≥minCount observed protein-altering de novos
-            groups.push({term, cells, kTop, probands: o.probands.size, genes: [...o.genes].sort(), refK: kTop})
+            allGroups.push({term, cells, kTop: cells[TOP].k, probands: o.probands.size,
+                genes: [...o.genes].sort(), refK: cells[TOP].k})
         }
-        // BH-FDR per dimension across the OBSERVED (category × tier) cells (null p ⇒ excluded).
+        // BH-FDR per dimension across the A-PRIORI (category × tier) grid: every category
+        // in the library that has a modelable μ for that tier, NOT just the ones carrying
+        // an observed de novo. `obs` only holds hit categories, so correcting across those
+        // would let the data pick the family (the same error as gating on k>0 — see the BH
+        // note in gene-analysis.js). An unhit category has k=0 ⇒ exact p=1, which is
+        // benjaminiHochberg's mTotal precondition, so declare the size instead of
+        // materialising the unhit rows. Fixed BEFORE the minCount display filter below.
         const tests = []
-        for (const g of groups) for (const tier of CODING_TIERS) tests.push(g.cells[tier.key])
-        benjaminiHochberg(tests.map(c => c.p)).forEach((q, i) => { tests[i].q = q })
+        for (const g of allGroups) for (const tier of CODING_TIERS) tests.push(g.cells[tier.key])
+        // Per tier, a library category is testable iff λ = 2·N·Σμ > 0 for that tier.
+        let mFam = 0
+        if (N > 0) {
+            for (const tier of CODING_TIERS) {
+                for (const term of Object.keys(dimMu)) {
+                    const sumMu = tier.classes.reduce((s, c) => s + ((dimMu[term] || {})[c] || 0), 0)
+                    if (sumMu > 0) mFam++
+                }
+            }
+        }
+        const m = Math.max(mFam, tests.filter(c => c.p != null).length)
+        benjaminiHochberg(tests.map(c => c.p), m).forEach((q, i) => { tests[i].q = q })
+        // DISPLAY filter, applied after the correction (q's above are already final).
+        const groups = allGroups.filter(g => g.kTop >= minCount)
         // rank by strongest (smallest) top-tier p, then k, then term
         const pTop = g => (g.cells[TOP].p == null ? 1 : g.cells[TOP].p)
         groups.sort((a, b) => pTop(a) - pTop(b) || b.kTop - a.kTop || a.term.localeCompare(b.term))
-        return {id: d.id, label: d.label, groups, muSource: !!catMu[d.id]}
+        return {id: d.id, label: d.label, groups, muSource: !!catMu[d.id], m, nCategories: allGroups.length}
     })
 
     // --- per-gene enrichment: gene × class, λ = 2·N·μ (Stage 2) ---
@@ -295,15 +314,36 @@ function computeModelEnrichment(variants, opts) {
     }
     // BH-FDR per discovery track (LoF / missense / protein-altering are SEPARATE families
     // across genes); synonymous is a calibration track — no discovery q.
-    const familySizes = {}
+    //
+    // The family is EXOME-WIDE: every autosomal gene with a modelable μ for that track was
+    // scanned, not just the genes that happened to carry a de novo. A gene with no
+    // observed de novo has the exact p = P(X≥0) = 1 and can never be rejected, but it is
+    // still one of the ~17k hypotheses the scan asked, so it must count toward m — this is
+    // the standard de novo gene-discovery correction (cf. exome-wide thresholds in the DDD
+    // / denovolyzeR literature). Correcting only across observed genes would let the data
+    // pick the family and inflate the real FDR far above nominal. Only the observed rows
+    // are materialised; the untested remainder enter via benjaminiHochberg's m argument
+    // (provably identical to padding the vector with p=1).
+    const familySizes = {}, observedRows = {}
     for (const tr of PER_GENE_TRACKS) {
         const fam = perGeneRows.filter(r => r.track === tr.key)
-        if (tr.discovery) benjaminiHochberg(fam.map(r => r.p)).forEach((q, i) => { fam[i].q = q })
-        familySizes[tr.key] = fam.filter(r => r.p != null).length   // = the BH family m (tested rows)
+        let mExome = 0
+        if (muByGene && N > 0) {
+            for (const rec of muByGene.values()) {
+                if (!isAutosome(rec && rec.chr)) continue
+                const mu = tr.classes.reduce((s, c) => s + (rec[MU_FIELD[c]] || 0), 0)
+                if (mu > 0) mExome++                          // λ = 2·N·μ > 0 ⇒ testable
+            }
+        }
+        const m = Math.max(mExome, fam.filter(r => r.p != null).length)
+        if (tr.discovery) benjaminiHochberg(fam.map(r => r.p), m).forEach((q, i) => { fam[i].q = q })
+        familySizes[tr.key] = m                                // the BH family m (genes scanned)
+        observedRows[tr.key] = fam.filter(r => r.p != null).length
     }
     perGeneRows.sort((a, b) => (a.p == null ? 1 : a.p) - (b.p == null ? 1 : b.p) || b.k - a.k || a.gene.localeCompare(b.gene))
 
-    return {perCategory: {sections, tiers: CODING_TIERS}, perGene: {tracks: PER_GENE_TRACKS, rows: perGeneRows, familySizes}, meta}
+    return {perCategory: {sections, tiers: CODING_TIERS},
+        perGene: {tracks: PER_GENE_TRACKS, rows: perGeneRows, familySizes, observedRows}, meta}
 }
 
 module.exports = {

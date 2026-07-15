@@ -161,15 +161,21 @@ function poissonBinomUpperTail(k, probs) {
  * as null), returns an aligned array of q-values controlling the FDR across
  * all non-null tests (the whole family).
  */
-function benjaminiHochberg(pvals) {
+function benjaminiHochberg(pvals, mTotal) {
     const idx = []
     for (let i = 0; i < pvals.length; i++) if (pvals[i] != null && isFinite(pvals[i])) idx.push(i)
-    const m = idx.length
+    const n = idx.length
     const q = pvals.map(() => null)
-    if (!m) return q
+    if (!n) return q
+    // mTotal lets a caller declare a family LARGER than the p-values passed in — for a
+    // scan where the untested remainder are all exact p=1 (e.g. an exome-wide per-gene
+    // scan: genes with no observed de novo have P(X≥0)=1). Padding the array with those
+    // 1s would give an identical result (they sort last, each takes q=1, so `prev`
+    // enters the observed ranks at 1); passing m avoids materialising ~17k rows.
+    const m = (mTotal != null && mTotal > n) ? mTotal : n
     idx.sort((a, b) => pvals[a] - pvals[b])
     let prev = 1
-    for (let rank = m; rank >= 1; rank--) {
+    for (let rank = n; rank >= 1; rank--) {
         const i = idx[rank - 1]
         const val = Math.min(prev, pvals[i] * m / rank)
         q[i] = val
@@ -311,7 +317,10 @@ function computeConvergence(variants, opts) {
     }
 
     const sections = dims.map(d => {
-        const groups = []
+        // allGroups = the BH FAMILY: every category with ≥1 observed gene, tested at every
+        // pass tier. The display filters (minCount below, top-N in the sheet) are applied
+        // AFTER the correction and cannot change any q — see the BH note below.
+        const allGroups = []
         const u = srcU[d.id] || null                   // {size, counts} or null (no offline source)
         for (const term of Object.keys(acc[d.id])) {
             const bucket = acc[d.id][term]
@@ -319,7 +328,6 @@ function computeConvergence(variants, opts) {
             const refIndividuals = ref.individuals.size   // pass|ALL probands (for keeping/sort/# genes)
             const refGenes = ref.genes.size
             const refVariants = ref.variants
-            if (refIndividuals < minCount && refGenes < minCount) continue
             const cellCounts = {}
             for (const c of cells) {
                 const cd = bucket[c.key]
@@ -338,14 +346,22 @@ function computeConvergence(variants, opts) {
             for (const tk of passTierKeys) {
                 if (prevalence == null) continue
                 const cc = cellCounts['pass|' + tk]
-                // Only cells with an OBSERVED hit are real hypotheses. A 0-count cell
-                // would return the trivial p=1 (P(X≥0)) — it never displays (tierStr
-                // blanks 0-count cells) yet, left in the family, it would inflate the
-                // BH family size m and over-correct the real q's. So skip it: an
-                // unassigned p is treated as null by benjaminiHochberg (family = the
-                // actually-observed category×tier cells).
-                if (cc.variants > 0) cc.pDnm = binomUpperTail(cc.variants, nDnmsByTier[tk], prevalence)
-                if (sampleCol && cc.individuals > 0) cc.pSample = poissonBinomUpperTail(cc.individuals, burdenByTier[tk].map(dd => 1 - Math.pow(1 - prevalence, dd)))
+                // EVERY examined cell is a hypothesis — including a 0-count one, whose
+                // exact upper-tail p is 1 (P(X≥0)=1; not a phantom or a placeholder).
+                // It can never be rejected, but it MUST count toward the family size m.
+                // Gating on an observed hit (or dropping low-count categories) would let
+                // the DATA choose the family, which breaks BH: under a global null over
+                // many sparse categories, the handful that happen to be hit would each be
+                // corrected as if they were the only tests performed, and FDR would run
+                // far above nominal. Correct for every question asked, not every hit got.
+                // Call the tails UNGATED: each already returns 1 for k=0 and null for a
+                // degenerate tier (no pass DNMs / no at-risk probands cohort-wide), which
+                // correctly keeps a vacuous tier out of the family instead of padding it
+                // with one phantom p=1 per category.
+                cc.pDnm = binomUpperTail(cc.variants, nDnmsByTier[tk], prevalence)
+                if (sampleCol) {
+                    cc.pSample = poissonBinomUpperTail(cc.individuals, burdenByTier[tk].map(dd => 1 - Math.pow(1 - prevalence, dd)))
+                }
                 // Mean of this tier's Poisson-binomial null: Σᵢ pᵢ = Σᵢ [1-(1-prev)^dᵢ],
                 // i.e. the expected # probands hitting the category by chance. Reported
                 // per tier so every tier's test is reproducible from printed inputs
@@ -362,26 +378,54 @@ function computeConvergence(variants, opts) {
             const foldDnmAll = (prevalence > 0 && nPassDnms > 0) ? (refCC.variants / nPassDnms) / prevalence : null
             // (The pass|ALL sample expectation lives on cells['pass|ALL'].expSample, set
             // per tier above — no separate ALL-only copy to drift out of sync.)
-            groups.push({term, refIndividuals, refGenes, refVariants, catSize, prevalence,
+            allGroups.push({term, refIndividuals, refGenes, refVariants, catSize, prevalence,
                 cells: cellCounts, genes: [...ref.genes].sort(), foldSampleAll, foldDnmAll})
         }
+        // --- Benjamini-Hochberg FDR, PER DIMENSION -------------------------------
+        // Two independent families (sample, DNM). Each spans this dimension's A-PRIORI
+        // grid: EVERY category in the source library × every tier where the test is
+        // defined — NOT merely the categories a cohort variant happened to touch.
+        //
+        // This is the crux. `acc` only ever holds categories some observed variant hits,
+        // so correcting across those alone would let the DATA pick the family — the exact
+        // error the k>0 cell gate made, one level up. It bites hardest on the sparse
+        // libraries we bundle (Reactome/WikiPathways/HGNC/MitoPathways): most categories
+        // go unhit, so the hit set is a small random subset and every q comes out too
+        // small (simulated on the real libraries: ~15% true FDR at a nominal 5% for HGNC
+        // families). An unhit category has k=0 at every tier, hence the exact p=1 — which
+        // is precisely benjaminiHochberg's mTotal precondition, so we DECLARE the family
+        // size rather than materialise thousands of phantom p=1 rows.
+        //
+        // The family is fixed BEFORE any display filter: the minCount keep-rule and the
+        // sheet's top-N cap are applied afterwards and cannot shrink m.
+        //
+        // Validity: BH controls FDR under independence and under positive regression
+        // dependence (Benjamini & Yekutieli, Ann. Stat. 2001) — the nested cumulative
+        // tiers and the overlapping gene sets within a dimension are positively
+        // dependent, which is the PRDS case, not the adversarial one. Discreteness (most
+        // cells are exactly p=1) makes it conservative; that is the price of validity.
+        const sTests = [], dTests = []
+        for (const g of allGroups) for (const tk of passTierKeys) { const cc = g.cells['pass|' + tk]; sTests.push(cc); dTests.push(cc) }
+        // A tier only contributes hypotheses when its test is defined cohort-wide (the
+        // tails return null for a degenerate tier), so count the live tiers per track.
+        const nLibTerms = u ? Object.keys(u.counts).length : 0
+        const dnmTiers = passTierKeys.filter(tk => nDnmsByTier[tk] > 0).length
+        const smpTiers = sampleCol ? passTierKeys.filter(tk => (burdenByTier[tk] || []).length > 0).length : 0
+        const mSample = Math.max(nLibTerms * smpTiers, sTests.filter(c => c.pSample != null).length)
+        const mDnm = Math.max(nLibTerms * dnmTiers, dTests.filter(c => c.pDnm != null).length)
+        benjaminiHochberg(sTests.map(c => c.pSample), mSample).forEach((q, i) => { sTests[i].qSample = q })
+        benjaminiHochberg(dTests.map(c => c.pDnm), mDnm).forEach((q, i) => { dTests[i].qDnm = q })
+
+        // DISPLAY filter — applied AFTER the correction, so every q above is unchanged by
+        // it. Keep categories shared by ≥ minCount probands OR genes; the rest were still
+        // tested and still counted toward m, they are just not worth a row.
+        const groups = allGroups.filter(g => g.refIndividuals >= minCount || g.refGenes >= minCount)
         // Rank by pass|ALL recurrence, then genes, then pass|ALL sample p, then name.
         const psp = g => (g.cells[REF_CELL].pSample == null ? 1 : g.cells[REF_CELL].pSample)
         groups.sort((a, b) => b.refIndividuals - a.refIndividuals || b.refGenes - a.refGenes
             || (psp(a) - psp(b)) || a.term.localeCompare(b.term))
-        // Benjamini-Hochberg FDR PER DIMENSION: two families (sample, DNM), each
-        // across this dimension's (category × pass tier) tests.
-        const sTests = [], dTests = []
-        for (const g of groups) for (const tk of passTierKeys) { const cc = g.cells['pass|' + tk]; sTests.push(cc); dTests.push(cc) }
-        benjaminiHochberg(sTests.map(c => c.pSample)).forEach((q, i) => { sTests[i].qSample = q })
-        benjaminiHochberg(dTests.map(c => c.pDnm)).forEach((q, i) => { dTests[i].qDnm = q })
-        // BH family size m per track = the # of tests that actually carried a p-value
-        // (a cell only gets one when the dimension has a background AND the count is >0).
-        // Exported so the sheet can print m — q is a family-wide quantity, so without m a
-        // reader cannot audit it from a single row. Mirrors dnm-enrichment.js's familySizes.
-        const mSample = sTests.filter(c => c.pSample != null).length
-        const mDnm = dTests.filter(c => c.pDnm != null).length
-        return {id: d.id, label: d.label, groups, sourceSize: u ? u.size : null, mSample, mDnm}
+        return {id: d.id, label: d.label, groups, sourceSize: u ? u.size : null,
+            mSample, mDnm, nCategories: allGroups.length}
     })
 
     const cellSummary = cells.map(c => ({
