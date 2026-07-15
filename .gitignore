@@ -25,3 +25,5 @@ igv.js.iml
 # MitoCarta 3.0 (CC BY-NC — not redistributed; downloaded at runtime from the Broad)
 /server/data/genesets/Human.MitoCarta3.0.xls
 /server/data/genesets/mitocarta_*.json.gz
+# runtime cache when the server is launched from inside the repo (read-only-image path)
+.mitocarta-cache/

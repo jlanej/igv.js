@@ -27,12 +27,13 @@
  * of its lineage.
  *
  * LICENSING / DISTRIBUTION: MitoCarta is CC BY-NC (academic, non-commercial) — we do
- * NOT redistribute it. The raw Human.MitoCarta3.0.xls and the derived bundles are
- * gitignored; each deployment downloads the .xls directly from the Broad at runtime
- * (download-if-missing), so the tool obtains the data from the authoritative source
- * rather than from our repo. Offline / egress-blocked deployments simply don't get the
- * MitoCarta dimensions (they degrade to "unavailable", like every other network-
- * dependent fallback). Cite: Rath et al., Nucleic Acids Res 2021;49:D1541 (MitoCarta3.0);
+ * NOT redistribute it and it never enters the image. Each deployment downloads the .xls
+ * from the Broad at runtime (download-if-missing) into a writable dir beside wherever the
+ * server was launched — see cacheDir(), which handles the read-only image filesystems
+ * (Apptainer .sif etc.) this normally runs on. Offline / egress-blocked deployments
+ * simply don't get the MitoCarta dimensions (they degrade to "unavailable", like every
+ * other network-dependent fallback).
+ * Cite: Rath et al., Nucleic Acids Res 2021;49:D1541 (MitoCarta3.0);
  * data © Broad Institute, https://www.broadinstitute.org/mitocarta.
  *
  * The pure parse/transform function (xlsRowsToMaps) is exported and unit-tested; only
@@ -42,6 +43,7 @@
 'use strict'
 
 const fs = require('fs')
+const os = require('os')
 const zlib = require('zlib')
 const path = require('path')
 const log = require('./logger')
@@ -49,7 +51,54 @@ const log = require('./logger')
 const DATA_DIR = path.join(__dirname, 'data', 'genesets')
 const BROAD_BASE = 'https://personal.broadinstitute.org/scalvo/MitoCarta3.0/'
 const XLS_URL = BROAD_BASE + 'Human.MitoCarta3.0.xls'
-const XLS_FILE = path.join(DATA_DIR, 'Human.MitoCarta3.0.xls')
+const XLS_NAME = 'Human.MitoCarta3.0.xls'
+
+// ---------------------------------------------------------------------------
+// Where the runtime download + derived bundles go.
+//
+// DATA_DIR lives inside the image and is READ-ONLY in most real deployments
+// (Apptainer/Singularity .sif, read-only Docker rootfs) — writing there fails with
+// EROFS. So resolve a genuinely writable dir by PROBING (permission bits lie on a
+// read-only mount), preferring:
+//   1. $MITOCARTA_CACHE_DIR   — explicit override
+//   2. DATA_DIR               — dev checkouts / writable images
+//   3. <cwd>/.mitocarta-cache — the directory the server was LAUNCHED from. Apptainer
+//                               bind-mounts $PWD by default, so this is a host-side,
+//                               writable, persistent dir: download once, reuse forever,
+//                               and nothing licensed ever enters the image.
+//   4. <tmpdir>/igv-mitocarta — last resort (ephemeral: re-downloads each boot)
+// findFile() also reads DATA_DIR, so a copy placed there still works.
+// ---------------------------------------------------------------------------
+function isWritable(dir) {
+    try {
+        fs.mkdirSync(dir, {recursive: true})
+        const probe = path.join(dir, `.wtest-${process.pid}`)
+        fs.writeFileSync(probe, '')
+        fs.unlinkSync(probe)
+        return true
+    } catch (_) { return false }
+}
+
+let cacheDirMemo = null
+function cacheDir() {
+    if (cacheDirMemo) return cacheDirMemo
+    const launchDir = path.join(process.cwd(), '.mitocarta-cache')
+    const fallback = path.join(os.tmpdir(), 'igv-mitocarta')
+    for (const c of [process.env.MITOCARTA_CACHE_DIR, DATA_DIR, launchDir, fallback]) {
+        if (c && isWritable(c)) { cacheDirMemo = c; break }
+    }
+    if (!cacheDirMemo) cacheDirMemo = fallback   // nothing writable; writes fail & we degrade
+    if (cacheDirMemo !== DATA_DIR) log.info(`MitoCarta: cache dir ${cacheDirMemo} (${DATA_DIR} is read-only)`)
+    return cacheDirMemo
+}
+
+/** Locate a data file: a build-time copy baked into the image wins, else the cache. */
+function findFile(name) {
+    const baked = path.join(DATA_DIR, name)
+    if (fs.existsSync(baked)) return baked
+    const cached = path.join(cacheDir(), name)
+    return fs.existsSync(cached) ? cached : null
+}
 
 // The all-genes background sheet + column headers (resolved by NAME, robust to order).
 const XLS_SHEET = 'B Human All Genes'
@@ -195,7 +244,7 @@ function writeBundle(file, meta, geneMap, keepEmpty) {
         else if (keepEmpty) genes[g] = []
     }
     const payload = {meta: {...META_BASE, ...meta, geneCount: Object.keys(genes).length, memberGenes}, genes}
-    fs.writeFileSync(path.join(DATA_DIR, file), zlib.gzipSync(Buffer.from(JSON.stringify(payload)), {level: 9}))
+    fs.writeFileSync(path.join(cacheDir(), file), zlib.gzipSync(Buffer.from(JSON.stringify(payload)), {level: 9}))
 }
 
 /**
@@ -208,14 +257,20 @@ async function ensureData(opts) {
     if (opts && opts.force) ensuredPromise = null
     if (ensuredPromise) return ensuredPromise           // concurrency-safe: startup + export share one run
     const run = (async () => {
-        const derivedPresent = DIMS.every(d => fs.existsSync(path.join(DATA_DIR, d.file)))
+        const derivedPresent = DIMS.every(d => findFile(d.file))
         if (derivedPresent) return true
         try {
             // All three dimensions come from the single .xls, sheet B (all screened genes).
-            const xlsOk = await fetchToFile(XLS_URL, XLS_FILE)
-            if (xlsOk) {
+            // Reuse an already-downloaded copy if there is one; else fetch into the
+            // writable cache dir (normally .mitocarta-cache/ beside the launch dir).
+            let xlsPath = findFile(XLS_NAME)
+            if (!xlsPath) {
+                const dest = path.join(cacheDir(), XLS_NAME)
+                if (await fetchToFile(XLS_URL, dest)) xlsPath = dest
+            }
+            if (xlsPath) {
                 let rows = null
-                try { rows = readXlsRows(fs.readFileSync(XLS_FILE)) }
+                try { rows = readXlsRows(fs.readFileSync(xlsPath)) }
                 catch (pErr) { log.warn(`MitoCarta: .xls parse failed: ${pErr.message}`) }
                 if (rows && rows.length) {
                     const {localization, subLoc, pathways} = xlsRowsToMaps(rows)
@@ -224,12 +279,14 @@ async function ensureData(opts) {
                     if (subLoc.size) writeBundle('mitocarta_sublocalization.json.gz', {id: 'mitoSubLocalization', label: 'Sub-mitochondrial localization (MitoCarta)', _note: 'MitoCarta3.0_SubMitoLocalization; within-mito universe'}, subLoc, false)
                     if (pathways.size) writeBundle('mitocarta_pathways.json.gz', {id: 'mitoPathways', label: 'Mitochondrial pathway (MitoCarta)', _note: 'MitoCarta3.0_MitoPathways hierarchy (ancestors expanded); within-mito universe'}, pathways, false)
                 } else {
-                    // Downloaded file didn't parse (corrupt/incomplete) → discard so the next run re-downloads.
-                    try { fs.unlinkSync(XLS_FILE) } catch (_) { /* ignore */ }
+                    // Didn't parse (corrupt/incomplete) → discard the CACHED copy so the next
+                    // run re-downloads. A baked-in copy is left alone (read-only, not ours).
+                    const cached = path.join(cacheDir(), XLS_NAME)
+                    if (xlsPath === cached) { try { fs.unlinkSync(cached) } catch (_) { /* ignore */ } }
                 }
             }
             cache.clear()
-            return DIMS.some(d => fs.existsSync(path.join(DATA_DIR, d.file)))
+            return DIMS.some(d => findFile(d.file))
         } catch (err) { log.warn(`MitoCarta: ensureData failed: ${err.message}`); return false }
     })()
     // Memoize only SUCCESS (or the in-flight run): a transient failure nulls the memo so
@@ -250,9 +307,9 @@ function loadLibrary(id) {
     const entry = DIMS.find(d => d.id === id)
     let lib = null
     if (entry) {
-        const file = path.join(DATA_DIR, entry.file)
+        const file = findFile(entry.file)   // baked into the image, else the runtime cache
         try {
-            if (fs.existsSync(file)) {
+            if (file) {
                 const parsed = JSON.parse(zlib.gunzipSync(fs.readFileSync(file)).toString('utf-8'))
                 lib = {meta: parsed.meta || {id}, genes: new Map(Object.entries(parsed.genes || {}))}
             }
@@ -288,9 +345,10 @@ function attributions() {
     return available().map(a => `${a.label}: ${META_BASE.source} (${META_BASE.license}), ${META_BASE.citation} — ${META_BASE.url}`)
 }
 
-function reset() { cache.clear(); ensuredPromise = null }
+function reset() { cache.clear(); ensuredPromise = null; cacheDirMemo = null }
 
 module.exports = {
     ensureData, available, libMap, meta, annotationFor, attributions, loadLibrary, reset,
-    xlsRowsToMaps, readXlsRows, DIMS, MITO_TERM, DATA_DIR, XLS_URL,
+    xlsRowsToMaps, readXlsRows, cacheDir, findFile, isWritable,
+    DIMS, MITO_TERM, DATA_DIR, XLS_URL, XLS_NAME,
 }

@@ -11,8 +11,11 @@
  * All tests here are network-free and deterministic.
  */
 
-const {describe, it} = require('mocha')
+const {describe, it, after} = require('mocha')
 const {expect} = require('chai')
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
 
 const mitocarta = require('../mitocarta')
 const {mergeWithDefaults} = require('../export-config')
@@ -132,6 +135,43 @@ describe('mitocarta — loader offline-degradation contract', function () {
         // subloc/pathways store ONLY members (no empty term lists).
         for (const terms of sub.values()) expect(terms.length).to.be.greaterThan(0)
         for (const terms of pat.values()) expect(terms.length).to.be.greaterThan(0)
+    })
+})
+
+describe('mitocarta — writable cache dir (read-only image deployments)', function () {
+    const made = []
+    after(function () {
+        for (const d of made) { try { fs.chmodSync(d, 0o755); fs.rmSync(d, {recursive: true, force: true}) } catch (_) { /* ignore */ } }
+        delete process.env.MITOCARTA_CACHE_DIR
+        mitocarta.reset()
+    })
+
+    it('probes a real write rather than trusting permission bits', function () {
+        const ok = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-rw-')); made.push(ok)
+        expect(mitocarta.isWritable(ok)).to.equal(true)
+    })
+
+    it('rejects a read-only directory (the EROFS case)', function () {
+        // root bypasses permission bits, so this can't be simulated as root.
+        if (process.getuid && process.getuid() === 0) return this.skip()
+        const ro = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-ro-')); made.push(ro)
+        fs.chmodSync(ro, 0o555)
+        expect(mitocarta.isWritable(ro)).to.equal(false)
+        expect(mitocarta.isWritable(path.join(ro, 'nested'))).to.equal(false)
+    })
+
+    it('honours MITOCARTA_CACHE_DIR and always resolves somewhere writable', function () {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-env-')); made.push(dir)
+        process.env.MITOCARTA_CACHE_DIR = dir
+        mitocarta.reset()                       // clear the memoised cache dir
+        expect(mitocarta.cacheDir()).to.equal(dir)
+        delete process.env.MITOCARTA_CACHE_DIR
+        mitocarta.reset()
+        expect(mitocarta.isWritable(mitocarta.cacheDir())).to.equal(true)
+    })
+
+    it('findFile returns null for an absent file and never throws', function () {
+        expect(mitocarta.findFile('definitely_not_here_xyz.json.gz')).to.equal(null)
     })
 })
 

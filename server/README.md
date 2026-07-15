@@ -678,13 +678,24 @@ these flow through the same `gsLibs` path as the bundled libraries, they get
 `geneAnalysis.mitoLocalization / mitoSubLocalization / mitoPathways` and
 `geneAnnotations.mitocarta`.
 
-**Runtime egress note (air-gapped deployments):** the `.xls` is fetched at
-*runtime* from the Broad, so MitoCarta only loads where the running server has
-egress to `personal.broadinstitute.org`. If compute nodes are air-gapped, place a
-copy of `Human.MitoCarta3.0.xls` in `data/genesets/` inside the image at build
-time — `ensureData()` then skips the download (the file already exists) and builds
-the derived bundles locally. (Baking the file into a *private, non-commercial*
-image is within CC BY-NC; do not redistribute it in a public image.)
+##### Where the files land (read-only images)
+
+`data/genesets/` inside the image is **read-only** in most real deployments
+(Apptainer/Singularity `.sif`, read-only Docker rootfs) — writing there fails with
+`EROFS`. So the download goes to the first dir that a **write probe** actually
+succeeds in (permission bits lie on a read-only mount):
+
+1. **`$MITOCARTA_CACHE_DIR`** — explicit override.
+2. **`data/genesets/`** — dev checkouts and writable images.
+3. **`<cwd>/.mitocarta-cache`** — the directory you launched the server from.
+   Apptainer bind-mounts `$PWD` by default, so this is a host-side, writable,
+   persistent dir: **downloaded once, reused on every later run**, and nothing
+   licensed ever enters the image. This is the normal container path.
+4. **`<tmpdir>/igv-mitocarta`** — last resort if the launch dir isn't writable.
+
+So under Apptainer you don't need to do anything: the first run drops a
+`.mitocarta-cache/` next to where you ran it, and subsequent runs reuse it. Point
+`MITOCARTA_CACHE_DIR` at a shared path if you'd rather several jobs share one copy.
 
 ### Gene convergence (Gene Analysis tabs)
 
