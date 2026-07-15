@@ -24,6 +24,7 @@ const annotationRegistry = require('./annotation-registry')
 const {computeConvergence, geneTermsFor, sourceUniverseStats, binomUpperTail, DIMENSIONS} = require('./gene-analysis')
 const {computeModelEnrichment, categoryMuSums, DE_NOVO} = require('./dnm-enrichment')
 const geneSets = require('./genesets')
+const mitocarta = require('./mitocarta')
 const gnomadProvider = require('./providers/gnomad-provider')
 const clinvarProvider = require('./providers/clinvar-provider')
 const genccProvider = require('./providers/gencc-provider')
@@ -1289,7 +1290,7 @@ function buildReadmeSheet(workbook, opts) {
     row('Read Me', 'This guide: worksheet overview, column dictionary, and data sources.')
     row('Variants', 'One row per exported variant. Rows are colour-coded by curation status (Pass/Fail/Uncertain/Pending). When --bed-tracks (kraken2 species BEDs) are configured, adds contamination columns: Contamination (assessment), Nonhuman %, Contam Reads, Nonhuman Reads, Top Taxa.')
     if (hasGene && exportCfg.sheets.geneSummary) row('Gene Summary', 'One row per gene: curation counts, impact-passing counts, and gene-level annotations. See the column dictionary below.')
-    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis (samples) / (DNMs)', 'Convergence, in two matching tabs: which shared attributes (gnomAD constraint, ClinVar history, protein domain, GenCC inheritance; Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes) your genes stack up on. Both are IGV-pass; the "(samples)" tab counts distinct probands (conservative headline), the "(DNMs)" tab counts pass DNMs. Each is a category × cumulative-impact-tier matrix of "count (%)" (with a green ✓ for FDR q<0.05, and the exact p/q to the right) against the category\'s genome-wide prevalence ("% all genes"), so you can see "1% of genes but 50% of samples". An all·ALL column flags noisy (non-pass) pools. See the dictionary below.')
+    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis (samples) / (DNMs)', 'Convergence, in two matching tabs: which shared attributes (gnomAD constraint, ClinVar history, protein domain, GenCC inheritance; Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes, MitoCarta mitochondrial sets) your genes stack up on. Both are IGV-pass; the "(samples)" tab counts distinct probands (conservative headline), the "(DNMs)" tab counts pass DNMs. Each is a category × cumulative-impact-tier matrix of "count (%)" (with a green ✓ for FDR q<0.05, and the exact p/q to the right) against the category\'s genome-wide prevalence ("% all genes"), so you can see "1% of genes but 50% of samples". An all·ALL column flags noisy (non-pass) pools. See the dictionary below.')
     if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled && exportCfg.geneAnalysis.dnmRateTest !== false) row('DNM Rate (gene-set)', 'De novo mutation-rate enrichment (Test B): whether a gene set carries more DE NOVO variants than the gnomAD germline mutation rate predicts for N trios — Poisson λ = 2·N·μ, with a live =1−POISSON(k−1,λ,TRUE) derivation. De-novo-only; appears only when the data has an `inheritance` column and gnomAD μ (GRCh38). Complements the origin-agnostic Gene Analysis tabs. See the Methods dictionary below.')
     if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled && exportCfg.geneAnalysis.dnmRateTest !== false) row('DNM Rate (per-gene)', 'The same de novo mutation-rate test at GENE level: one row per (gene, track) with an observed de novo SNV, k vs Poisson λ = 2·N·μ, live =1−POISSON(k−1,λ,TRUE). LoF / missense / protein-altering are separate Benjamini-Hochberg discovery families; synonymous is the calibration control. Power comes from recurrence (≥2 de novos/gene).')
     if (exportCfg.sheets.sampleSummary) row('Sample Summary', 'Per-sample variant counts by impact group and frequency threshold, with cohort mean/median.')
@@ -1341,6 +1342,9 @@ function buildReadmeSheet(workbook, opts) {
                     row(col.header, 'Membership flag (Yes/No): is this gene present in the named user-supplied gene list?', 'user list', 'membership only')
                 }
             }
+            if (ga.mitocarta !== false && mitocarta.available().length) {
+                row('Mitochondrial (MitoCarta)', 'Is the gene in the MitoCarta3.0 mitochondrial inventory? "Yes" with the sub-mitochondrial localization when known (e.g. "Yes — Matrix, MIM"), else blank. Downloaded from the Broad at runtime (not redistributed).', 'MitoCarta3.0 (Broad)', 'CC BY-NC')
+            }
         }
     }
 
@@ -1354,10 +1358,10 @@ function buildReadmeSheet(workbook, opts) {
         row('Derivation columns + Excel formula (DNMs tab)', 'To make the DNM p-value fully transparent, each row also shows the exact test inputs for the pass·ALL tier and a LIVE Excel formula. The DNM test is a BINOMIAL: X ~ Binomial(n, p), where k = "k (cat DNMs)" = pass·ALL DNMs in a category gene; n = "n (pass DNMs)" = total pass DNMs; p = "p (prev)" = the category\'s genome prevalence ("% all genes" as a fraction). RATIONALE: under the null, each of the n pass DNMs independently lands in a category gene with probability p (the fraction of genes in the category), so we test whether MORE landed there than chance. The p-value is the upper tail P(X ≥ k), written in the "P(X≥k)" cell as the live Excel formula  =1−BINOMDIST(k−1, n, p, TRUE)  (it recomputes to the same number as the "ALL p/q" column). "Expected n·p" = the chance-expected count for comparison to k. For a different tier, reuse the formula with that tier\'s k and its total pass DNMs (listed in the banner).', 'X ~ Binomial(n, p); P(X≥k)=1−BINOMDIST(k−1,n,p,TRUE)')
         row('Derivation columns + Excel formula (samples tab)', 'The SAMPLE test is a POISSON-BINOMIAL (a binomial whose trials have different success probabilities): X = Σ Bernoulli(pᵢ) over the at-risk probands, where each proband i with dᵢ pass DNMs at the tier hits a category gene by chance with pᵢ = 1−(1−p)^dᵢ (p = "% all genes"). Columns: k = "k (probands)" = probands observed hitting; n = "n (at-risk)" = probands with ≥1 pass DNM; "Expected Σpᵢ" = the chance mean Σpᵢ. RATIONALE: this dedups per proband and credits a high-DNM proband with a higher chance, so a hypermutant can\'t fake convergence. The p-value is P(X ≥ k); Excel has no Poisson-binomial function, so the "P(X≥k)" cell holds a LIVE BINOMIAL approximation  =1−BINOMDIST(k−1, n, Expected/n, TRUE)  (n trials at the mean per-proband rate). It is conservative (≥ the exact value) where significance lives — observed k above the Expected count — and can run slightly under for k below Expected; the EXACT Poisson-binomial value is always the "ALL p/q" column. The worked example is the pass·ALL tier only (other tiers use the same test but their per-proband burdens aren\'t tabulated). The DNMs tab\'s BINOMDIST is the single-probability analogue and reproduces every tier.', 'X = ΣBernoulli(pᵢ); P(X≥k) exact = Poisson-binomial')
         row('all·ALL', 'QUALITY FLAG (all curation statuses, any impact): the tab\'s unit hitting the category regardless of IGV status. A large gap (all·ALL ≫ pass·ALL) means the category\'s pass signal was drawn from a pool with many poor-quality/non-pass calls — treat that row with suspicion.', 'curation quality check')
-        row('cat size / % all genes', 'The BACKGROUND (chance rate). cat size = genes in the category within its own source universe; % all genes = cat size ÷ that source\'s gene count (shown in each section header) — e.g. % of gnomAD-scored genes at pLI≥0.9, a pathway\'s size ÷ the genes its library annotates, or a protein domain\'s size ÷ ~19k human genes with any domain. Each source uses its OWN gene universe (sizes range ~4k–31k), so Fold and % all genes are comparable WITHIN a dimension, not across dimensions. Shows "—" when a dimension has no offline background — constraint on GRCh37 exports (the bundle is gnomAD v4.1/GRCh38 only), or the protein domain when the InterPro bundle is absent (MyGene fallback).', 'per-source universe')
+        row('cat size / % all genes', 'The BACKGROUND (chance rate). cat size = genes in the category within its own source universe; % all genes = cat size ÷ that source\'s gene count (shown in each section header) — e.g. % of gnomAD-scored genes at pLI≥0.9, a pathway\'s size ÷ the genes its library annotates, or a protein domain\'s size ÷ ~19k human genes with any domain. Each dimension uses its OWN gene universe (sizes range ~1k–31k; e.g. MitoCarta localization vs the whole ~19k-gene genome but MitoCarta sub-localization/pathways vs the ~1k annotated mito genes), so Fold and % all genes are comparable WITHIN a dimension, not across dimensions. Shows "—" when a dimension has no offline background — constraint on GRCh37 exports (the bundle is gnomAD v4.1/GRCh38 only), or the protein domain when the InterPro bundle is absent (MyGene fallback).', 'per-source universe')
         row('Fold (pass·ALL)', 'The headline effect size at the pass·ALL tier: the observed pass·ALL rate ÷ "% all genes". On the samples tab the rate is # pass·ALL probands ÷ the TRUE cohort size — max(distinct probands in the callset, the Sample-QC trio count) so it can never undercount below the observed probands (every attempted trio incl. 0-DNM ones; shown in the banner). On the DNMs tab it is # pass·ALL DNMs ÷ total pass DNMs. Bold-green when ≥5× AND backed by ≥2 units (a big fold on a single unit / tiny cohort is left un-bolded). "1% of genes but 50% of samples" is the striking case.')
         row('# genes / Genes', 'Distinct PASS genes in the category (pass·ALL), and their symbols (locus heterogeneity). A category is shown only if ≥2 pass samples OR ≥2 pass genes share it; a row is bold when ≥2 pass·ALL units share it. Note: a category kept via ≥2 GENES with only 1 proband can still earn a ✓ on the samples tab — that is within-proband gene convergence, not cross-sample recurrence.')
-        row('Dimensions', 'All 8 offline for an hg38 export with the bundles present: gnomAD constraint tail (LOEUF<0.6 / pLI≥0.9), ClinVar P/LP history, GenCC Mode-of-Inheritance, protein domain (InterPro, human gene→domain bundled from Ensembl/InterPro — terms + background from the same source), Reactome & WikiPathways pathways, HGNC gene families (PROTEIN-CODING genes only — non-coding loci excluded so the background is the coding genome), MSigDB Hallmark processes. On GRCh37/hg19 the constraint TERMS come from the live gnomAD API; if the InterPro bundle is absent the domain TERMS fall back to live MyGene (no background).', '8 dimensions')
+        row('Dimensions', 'All 8 offline for an hg38 export with the bundles present: gnomAD constraint tail (LOEUF<0.6 / pLI≥0.9), ClinVar P/LP history, GenCC Mode-of-Inheritance, protein domain (InterPro, human gene→domain bundled from Ensembl/InterPro — terms + background from the same source), Reactome & WikiPathways pathways, HGNC gene families (PROTEIN-CODING genes only — non-coding loci excluded so the background is the coding genome), MSigDB Hallmark processes. Plus up to 3 MitoCarta3.0 dimensions (mitochondrial localization, sub-mitochondrial localization, MitoPathways3.0) when the runtime download from the Broad has succeeded (CC BY-NC — not bundled; absent when egress is blocked). On GRCh37/hg19 the constraint TERMS come from the live gnomAD API; if the InterPro bundle is absent the domain TERMS fall back to live MyGene (no background).', 'up to 11 dimensions')
         row('Reading pathways', 'Pathway dimensions overlap heavily (a gene sits in many pathways), so many near-identical rows can share the same genes — only the top 25 per dimension (by pass·ALL distinct-proband count, a single ranking shared by both tabs) are shown and the remainder is noted. Judge convergence by the gene list + the counts, not by the number of rows.')
         row('Method', 'The counts vs "% all genes" (the fold) are the primary read — you decide if a contrast is striking. The SAMPLE tab\'s q is the conservative statistical backstop; the DNM tab\'s q is a less-robust companion. Enrichment is upper-tail only (depletion is not tested), and FDR is controlled WITHIN each dimension (don\'t pool ✓ across dimensions); the nested pass tiers make each tier\'s q conservative. This is a GENE-COUNT (distributional) null — it is origin-agnostic (de novo or inherited) and captures ALL variant types incl. indels. The complementary mutation-rate null lives on the separate "DNM Rate (gene-set)" tab (Test B, de novo only).')
     }
@@ -1392,6 +1396,21 @@ function buildReadmeSheet(workbook, opts) {
             }
         } catch (_) { /* libraries optional */ }
     }
+    // MitoCarta 3.0 — CC BY-NC, NOT redistributed: downloaded from the Broad at runtime
+    // (download-if-missing). Powers 3 convergence dimensions AND the per-gene
+    // "Mitochondrial (MitoCarta)" Gene Summary column. Absent when egress is blocked.
+    try {
+        for (const lib of mitocarta.available()) {
+            const m = lib.meta || {}
+            // Universe differs by dimension: localization vs the whole screened genome
+            // ("mito vs not"); sub-loc/pathways vs the annotated mito genes (specificity).
+            const uni = lib.id === 'mitoLocalization'
+                ? (m.geneCount ? ` Universe = the ${m.geneCount.toLocaleString()}-gene screened genome, so "% all genes" is a share of ALL genes (mito ≈ 5.9%).` : '')
+                : (m.geneCount ? ` Universe = the ${m.geneCount.toLocaleString()} mito genes carrying this annotation (within-mito specificity, like Reactome — NOT comparable to the localization or genome-background dimensions).` : '')
+            row(lib.label, `${m.source || lib.id}. Downloaded at runtime from the Broad (not redistributed — CC BY-NC). Convergence dimension${lib.id === 'mitoLocalization' ? ' + per-gene Gene Summary annotation' : ''}.${uni} ${m.citation || ''}`.trim(),
+                m.url || '', m.license || '')
+        }
+    } catch (_) { /* MitoCarta optional (runtime download) */ }
     row('MyGene.info', 'Gene name, type, OMIM MIM number, KEGG pathways, function summary.', 'mygene.info', 'per source')
     row('Gene-list membership', 'Yes/No membership derived from user-supplied symbol lists. Used for licence-restricted sources (e.g. COSMIC): only membership is embedded, not the licensed content.', 'user-supplied', 'membership only')
 
@@ -1465,9 +1484,9 @@ function buildGeneAnalysisTab(workbook, conv, styles, track) {
     addBanner(`Gene Analysis — ${track.conservative ? 'SAMPLE' : 'DNM'} convergence (IGV-pass)`, {bold: true, size: 14, color: {argb: 'FF2C3E50'}})
     addBanner(`Rows = categories your genes converge on. The four pass columns are CUMULATIVE impact tiers (HIGH ⊆ HIGH+MOD ⊆ HIGH+MOD+LOW ⊆ ALL); each shows the # of ${track.unit} in a category gene and, in parens, their % of ${track.conservative ? `the ${totalProbands} cohort probands` : `the ${nPassDnms} pass DNMs`} (a share of the counted base — NOT the "% all genes" column, which is the genome background). A green "✓" marks a tier whose Benjamini-Hochberg FDR q<0.05 (its ${track.conservative ? 'conservative sample' : 'DNM'} test); the exact "p / q" per tier are in the columns to the right.${track.conservative ? '' : ' Each tier\'s p/q is computed against that tier\'s OWN pass-DNM total, not the ALL-tier total shown in the "(%)", so a non-ALL cell can be significant at a small displayed %.'} Only categories with ≥2 pass samples OR genes are listed.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    addBanner(`"% all genes" = the category's prevalence in its own source (cat size ÷ the section-header source-gene count) — the chance rate, computed against EACH source's own gene universe (sizes differ ~4k–31k), so compare Fold WITHIN a dimension, not across dimensions. "Fold (pass·ALL)" = the pass·ALL ${track.unitShort}-rate ÷ prevalence${track.conservative ? ` (over ${totalProbands} cohort probands — every attempted trio incl. 0-DNM; ${probandsWithVariant} carry ≥1 variant)` : ` (over ${nPassDnms} pass DNMs)`}. "all·ALL" = ${track.unitShort} hitting the category at ANY curation status — a large gap vs pass·ALL flags a category drawn from a noisy (poor-quality) pool.`,
+    addBanner(`"% all genes" = the category's prevalence in its own source (cat size ÷ the section-header source-gene count) — the chance rate, computed against EACH dimension's own gene universe (sizes differ ~1k–31k), so compare Fold WITHIN a dimension, not across dimensions. "Fold (pass·ALL)" = the pass·ALL ${track.unitShort}-rate ÷ prevalence${track.conservative ? ` (over ${totalProbands} cohort probands — every attempted trio incl. 0-DNM; ${probandsWithVariant} carry ≥1 variant)` : ` (over ${nPassDnms} pass DNMs)`}. "all·ALL" = ${track.unitShort} hitting the category at ANY curation status — a large gap vs pass·ALL flags a category drawn from a noisy (poor-quality) pool.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    addBanner(`Green cues: a "✓" cell = FDR q<0.05 (its column has the p/q); a bold "Fold" = ≥5× AND backed by ≥2 ${track.unitShort} — a big Fold on a single ${track.unitShort} or a tiny cohort is deliberately left un-bolded, so read Fold with the cohort/count in mind. FDR is controlled WITHIN each dimension only — do not pool ✓ across the 8 dimensions.`,
+    addBanner(`Green cues: a "✓" cell = FDR q<0.05 (its column has the p/q); a bold "Fold" = ≥5× AND backed by ≥2 ${track.unitShort} — a big Fold on a single ${track.unitShort} or a tiny cohort is deliberately left un-bolded, so read Fold with the cohort/count in mind. FDR is controlled WITHIN each dimension only — do not pool ✓ across dimensions.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
     addBanner(track.conservative
         ? 'The SAMPLE test is the conservative, robust read: its expected accounts for EACH proband\'s per-tier pass-DNM burden, so a single hypermutated proband can\'t fake convergence (it dedups to one sample AND is expected to hit). A category kept via ≥2 GENES can still show a ✓ on a count of 1 — that is ONE proband hitting ≥2 genes that share the term (within-proband gene convergence), not recurrence across samples; check the "# genes" column. A gene-count null only approximates the de-novo mutation-rate null, so treat marginal q gently. The companion "Gene Analysis (DNMs)" tab gives the variant-level view.'
@@ -1822,6 +1841,21 @@ app.post('/api/export/xlsx', async (req, res) => {
             pending: null
         }
 
+        // MitoCarta (CC BY-NC, runtime download) must be resolved BEFORE Read Me,
+        // Gene Summary, and Gene Analysis so all three observe ONE consistent
+        // availability snapshot. Otherwise a cold-cache first export (before the startup
+        // prefetch completes) could ship the mito convergence dimensions while the Read Me
+        // CC BY-NC attribution rows and the Gene Summary mito column are missing — an
+        // attribution gap for a non-commercial source plus an inconsistent workbook.
+        {
+            const gaC = exportCfg.geneAnalysis || {}
+            const wantMito = (exportCfg.geneAnnotations && exportCfg.geneAnnotations.mitocarta !== false) ||
+                (gaC.enabled && ['mitoLocalization', 'mitoSubLocalization', 'mitoPathways'].some(k => gaC[k] !== false))
+            if (headerColumns.includes('gene') && wantMito) {
+                try { await mitocarta.ensureData() } catch (mErr) { log.warn('MitoCarta ensureData:', mErr.message) }
+            }
+        }
+
         // --- "Read Me" data-dictionary worksheet (first tab) ----------------
         if (exportCfg.sheets.dataDictionary !== false) {
             try {
@@ -2094,6 +2128,8 @@ app.post('/api/export/xlsx', async (req, res) => {
                     if (exportCfg.geneAnnotations.summary) gsCols.push({header: 'Summary', key: 'summary', width: 50})
                     // Registry provider columns (gnomAD, ClinVar, gene-list membership)
                     gsCols.push(...annotationRegistry.columns(exportCfg))
+                    // MitoCarta mitochondrial annotation (present only when the runtime download has succeeded)
+                    if (exportCfg.geneAnnotations.mitocarta !== false && mitocarta.available().length) gsCols.push({header: 'Mitochondrial (MitoCarta)', key: 'mitocarta', width: 26})
                 }
 
                 gws.columns = gsCols
@@ -2118,6 +2154,10 @@ app.post('/api/export/xlsx', async (req, res) => {
                     // Enrich with registry-provider cells (gnomAD/ClinVar/gene-lists)
                     if (exportCfg.geneAnnotations.enabled) {
                         Object.assign(g, annotationRegistry.applyCells(providerByGene.get(g.gene), exportCfg))
+                        if (exportCfg.geneAnnotations.mitocarta !== false) {
+                            const a = mitocarta.annotationFor(g.gene)
+                            if (a) g.mitocarta = a.subLoc && a.subLoc.length ? `Yes — ${a.subLoc.join(', ')}` : 'Yes'
+                        }
                     }
                     const row = gws.addRow(g)
                     row.eachCell(cell => {
@@ -2148,6 +2188,17 @@ app.post('/api/export/xlsx', async (req, res) => {
                     // baseDim libraries (InterPro domain) source an EXISTING base
                     // dimension — don't add them as a new convergence section.
                     if (!lib.baseDim) gsDims.push({id: lib.id, label: lib.label})
+                }
+                // MitoCarta 3.0 dimensions (localization / sub-localization / pathways).
+                // Downloaded from the Broad at runtime (CC BY-NC, not bundled); available()
+                // is empty until that succeeds, so this simply adds nothing when offline.
+                // ensureData already ran (and cache-cleared) before Read Me/Gene Summary;
+                // this await is a memoized no-op that just guards direct-call code paths.
+                try { await mitocarta.ensureData() } catch (mErr) { log.warn('MitoCarta ensureData:', mErr.message) }
+                for (const lib of mitocarta.available()) {
+                    if (gaCfg[lib.id] === false) continue
+                    gsLibs[lib.id] = mitocarta.libMap(lib.id)
+                    gsDims.push({id: lib.id, label: lib.label})
                 }
                 // Active dimensions = enabled base dims + enabled gene-set dims.
                 const dimensions = [...DIMENSIONS.filter(d => gaCfg[d.id] !== false), ...gsDims]
@@ -2534,6 +2585,10 @@ app.post('/api/export/xlsx', async (req, res) => {
             if (exportCfg.geneAnnotations.enabled) {
                 const attributions = [{source: 'MyGene.info', details: 'Gene name/type/OMIM/pathways/summary — https://mygene.info'}]
                 try { attributions.push(...annotationRegistry.attributions(exportCfg)) } catch (_) { /* ignore */ }
+                // MitoCarta is a standalone module (not in the registry); surface its
+                // CC BY-NC licence here — this tab is the Read Me's designated licence
+                // surface and is built after the download, so attribution is reliable.
+                try { attributions.push(...mitocarta.attributions().map(s => ({source: 'MitoCarta3.0', details: s}))) } catch (_) { /* ignore */ }
                 for (const a of attributions) {
                     const r = asws.addRow({source: a.source, gene: '', status: 'Source', details: a.details})
                     r.eachCell(cell => { cell.border = borderThin })
@@ -3542,6 +3597,9 @@ if (require.main === module) {
             log.info(`BED tracks: ${BED_TRACK_CONFIGS.length} track(s) configured`)
             BED_TRACK_CONFIGS.forEach(t => log.info(`  - ${t.name}: ${t.path}`))
         }
+        // Pre-fetch MitoCarta (CC BY-NC, from the Broad) so the first export isn't slow;
+        // non-blocking and best-effort — offline deployments just skip the mito dimensions.
+        mitocarta.ensureData().then(ok => { if (ok) log.info('MitoCarta:  dimensions ready') }).catch(() => {})
     })
 }
 

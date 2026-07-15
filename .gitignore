@@ -22,3 +22,6 @@ igv.js.iml
 /server/test/data/giab/*.curation.json
 /server/test/data/giab/*.filters.json
 /server/data/gene-lists/__test_*.txt
+# MitoCarta 3.0 (CC BY-NC — not redistributed; downloaded at runtime from the Broad)
+/server/data/genesets/Human.MitoCarta3.0.xls
+/server/data/genesets/mitocarta_*.json.gz

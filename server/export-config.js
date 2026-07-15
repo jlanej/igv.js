@@ -44,6 +44,10 @@ const DEFAULT_EXPORT_CONFIG = {
         wikipathways: true,       // WikiPathways pathway convergence (CC0)
         hgncFamily: true,         // HGNC gene-family convergence (attribution)
         msigdbHallmark: true,     // MSigDB Hallmark process convergence (CC BY)
+        // MitoCarta 3.0 dimensions (Broad, CC BY-NC; downloaded at runtime, not bundled).
+        mitoLocalization: true,   // mitochondrial localization (binary, MitoCarta inventory)
+        mitoSubLocalization: true,// sub-mitochondrial localization (Matrix/MIM/MOM/IMS)
+        mitoPathways: true,       // MitoPathways3.0 functional hierarchy
         // Test B: de novo mutation-rate enrichment (separate "DNM Rate" tab).
         // De-novo-only (needs an `inheritance` column) + gnomAD μ (GRCh38); self-skips otherwise.
         dnmRateTest: true         // λ = 2·N·μ Poisson enrichment (Samocha framework, gnomAD v4.1 rates)
@@ -78,6 +82,7 @@ const DEFAULT_EXPORT_CONFIG = {
         omim: true,               // OMIM disease associations (MIM number)
         pathways: true,           // KEGG pathway memberships
         geneType: true,           // Gene biotype
+        mitocarta: true,          // MitoCarta mitochondrial localization (runtime download; CC BY-NC)
         // --- Registry providers (each {enabled, ...sub-columns}) ---
         gnomadConstraint: {       // gnomAD gene constraint (live API)
             enabled: true,

@@ -28,9 +28,10 @@ OpenDemand desktop access).
 - **Impact counts** – per-gene counts of HIGH/MODERATE/LOW/ALL-impact variants
   passing review, on the Gene Summary sheet
 - **Gene convergence** – two matching Gene Analysis tabs showing whether singleton
-  genes stack up on a shared attribute across **eight dimensions** (gnomAD constraint
-  tier, ClinVar history, GenCC inheritance, protein domain, plus Reactome &
-  WikiPathways pathways, HGNC gene families, and MSigDB Hallmark processes). Both are
+  genes stack up on a shared attribute across **eight bundled dimensions** (gnomAD
+  constraint tier, ClinVar history, GenCC inheritance, protein domain, plus Reactome &
+  WikiPathways pathways, HGNC gene families, and MSigDB Hallmark processes) — plus up to
+  **3 runtime MitoCarta dimensions** when the Broad download succeeds. Both are
   **IGV-pass** only; **Gene Analysis (samples)** counts distinct probands (the
   conservative headline) and **Gene Analysis (DNMs)** counts pass DNMs. Each is a
   category × **cumulative impact-tier** matrix (HIGH ⊆ HIGH+MOD ⊆ HIGH+MOD+LOW ⊆ ALL)
@@ -634,6 +635,57 @@ the same source, so they align exactly) and is fetched per-chromosome to avoid
 the ~100 GB genome-wide `protein2ipr`; with it absent, domain terms fall back to
 MyGene (no background). Complex Portal, GO-slim, and HPO are future additions.
 
+##### MitoCarta 3.0 (runtime download — CC BY-NC, not bundled)
+
+MitoCarta3.0 (Broad Institute; Rath et al., *Nucleic Acids Res* 2021) is
+**CC BY-NC** (academic / non-commercial), so it is **not redistributed** in this
+repo. Instead `mitocarta.js` **downloads the single `Human.MitoCarta3.0.xls` from
+the Broad at runtime** (download-if-missing, on startup and before the first Gene
+Analysis export) and writes gitignored derived bundles
+(`data/genesets/mitocarta_*.json.gz`). Egress-blocked deployments simply don't get
+these dimensions — they degrade to "unavailable" like any other network-dependent
+fallback. All three dimensions (**and** a per-gene Gene Summary annotation) are
+derived from one sheet of that file — **B Human All Genes**, the ~19,243-gene
+genome MitoCarta screened, with a `MitoCarta3.0_List` flag on the 1,136-gene
+inventory:
+
+| Dimension | Adds | Source (sheet B) |
+|-----------|------|------------------|
+| **Mitochondrial localization** | binary — is the gene mitochondrial (in the MitoCarta3.0 inventory)? Also the per-gene **"Mitochondrial (MitoCarta)"** Gene Summary column. | `MitoCarta3.0_List` == `MitoCarta3.0` |
+| **Sub-mitochondrial localization** | Matrix / MIM / MOM / IMS / Membrane (pipe-delimited; "unknown" dropped as missing) | `MitoCarta3.0_SubMitoLocalization` |
+| **Mitochondrial pathway** | the MitoPathways3.0 functional hierarchy — each gene's `A > B > C` paths are **ancestor-expanded** so it belongs to every level of its lineage (reproduces the 149 MitoPathways sets) | `MitoCarta3.0_MitoPathways` |
+
+**Background universe differs by dimension (deliberate):**
+- **Localization** ("mito vs not") uses the **full ~19,243-gene screened genome** as
+  its background — every screened gene is kept in the library (non-members carry no
+  term), so "% all genes" is the gene's share of *all* genes (mito ≈ 5.9%). A mito-only
+  universe would make this binary test degenerate (100% background ⇒ no enrichment
+  possible). This is why we read sheet B, which ships the genome background.
+- **Sub-localization** and **pathways** use the **within-mito universe** — only the
+  mito genes carrying that annotation (1,080 / 1,035 genes) — exactly like the
+  Reactome/WikiPathways annotated-gene background. This measures *specificity* among
+  mitochondrial genes ("which compartment / pathway do the hits concentrate in?")
+  rather than re-reporting the overall mito-vs-genome signal that localization already
+  captures. Consequence: MitoPathway folds are comparable to Reactome/WikiPathway folds
+  (same kind of denominator) but **not** to the localization fold (genome denominator).
+
+The `.xls` needs the `xlsx` (SheetJS) reader (`exceljs` reads only `.xlsx`). The
+dependency is pinned to SheetJS's **official CDN build** (`cdn.sheetjs.com/…tgz`),
+not the npm `0.18.5` (which carries CVE-2023-30533 / CVE-2024-22363); it resolves
+at build time (CI / image build), so there is no runtime CDN dependency. Because
+these flow through the same `gsLibs` path as the bundled libraries, they get
+**both** Test A (clustering) and Test B (mutation-rate) automatically. Toggles:
+`geneAnalysis.mitoLocalization / mitoSubLocalization / mitoPathways` and
+`geneAnnotations.mitocarta`.
+
+**Runtime egress note (air-gapped deployments):** the `.xls` is fetched at
+*runtime* from the Broad, so MitoCarta only loads where the running server has
+egress to `personal.broadinstitute.org`. If compute nodes are air-gapped, place a
+copy of `Human.MitoCarta3.0.xls` in `data/genesets/` inside the image at build
+time — `ensureData()` then skips the download (the file already exists) and builds
+the derived bundles locally. (Baking the file into a *private, non-commercial*
+image is within CC BY-NC; do not redistribute it in a public image.)
+
 ### Gene convergence (Gene Analysis tabs)
 
 When de novo hits are singletons scattered across many genes, the **Gene
@@ -746,6 +798,8 @@ server/
 ├── annotation-registry.js          # Pluggable gene-annotation provider registry
 ├── gene-analysis.js                # Gene Analysis convergence engine (computeConvergence, per-source stats)
 ├── genesets.js                     # Bundled gene-set library loader (Reactome/WikiPathways/HGNC/Hallmark)
+├── mitocarta.js                    # MitoCarta3.0 dimensions + per-gene annotation (single .xls runtime download, CC BY-NC)
+├── dnm-enrichment.js               # Test B engine: de novo mutation-rate enrichment (gnomAD μ, Poisson)
 ├── species-metrics.js              # Kraken2 BED parsing + per-variant contamination metrics
 ├── export-config.js                # Export configuration defaults & deep-merge helpers
 ├── package.json                    # Dependencies & npm scripts
@@ -756,7 +810,7 @@ server/
 │   └── genelist-provider.js        # Yes/No gene-list membership (user-supplied)
 ├── data/
 │   ├── annotations/                # Bundled per-gene snapshots (clinvar/gnomad/gencc .json.gz)
-│   ├── genesets/                   # Bundled gene-set libraries (reactome/wikipathways/hgnc_family/msigdb_hallmark .json.gz)
+│   ├── genesets/                   # Bundled gene-set libraries (reactome/wikipathways/hgnc_family/msigdb_hallmark .json.gz); MitoCarta files downloaded here at runtime (gitignored, CC BY-NC)
 │   └── gene-lists/                 # User-supplied gene lists (*.txt) for membership columns (see its README)
 ├── scripts/
 │   ├── build-annotation-data.js    # Rebuild bundled annotation + gene-set snapshots
