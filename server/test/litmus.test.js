@@ -199,22 +199,37 @@ describe('litmus: the full XLSX export pipeline produces a valid workbook', func
         const seen = new Set()
         const headerRow = {}   // header label -> column number
         ws.eachRow(row => row.eachCell((cell, col) => { if (typeof cell.value === 'string') { seen.add(cell.value); if (headerRow[cell.value] == null) headerRow[cell.value] = col } }))
-        for (const col of ['Category', 'pass·HIGH', 'pass·ALL', 'all·ALL', '# genes', 'cat size', '% all genes', 'Fold (pass·ALL)', 'ALL p/q', 'k (cat DNMs)', 'n (pass DNMs)', 'P(X≥k)', 'Genes']) {
+        const TIERS = ['HIGH', 'HIGH+MOD', 'HIGH+MOD+LOW', 'ALL']
+        for (const col of ['Category', 'pass·HIGH', 'pass·ALL', 'all·ALL', '# genes', 'cat size', '% all genes', 'Fold (pass·ALL)', 'ALL p/q', 'p (prev)', 'Genes']) {
             expect(seen.has(col), `Gene Analysis header "${col}"`).to.equal(true)
         }
-        // The live BINOMDIST derivation formula must reproduce the engine's binomial p.
-        // Find a category row whose derivation is numeric (a dimension with a background).
-        const kCol = headerRow['k (cat DNMs)'], nCol = headerRow['n (pass DNMs)'], pCol = headerRow['p (prev)'], PCol = headerRow['P(X≥k)']
-        let checked = 0
-        ws.eachRow(row => {
-            const k = row.getCell(kCol).value, n = row.getCell(nCol).value, p = row.getCell(pCol).value, P = row.getCell(PCol).value
-            if (typeof k === 'number' && typeof n === 'number' && typeof p === 'number' && P && typeof P === 'object') {
-                expect(P.formula, 'live formula').to.match(/^1-BINOMDIST\(.*TRUE\)$/)
-                expect(P.result, `P(X≥${k}) reproduces binomUpperTail`).to.be.closeTo(binomUpperTail(k, n, p), 1e-9)
-                checked++
+        // EVERY tier must carry its own derivation block — the whole point of the
+        // per-tier rework (previously only pass·ALL was reproducible).
+        for (const t of TIERS) {
+            for (const col of [`k DNMs (${t})`, `n pass DNMs (${t})`, `Expected n·p (${t})`, `P(X≥k) (${t})`]) {
+                expect(seen.has(col), `Gene Analysis derivation header "${col}"`).to.equal(true)
             }
-        })
-        // (If the tiny fixture yields no background-bearing convergence rows, this is a no-op.)
+        }
+        // The live BINOMDIST derivation formula must reproduce the engine's binomial p —
+        // for each tier, against THAT tier's own n (not the ALL total).
+        const pCol = headerRow['p (prev)']
+        let checked = 0
+        for (const t of TIERS) {
+            const kCol = headerRow[`k DNMs (${t})`], nCol = headerRow[`n pass DNMs (${t})`], PCol = headerRow[`P(X≥k) (${t})`]
+            expect(kCol, `column for k DNMs (${t})`).to.be.a('number')
+            expect(nCol, `column for n pass DNMs (${t})`).to.be.a('number')
+            expect(PCol, `column for P(X≥k) (${t})`).to.be.a('number')
+            ws.eachRow(row => {
+                const k = row.getCell(kCol).value, n = row.getCell(nCol).value, p = row.getCell(pCol).value, P = row.getCell(PCol).value
+                if (typeof k === 'number' && typeof n === 'number' && typeof p === 'number' && P && typeof P === 'object') {
+                    expect(P.formula, `live formula (${t})`).to.match(/^1-BINOMDIST\(.*TRUE\)$/)
+                    expect(P.result, `P(X≥${k}) reproduces binomUpperTail (${t})`).to.be.closeTo(binomUpperTail(k, n, p), 1e-9)
+                    checked++
+                }
+            })
+        }
+        // (If the tiny fixture yields no background-bearing convergence rows, the loop is a
+        // no-op — the header assertions above still pin the per-tier block's existence.)
         expect(checked, 'derivation rows checked').to.be.at.least(0)
     })
 })

@@ -3686,7 +3686,8 @@ describe('Gene Summary impact counts and annotations', function () {
             if (first === 'Category') r.eachCell(c => hdr.push(String(c.value)))
             if (first === 'T') dataRow = r
         })
-        expect(hdr).to.include.members(['Category', 'pass·ALL', 'all·ALL', 'Fold (pass·ALL)', 'ALL p/q', 'k (probands)', 'n (at-risk)', 'Expected Σpᵢ', 'P(X≥k)'])
+        expect(hdr).to.include.members(['Category', 'pass·ALL', 'all·ALL', 'Fold (pass·ALL)', 'ALL p/q',
+            'p (prev)', 'k probands (ALL)', 'n at-risk (ALL)', 'Expected Σpᵢ (ALL)', 'P(X≥k) approx (ALL)'])
         expect(dataRow, 'data row for T').to.not.be.null
         // Pass-tier cell = "count (% of cohort) ✓" — 2 probands, 10% of 20, q=0.01<0.05.
         const passAllCol = hdr.indexOf('pass·ALL') + 1
@@ -3696,14 +3697,123 @@ describe('Gene Summary impact counts and annotations', function () {
         // Exact stats moved off to the right: p / q for the ALL tier.
         const pqCol = hdr.indexOf('ALL p/q') + 1
         expect(String(dataRow.getCell(pqCol).value)).to.equal('0.010 / 0.010')
-        // Derivation columns: exact inputs + a LIVE Excel formula.
-        expect(dataRow.getCell(hdr.indexOf('k (probands)') + 1).value).to.equal(2)         // probands hitting
-        expect(dataRow.getCell(hdr.indexOf('n (at-risk)') + 1).value).to.equal(2)          // probands with a pass DNM
-        expect(dataRow.getCell(hdr.indexOf('Expected Σpᵢ') + 1).value).to.be.closeTo(0.2, 1e-9)   // 0.1 + 0.1
-        const pFormula = dataRow.getCell(hdr.indexOf('P(X≥k)') + 1).value
+        // Derivation columns: exact inputs + a LIVE Excel formula, for the ALL tier.
+        expect(dataRow.getCell(hdr.indexOf('p (prev)') + 1).value).to.be.closeTo(0.1, 1e-9)
+        expect(dataRow.getCell(hdr.indexOf('k probands (ALL)') + 1).value).to.equal(2)     // probands hitting
+        expect(dataRow.getCell(hdr.indexOf('n at-risk (ALL)') + 1).value).to.equal(2)      // probands with a pass DNM
+        // No derivRefs passed here ⇒ Expected falls back to the plain number (0.1 + 0.1).
+        expect(dataRow.getCell(hdr.indexOf('Expected Σpᵢ (ALL)') + 1).value).to.be.closeTo(0.2, 1e-9)
+        const pFormula = dataRow.getCell(hdr.indexOf('P(X≥k) approx (ALL)') + 1).value
         expect(pFormula).to.be.an('object')                          // exceljs formula cell
         expect(pFormula.formula).to.match(/^1-BINOMDIST\(.*TRUE\)$/)  // live, reproducible
         expect(pFormula.result).to.be.closeTo(0.01, 1e-9)            // binom(2,2,0.1)=0.1²
+
+        // EVERY tier is derivable, not just ALL — the point of the per-tier block.
+        for (const t of ['HIGH', 'HIGH+MOD', 'HIGH+MOD+LOW', 'ALL']) {
+            for (const lbl of [`k probands (${t})`, `n at-risk (${t})`, `Expected Σpᵢ (${t})`, `P(X≥k) approx (${t})`]) {
+                expect(hdr, `missing derivation column ${lbl}`).to.include(lbl)
+            }
+        }
+        // Header labels must be UNIQUE — the sheet is read by column name.
+        expect(new Set(hdr).size, 'duplicate header labels').to.equal(hdr.length)
+    })
+
+    it('the derivation sheet publishes a burden histogram that reproduces the exact sample p-value', function () {
+        const {computeConvergence, poissonBinomUpperTail} = require('../gene-analysis')
+        const {buildGaDerivationSheet, buildGeneAnalysisTab, GA_SAMPLE_TRACK} = require('../server')
+        // A1 column letter (for asserting formula addresses).
+        const colLetterFor = (n) => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26) } return s }
+        // P1 carries 2 pass DNMs, P2 carries 1 → a non-uniform burden, which is exactly
+        // the case a plain binomial cannot represent and the histogram must capture.
+        // G2 is MODIFIER so it counts ONLY in the ALL tier — that makes HIGH and ALL
+        // numerically DIFFERENT, without which a per-tier bug (e.g. every tier reading the
+        // HIGH columns) would pass unnoticed.
+        const conv = computeConvergence(
+            [{gene: 'G1', s: 'P1', impact: 'HIGH', curation_status: 'pass'},
+             {gene: 'G2', s: 'P1', impact: 'MODIFIER', curation_status: 'pass'},
+             {gene: 'G3', s: 'P2', impact: 'HIGH', curation_status: 'pass'}],
+            {geneCol: 'gene', impactCol: 'impact', sampleCol: 's', minCount: 2,
+                geneTerms: new Map([['G1', {fam: ['T']}], ['G2', {fam: ['T']}], ['G3', {fam: ['T']}]]),
+                dimensions: [{id: 'fam', label: 'Fam'}],
+                sourceUniverse: {fam: {size: 100, counts: {T: 10}}}, totalProbands: 20})
+
+        // The engine must expose the histogram (it is the sample test's hidden input),
+        // and it must genuinely DIFFER per tier.
+        expect(conv.burdenHistByTier, 'burdenHistByTier returned').to.be.an('object')
+        expect(conv.burdenHistByTier.ALL).to.deep.equal({1: 1, 2: 1})   // P2 has 1, P1 has 2 (incl. MODIFIER)
+        expect(conv.burdenHistByTier.HIGH).to.deep.equal({1: 2})        // MODIFIER excluded ⇒ P1:1, P2:1
+        expect(conv.nDnmsByTier.HIGH).to.equal(2)
+        expect(conv.nDnmsByTier.ALL).to.equal(3)
+
+        const wb = new ExcelJS.Workbook()
+        const styles = {headerFill: {}, headerFont: {}, borderThin: {}}
+        const passCells = conv.cells.filter(c => c.statusKey === 'pass')
+        const refs = buildGaDerivationSheet(wb, conv, styles, passCells)
+        expect(refs, 'derivation refs').to.not.be.null
+        const dws = wb.getWorksheet('Gene Analysis (derivation)')
+        expect(dws, 'derivation sheet created').to.not.be.undefined
+
+        // The published histogram rows must re-sum to the reported denominators.
+        const dCol = refs.dCol, aCol = refs.tierCol.ALL
+        let probands = 0, dnms = 0
+        for (let r = refs.firstRow; r <= refs.lastRow; r++) {
+            const d = dws.getRow(r).getCell(dCol).value
+            const n = dws.getRow(r).getCell(aCol).value
+            probands += n; dnms += d * n
+        }
+        expect(probands, 'histogram sums to at-risk probands').to.equal(conv.nProbandsByTier.ALL)
+        expect(dnms, 'Σ dᵢ·n_d sums to pass DNMs').to.equal(conv.nDnmsByTier.ALL)
+
+        // THE CLAIM: histogram + p reproduces the reported exact p-value.
+        const g = conv.sections[0].groups[0]
+        const p = g.prevalence
+        const burden = []
+        for (let r = refs.firstRow; r <= refs.lastRow; r++) {
+            const d = dws.getRow(r).getCell(dCol).value
+            for (let i = 0; i < dws.getRow(r).getCell(aCol).value; i++) burden.push(d)
+        }
+        const reproduced = poissonBinomUpperTail(g.cells['pass|ALL'].individuals, burden.map(d => 1 - Math.pow(1 - p, d)))
+        expect(reproduced, 'reproduced == reported pSample').to.be.closeTo(g.cells['pass|ALL'].pSample, 1e-12)
+
+        // And Expected Σpᵢ becomes a live SUMPRODUCT over those very cells.
+        buildGeneAnalysisTab(wb, conv, styles, GA_SAMPLE_TRACK, refs)
+        const ws = wb.getWorksheet('Gene Analysis (samples)')
+        const hdr = []
+        let dataRow = null
+        ws.eachRow(r => { const f = r.getCell(1).value; if (f === 'Category') r.eachCell(c => hdr.push(String(c.value))); if (f === 'T') dataRow = r })
+        const eCell = dataRow.getCell(hdr.indexOf('Expected Σpᵢ (ALL)') + 1).value
+        expect(eCell, 'Expected is a live formula').to.be.an('object')
+        expect(eCell.formula).to.contain('SUMPRODUCT')
+        expect(eCell.formula).to.contain("'Gene Analysis (derivation)'!")
+        expect(eCell.result).to.be.closeTo(g.cells['pass|ALL'].expSample, 1e-12)
+        // Σ_d n_d·[1-(1-p)^d] == the engine's expectation.
+        const manual = burden.reduce((s, d) => s + (1 - Math.pow(1 - p, d)), 0)
+        expect(eCell.result).to.be.closeTo(manual, 1e-12)
+
+        // Each tier must be derived from ITS OWN inputs. HIGH excludes the MODIFIER DNM,
+        // so its Expected/n genuinely differ from ALL — if every tier read one tier's
+        // columns (or one tier's histogram), these would collide.
+        const cellVal = (lbl) => dataRow.getCell(hdr.indexOf(lbl) + 1).value
+        expect(cellVal('n at-risk (HIGH)')).to.equal(conv.nProbandsByTier.HIGH)
+        const eHigh = cellVal('Expected Σpᵢ (HIGH)')
+        expect(eHigh.result).to.be.closeTo(g.cells['pass|HIGH'].expSample, 1e-12)
+        expect(eHigh.result, 'HIGH Expected must differ from ALL').to.not.be.closeTo(eCell.result, 1e-9)
+        // …and each tier's SUMPRODUCT must read its OWN histogram column.
+        expect(eHigh.formula).to.contain(`$${colLetterFor(refs.tierCol.HIGH)}$${refs.firstRow}`)
+        expect(eCell.formula).to.contain(`$${colLetterFor(refs.tierCol.ALL)}$${refs.firstRow}`)
+        expect(eHigh.formula).to.not.equal(eCell.formula)
+
+        // The live P(X≥k) formula must reference THAT tier's own k / n cells — a bug that
+        // pointed every tier at HIGH's columns would still produce a correct cached
+        // .result, so assert the addresses, not just the numbers.
+        for (const t of ['HIGH', 'HIGH+MOD', 'HIGH+MOD+LOW', 'ALL']) {
+            const P = cellVal(`P(X≥k) approx (${t})`)
+            if (!P || typeof P !== 'object') continue
+            const kL = colLetterFor(hdr.indexOf(`k probands (${t})`) + 1)
+            const nL = colLetterFor(hdr.indexOf(`n at-risk (${t})`) + 1)
+            expect(P.formula, `P(X≥k) (${t}) must use its own k/n columns`)
+                .to.contain(`${kL}${dataRow.number}-1,${nL}${dataRow.number}`)
+        }
     })
 
     it('the DNM Rate tab builds with a live POISSON formula reproducing the Poisson engine (real μ)', function () {

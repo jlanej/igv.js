@@ -295,11 +295,19 @@ function computeConvergence(variants, opts) {
     // Pass denominators + per-tier burden arrays / DNM totals for the tests.
     const nPassProbands = passBurdenByTier['ALL'].size   // probands with ≥1 pass DNM
     const nPassDnms = cellVars[REF_CELL]                 // total pass DNMs (= pass|ALL)
-    const burdenByTier = {}, nDnmsByTier = {}, nProbandsByTier = {}
+    const burdenByTier = {}, nDnmsByTier = {}, nProbandsByTier = {}, burdenHistByTier = {}
     for (const tk of passTierKeys) {
         burdenByTier[tk] = [...passBurdenByTier[tk].values()]
         nDnmsByTier[tk] = cellVars['pass|' + tk]         // binomial n (DNM test) for this tier
         nProbandsByTier[tk] = passBurdenByTier[tk].size  // at-risk probands (sample test) for this tier
+        // Burden HISTOGRAM {d: # probands with exactly d pass DNMs at this tier}.
+        // Each proband's null hit-probability pᵢ = 1-(1-prev)^dᵢ depends ONLY on dᵢ, so
+        // this histogram + a category's prevalence fully determine that category's
+        // Poisson-binomial — i.e. it is the complete, compact input needed to reproduce
+        // every sample-test p-value externally (Excel has no Poisson-binomial function).
+        const h = {}
+        for (const d of burdenByTier[tk]) h[d] = (h[d] || 0) + 1
+        burdenHistByTier[tk] = h
     }
 
     const sections = dims.map(d => {
@@ -338,18 +346,24 @@ function computeConvergence(variants, opts) {
                 // actually-observed category×tier cells).
                 if (cc.variants > 0) cc.pDnm = binomUpperTail(cc.variants, nDnmsByTier[tk], prevalence)
                 if (sampleCol && cc.individuals > 0) cc.pSample = poissonBinomUpperTail(cc.individuals, burdenByTier[tk].map(dd => 1 - Math.pow(1 - prevalence, dd)))
+                // Mean of this tier's Poisson-binomial null: Σᵢ pᵢ = Σᵢ [1-(1-prev)^dᵢ],
+                // i.e. the expected # probands hitting the category by chance. Reported
+                // per tier so every tier's test is reproducible from printed inputs
+                // (it is defined regardless of the observed count, so no >0 gate).
+                if (sampleCol && prevalence > 0) {
+                    cc.expSample = burdenByTier[tk].reduce((s, dd) => s + (1 - Math.pow(1 - prevalence, dd)), 0)
+                }
+                // Binomial mean for the DNM test at this tier (n·p) — same rationale.
+                if (prevalence > 0) cc.expDnm = nDnmsByTier[tk] * prevalence
             }
             // Headline folds at pass|ALL (over the true cohort / total pass DNMs).
             const refCC = cellCounts[REF_CELL]
             const foldSampleAll = (sampleCol && prevalence > 0 && totalProbands > 0) ? (refCC.individuals / totalProbands) / prevalence : null
             const foldDnmAll = (prevalence > 0 && nPassDnms > 0) ? (refCC.variants / nPassDnms) / prevalence : null
-            // SAMPLE expected at pass|ALL = Σ pᵢ over at-risk probands (pᵢ = 1-(1-prev)^dᵢ).
-            // This is the mean of the Poisson-binomial null — the "expected # probands
-            // hitting by chance" that the sheet shows next to the observed count.
-            const expSampleAll = (sampleCol && prevalence != null && prevalence > 0)
-                ? burdenByTier['ALL'].reduce((s, dd) => s + (1 - Math.pow(1 - prevalence, dd)), 0) : null
+            // (The pass|ALL sample expectation lives on cells['pass|ALL'].expSample, set
+            // per tier above — no separate ALL-only copy to drift out of sync.)
             groups.push({term, refIndividuals, refGenes, refVariants, catSize, prevalence,
-                cells: cellCounts, genes: [...ref.genes].sort(), foldSampleAll, foldDnmAll, expSampleAll})
+                cells: cellCounts, genes: [...ref.genes].sort(), foldSampleAll, foldDnmAll})
         }
         // Rank by pass|ALL recurrence, then genes, then pass|ALL sample p, then name.
         const psp = g => (g.cells[REF_CELL].pSample == null ? 1 : g.cells[REF_CELL].pSample)
@@ -361,7 +375,13 @@ function computeConvergence(variants, opts) {
         for (const g of groups) for (const tk of passTierKeys) { const cc = g.cells['pass|' + tk]; sTests.push(cc); dTests.push(cc) }
         benjaminiHochberg(sTests.map(c => c.pSample)).forEach((q, i) => { sTests[i].qSample = q })
         benjaminiHochberg(dTests.map(c => c.pDnm)).forEach((q, i) => { dTests[i].qDnm = q })
-        return {id: d.id, label: d.label, groups, sourceSize: u ? u.size : null}
+        // BH family size m per track = the # of tests that actually carried a p-value
+        // (a cell only gets one when the dimension has a background AND the count is >0).
+        // Exported so the sheet can print m — q is a family-wide quantity, so without m a
+        // reader cannot audit it from a single row. Mirrors dnm-enrichment.js's familySizes.
+        const mSample = sTests.filter(c => c.pSample != null).length
+        const mDnm = dTests.filter(c => c.pDnm != null).length
+        return {id: d.id, label: d.label, groups, sourceSize: u ? u.size : null, mSample, mDnm}
     })
 
     const cellSummary = cells.map(c => ({
@@ -373,8 +393,10 @@ function computeConvergence(variants, opts) {
     // summary uses pass probands / pass DNMs. Per-tier n's (nDnmsByTier = binomial n
     // for the DNM test; nProbandsByTier = at-risk n for the sample test) are exported
     // so the sheet can show the exact test inputs / a reproducible Excel formula.
+    // burdenHistByTier completes that: it is the sample test's remaining hidden input,
+    // so publishing it makes every reported sample p-value externally reproducible.
     return {cells: cellSummary, sections, hasSamples: !!sampleCol,
-        totalProbands, nPassProbands, nPassDnms, nDnmsByTier, nProbandsByTier}
+        totalProbands, nPassProbands, nPassDnms, nDnmsByTier, nProbandsByTier, burdenHistByTier}
 }
 
 /**
