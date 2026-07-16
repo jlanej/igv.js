@@ -211,6 +211,70 @@ describe('litmus: per-dimension universes, with the trials gated to match', func
     })
 })
 
+describe('litmus: the length-bias diagnostic is reported, never applied', function () {
+    // Test A's null counts GENES on purpose — that is the over-representation question, and
+    // the mutation-RATE question belongs to Test B. But variants arrive proportional to a
+    // gene's mutational TARGET, so a category of large genes collects more by chance than its
+    // gene share implies. The diagnostic MEASURES that per category; these tests pin that it
+    // measures the right thing AND that it cannot leak into any test statistic.
+    const dnmRates = require('../dnm-rates')
+    const W = new Map()
+    for (const [g, r] of dnmRates.getRates()) {
+        const w = (r.pNonSplice || 0) + (r.pMis || 0) + (r.pSyn || 0)
+        if (w > 0) W.set(g, w)
+    }
+    const SRC_W = sourceUniverseStats({gnomad: gnB, clinvar: cvB, gencc: gcB}, gsLibs, W)
+
+    it('weights change nothing about the universe the test uses', function () {
+        for (const d of Object.keys(SRC)) {
+            expect(SRC_W[d].size, `${d} size`).to.equal(SRC[d].size)
+            expect(SRC_W[d].counts, `${d} counts`).to.deep.equal(SRC[d].counts)
+        }
+        expect(SRC.constraint.wCounts, 'no weights ⇒ no diagnostic').to.equal(undefined)
+        expect(SRC_W.constraint.wCounts, 'weights ⇒ diagnostic').to.be.an('object')
+    })
+
+    it('measures the real length bias: constraint ~1.4-1.5x, GenCC AR ~1.0x', function () {
+        const genes = ['TSC1', 'TSC2', 'MTOR', 'SCN1A', 'BRCA1', 'PTEN']
+        const geneTerms = new Map()
+        for (const g of genes) geneTerms.set(g, geneTermsFor(g, {gnomad: gnB.get(g), clinvar: cvB.get(g), gencc: gcB.get(g)}, null, gsLibs))
+        const vs = genes.map((g, i) => ({gene: g, impact: 'HIGH', curation_status: 'pass', sample: 'P' + (i % 3)}))
+        const dims = [{id: 'constraint', label: 'C'}, {id: 'gencc', label: 'G'}]
+        const conv = computeConvergence(vs, {geneCol: 'gene', impactCol: 'impact', sampleCol: 'sample',
+            geneTerms, dimensions: dims, sourceUniverse: SRC_W, totalProbands: 3, minCount: 1})
+        const find = (t) => { for (const s of conv.sections) for (const g of s.groups) if (g.term === t) return g; return null }
+        // LOEUF cannot be estimated confidently on a short gene, so the constrained set is
+        // ~1.68x larger per gene — a real, measurable bias this column exists to expose.
+        expect(find('LOEUF < 0.6 (LoF-constrained)').lengthBaseline, 'constraint is length-biased').to.be.within(1.4, 1.6)
+        // …while GenCC AR is genuinely length-neutral and needs no discount.
+        const ar = find('Autosomal recessive')
+        if (ar) expect(ar.lengthBaseline, 'GenCC AR is length-neutral').to.be.within(0.9, 1.1)
+    })
+
+    it('the diagnostic CANNOT leak into prevalence, p, q, fold or the ranking', function () {
+        // If this ever fails, the test has silently stopped being count-based — which is a
+        // design decision, not an implementation detail, and must not happen by accident.
+        const genes = ['TSC1', 'TSC2', 'MTOR', 'SCN1A', 'BRCA1', 'PTEN']
+        const geneTerms = new Map()
+        for (const g of genes) geneTerms.set(g, geneTermsFor(g, {gnomad: gnB.get(g), clinvar: cvB.get(g), gencc: gcB.get(g)}, null, gsLibs))
+        const vs = genes.map((g, i) => ({gene: g, impact: 'HIGH', curation_status: 'pass', sample: 'P' + (i % 3)}))
+        const dims = [{id: 'constraint', label: 'C'}, {id: 'gencc', label: 'G'}]
+        const mk = (u) => computeConvergence(vs, {geneCol: 'gene', impactCol: 'impact', sampleCol: 'sample',
+            geneTerms, dimensions: dims, sourceUniverse: u, totalProbands: 3, minCount: 1})
+        const withW = mk(SRC_W), without = mk(SRC)
+        for (let i = 0; i < withW.sections.length; i++) {
+            const a = withW.sections[i], b = without.sections[i]
+            expect(a.groups.map(g => g.term), 'sort order unchanged').to.deep.equal(b.groups.map(g => g.term))
+            for (let j = 0; j < a.groups.length; j++) {
+                expect(a.groups[j].prevalence).to.equal(b.groups[j].prevalence)
+                expect(a.groups[j].foldSampleAll).to.equal(b.groups[j].foldSampleAll)
+                expect(a.groups[j].cells['pass|ALL'].pSample).to.equal(b.groups[j].cells['pass|ALL'].pSample)
+                expect(a.groups[j].cells['pass|ALL'].qSample).to.equal(b.groups[j].cells['pass|ALL'].qSample)
+            }
+        }
+    })
+})
+
 describe('litmus: geneTermsFor and sourceUniverseStats agree (the key invariant)', function () {
     // If the per-gene term derivation and the source-universe counting ever
     // drift, the prevalence numerator (cat size) stops matching the observed

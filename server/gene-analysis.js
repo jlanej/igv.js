@@ -242,13 +242,34 @@ function benjaminiHochberg(pvals, mTotal) {
  * apart. A dimension with no source is absent: no background ⇒ no test ⇒ excluded
  * from the BH family entirely.
  *
+ * GENE WEIGHTS (optional, DIAGNOSTIC ONLY). The null above counts GENES: it asks whether
+ * the hit genes concentrate in a category more than a random set of genes would. That is the
+ * standard over-representation question and it is deliberate — the mutation-RATE question is
+ * Test B's job, and there is no reason for both tests to answer the same thing.
+ *
+ * But a count null has a known property that the sheet must not hide: variants arrive in
+ * proportion to a gene's mutational TARGET, not one-per-gene, so a category of large genes
+ * collects more variants by chance than its gene share implies. Passing `geneWeights` lets
+ * this function MEASURE that per category and report it, WITHOUT touching any p-value:
+ *
+ *     lengthBaseline = (Σw over K ÷ Σw over U) ÷ (|K| ÷ |U|)
+ *
+ * i.e. the fold a category would show under a rate-aware null with zero biology. Measured on
+ * the shipped bundles: GenCC Autosomal recessive 1.01, Unknown 0.96 (clean); ClinVar P/LP
+ * 1.27; pLI≥0.9 1.41; LOEUF<0.6 1.48 — because LOEUF cannot be estimated confidently on a
+ * short gene, so the constrained set is 1.68× larger per gene on average. A reader seeing
+ * "fold 3.0× · baseline 1.48×" knows ~2× is real; without it they would read 3.0× as 3.0×.
+ *
  * @param {{gnomad?:Map, clinvar?:Map, gencc?:Map}} bundles  records keyed UPPER
  * @param {Object<string,Map>} [geneSetLibs]  {dimId: Map<UPPER,[terms]>}
- * @returns {Object<string,{size:number, counts:Object, genes:Set<string>}>} by dim id
+ * @param {Map<string,number>} [geneWeights]  gene -> mutational target. DIAGNOSTIC ONLY:
+ *        it never enters prevalence, p, q or the ranking. Omit it and the column is absent.
+ * @returns {Object<string,{size:number, counts:Object, genes:Set<string>, wCounts?:Object, wSize?:number}>}
  */
-function sourceUniverseStats(bundles, geneSetLibs) {
+function sourceUniverseStats(bundles, geneSetLibs, geneWeights) {
     const out = {}
     const b = bundles || {}
+    const W = (geneWeights && geneWeights.size) ? geneWeights : null
     const providerFor = (g) => ({
         gnomad: b.gnomad ? b.gnomad.get(g) : null,
         clinvar: b.clinvar ? b.clinvar.get(g) : null,
@@ -259,12 +280,24 @@ function sourceUniverseStats(bundles, geneSetLibs) {
     // membership rule is defined exactly once, in one function.
     const walk = (dimId, geneKeys) => {
         const genes = new Set(), counts = {}
+        // Weight sums ride along in the SAME pass, over the SAME genes, so the baseline
+        // describes exactly the universe the count null uses — not a different gene set.
+        const wCounts = W ? {} : null
+        let wSize = 0
         for (const g of geneKeys) {
             genes.add(g)
+            const w = W ? (W.get(g) || 0) : 0
+            wSize += w
             const terms = geneTermsFor(g, providerFor(g), null, geneSetLibs)[dimId] || []
-            for (const t of terms) counts[t] = (counts[t] || 0) + 1
+            for (const t of terms) {
+                counts[t] = (counts[t] || 0) + 1
+                if (W) wCounts[t] = (wCounts[t] || 0) + w
+            }
         }
-        if (genes.size) out[dimId] = {size: genes.size, counts, genes}
+        if (genes.size) {
+            out[dimId] = {size: genes.size, counts, genes}
+            if (W && wSize > 0) { out[dimId].wCounts = wCounts; out[dimId].wSize = wSize }
+        }
     }
     if (b.gnomad && b.gnomad.size) walk('constraint', b.gnomad.keys())
     if (b.clinvar && b.clinvar.size) walk('clinvar', b.clinvar.keys())
@@ -432,6 +465,15 @@ function computeConvergence(variants, opts) {
                 catSize = u.counts[term]
                 prevalence = catSize / u.size
             }
+            // lengthBaseline: the fold this category would show under a RATE-AWARE null with
+            // zero biology — i.e. how much of any observed fold is just gene size. Purely a
+            // DIAGNOSTIC: it is reported and never used, so the test stays count-based by
+            // design (see sourceUniverseStats). ~1.0 means the category is length-neutral.
+            let lengthBaseline = null
+            if (u && u.wCounts && u.wSize > 0 && prevalence > 0) {
+                const wShare = (u.wCounts[term] || 0) / u.wSize
+                if (wShare > 0) lengthBaseline = wShare / prevalence
+            }
             // Enrichment PER PASS TIER, attached to each pass cell. SAMPLE =
             // Poisson-binomial with that tier's per-proband burden; DNM = binomial
             // over that tier's pass DNMs. Both are THIS DIMENSION's gated trials, so
@@ -486,6 +528,7 @@ function computeConvergence(variants, opts) {
             // (The pass|ALL sample expectation lives on cells['pass|ALL'].expSample, set
             // per tier above — no separate ALL-only copy to drift out of sync.)
             allGroups.push({term, refIndividuals, refGenes, refVariants, catSize, prevalence,
+                lengthBaseline,
                 cells: cellCounts, genes: [...ref.genes].sort(), foldSampleAll, foldDnmAll})
         }
         // --- Benjamini-Hochberg FDR, PER DIMENSION -------------------------------
