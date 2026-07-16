@@ -2044,8 +2044,11 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
                 tr.discovery ? (row.q == null ? '—' : row.q) : 'cal',
                 con.loeuf != null ? con.loeuf : '—',
                 con.pli != null ? con.pli : '—',
+                // Use the provider's isConstrained — it declares itself the SINGLE SOURCE OF
+                // TRUTH for this flag, and re-implementing the rule here is precisely the drift
+                // that lets one tab call a gene constrained while another does not.
                 con.loeuf == null && con.pli == null ? '—'
-                    : ((con.loeuf != null && con.loeuf < 0.35) || (con.pli != null && con.pli >= 0.9) ? 'Yes' : 'No')]
+                    : (gnomadProvider.isConstrained(con) ? 'Yes' : 'No')]
             r++
             const xr = ws.addRow(vals)
             xr.eachCell(c => { c.border = borderThin; if (idx % 2 === 1) c.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}} })
