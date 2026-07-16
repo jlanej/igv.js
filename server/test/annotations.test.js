@@ -410,9 +410,15 @@ describe('gene-analysis convergence (independent signals)', function () {
             expect(grp.cells[ck].qSample, ck).to.be.closeTo(0.3 * 0.3, 1e-9)   // 4 identical → q=p
             expect(grp.cells[ck].qDnm, ck).to.be.closeTo(Math.pow(0.3, 2), 1e-9)
         }
-        // Headline folds at pass|ALL (over the cohort / total pass DNMs).
-        expect(grp.foldSampleAll).to.be.closeTo((2 / 20) / 0.3, 1e-9)
-        expect(grp.foldDnmAll).to.be.closeTo((2 / 2) / 0.3, 1e-9)
+        // Headline folds at pass|ALL = OBSERVED ÷ EXPECTED-under-the-null, so 1× is chance.
+        // Sample expected = the Poisson-binomial mean Σpᵢ: burden [1,1], p=0.3 ⇒ 0.6.
+        expect(grp.cells['pass|ALL'].expSample).to.be.closeTo(0.6, 1e-9)
+        expect(grp.foldSampleAll).to.be.closeTo(2 / 0.6, 1e-9)          // 3.33×
+        expect(grp.foldDnmAll).to.be.closeTo((2 / 2) / 0.3, 1e-9)       // 3.33×
+        // With a UNIFORM burden of 1 the two nulls coincide, so the tabs must agree. The old
+        // (k/totalProbands)/prevalence form gave 0.33× here — reading DEPLETED on the same data
+        // the DNMs tab called 3.33× enriched, and that this tab's own q calls significant.
+        expect(grp.foldSampleAll).to.be.closeTo(grp.foldDnmAll, 1e-9)
     })
 
     it('a dimension with no source universe gets null prevalence/p on every cell', function () {
@@ -487,9 +493,12 @@ describe('gene-analysis convergence (independent signals)', function () {
         // sample family is numerically identical here (every proband burden = 1)
         expect(T1.cells['pass|HIGH'].qSample).to.be.closeTo(0.08, 1e-5)
         expect(T1.cells['pass|ALL'].qSample).to.be.closeTo(0.1046, 1e-5)
-        // headline folds
+        // headline folds = observed ÷ expected-under-the-null
         expect(T1.foldDnmAll).to.be.closeTo((2 / 4) / 0.1, 1e-9)             // 5×
-        expect(T1.foldSampleAll).to.be.closeTo((2 / 50) / 0.1, 1e-9)         // 0.4×
+        // sample: Σpᵢ over 4 probands at burden 1, p=0.1 ⇒ 0.4; 2/0.4 = 5×. (The old form gave
+        // 0.4× — it scaled with the cohort size (50) instead of the at-risk expectation.)
+        expect(T1.cells['pass|ALL'].expSample).to.be.closeTo(0.4, 1e-9)
+        expect(T1.foldSampleAll).to.be.closeTo(2 / 0.4, 1e-9)                // 5×
         expect(T2.foldDnmAll).to.be.closeTo((2 / 4) / 0.2, 1e-9)             // 2.5×
     })
 

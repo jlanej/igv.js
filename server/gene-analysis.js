@@ -372,9 +372,21 @@ function computeConvergence(variants, opts) {
                 // Binomial mean for the DNM test at this tier (n·p) — same rationale.
                 if (prevalence > 0) cc.expDnm = nDnmsByTier[tk] * prevalence
             }
-            // Headline folds at pass|ALL (over the true cohort / total pass DNMs).
+            // Headline folds at pass|ALL = OBSERVED ÷ EXPECTED-UNDER-THE-NULL.
             const refCC = cellCounts[REF_CELL]
-            const foldSampleAll = (sampleCol && prevalence > 0 && totalProbands > 0) ? (refCC.individuals / totalProbands) / prevalence : null
+            // SAMPLE fold: divide by the Poisson-binomial mean Σpᵢ — the same expectation the
+            // sample p-value uses. It must NOT be (k/totalProbands)/prevalence: that divides a
+            // PER-PROBAND hit rate by a PER-DRAW prevalence, so under the null its expectation is
+            // the cohort's mean variant burden (E[k] ≈ p·D ⇒ E[fold] ≈ D/totalProbands), not 1.
+            // Simulated on a real bundle with ZERO enrichment, that form medians 2.9× at burden 3
+            // and 8.2× at burden 10 — firing the ≥5× bold-green cue on pure noise while the
+            // p-value on the same row correctly reads null. Dividing by expSample re-uses the
+            // burden correction the Poisson-binomial exists to apply, medians 1.0 under the null,
+            // and stays reproducible: expSample is published as a live SUMPRODUCT over the
+            // burden histogram on the derivation sheet.
+            const expAll = refCC.expSample
+            const foldSampleAll = (sampleCol && expAll > 0) ? refCC.individuals / expAll : null
+            // DNM fold: (k/n)/p ≡ k/(n·p) — already observed ÷ expected, correctly centred at 1.
             const foldDnmAll = (prevalence > 0 && nPassDnms > 0) ? (refCC.variants / nPassDnms) / prevalence : null
             // (The pass|ALL sample expectation lives on cells['pass|ALL'].expSample, set
             // per tier above — no separate ALL-only copy to drift out of sync.)

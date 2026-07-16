@@ -37,7 +37,7 @@ OpenDemand desktop access).
   category × **cumulative impact-tier** matrix (HIGH ⊆ HIGH+MOD ⊆ HIGH+MOD+LOW ⊆ ALL)
   of **`count (%)`** (with a green ✓ for FDR q<0.05, and the exact p/q in columns to
   the right) against the category's **genome-wide prevalence** ("% of all genes"), plus
-  a headline fold, so a "1% of genes but 50% of samples" contrast is visible at a
+  a headline fold (observed ÷ expected, so 1× = chance), making a genuine excess visible at a
   glance. The sample test is proband-burden-aware (a hypermutated proband can't fake
   it); an `all·ALL` column flags noisy (non-pass) pools
 - **Contamination metrics** – per-variant kraken2 species/contamination summary
@@ -523,7 +523,7 @@ The **Export XLSX** button generates a publication-ready workbook containing:
   tabs — the **(samples)** tab counts distinct probands (conservative headline), the
   **(DNMs)** tab counts pass DNMs — each a category × cumulative impact-tier matrix of
   `count (%)` (green ✓ for FDR q<0.05, exact p/q at right) plus a headline fold against
-  the category's **genome-wide prevalence** ("% all genes"), so a "1% of genes but 50% of samples" contrast is
+  the category's prevalence ("% all genes") plus a burden-corrected **Fold** (observed ÷ expected), so a genuine excess is
   visible at a glance. An `all·ALL` column flags noisy (non-pass) pools. The samples
   tab is omitted when the data has no sample column. See *Gene convergence* below.
 - **Sample Summary** sheet – per-sample variant counts by impact group and
@@ -758,14 +758,21 @@ terms across **two matching tabs**, both **IGV-pass only**:
   source* (`cat size` ÷ the source's gene count, shown per section) — the chance
   rate. Each source uses its **own** gene universe (sizes range ~4k–31k), so compare
   Fold **within** a dimension, not across dimensions. **`Fold (pass·ALL)`** is the
-  headline effect size: the observed pass·ALL rate ÷ that prevalence. On the samples
-  tab the rate is # pass·ALL probands ÷ the **true cohort** —
-  `max(distinct probands in the callset, Sample-QC trio count)`, so it never
-  undercounts below the observed probands (every attempted trio incl. those with 0
-  DNMs); on the DNMs tab it is # pass·ALL DNMs ÷ total pass DNMs. Bold-green when
-  ≥5× **and** backed by ≥2 units (a big fold on a single unit / tiny cohort is left
-  un-bolded). The striking case is a small `% all genes` next to a large fold —
-  "1% of genes but 50% of samples."
+  headline effect size: **observed ÷ expected-under-the-null**, so **1× = exactly
+  chance** on both tabs. On the **samples** tab that is # pass·ALL probands ÷
+  `Expected Σpᵢ (ALL)` — the Poisson-binomial mean, i.e. the *same* expectation the
+  tab's p-value uses, which credits each proband with its **own** variant burden. On
+  the **DNMs** tab it is # pass·ALL DNMs ÷ `Expected n·p (ALL)`. Bold-green when ≥5×
+  **and** backed by ≥2 units (a big fold on a single unit / tiny cohort is left
+  un-bolded).
+
+  > The samples fold is deliberately **not** `probands ÷ cohort ÷ "% all genes"`.
+  > That form divides a *per-proband* rate by a *per-draw* prevalence, so under the
+  > null its expectation is the cohort's **mean variant burden**, not 1 — simulated
+  > on a real bundle with zero enrichment it medians ~2.9× at 3 variants/proband and
+  > ~8.2× at 10, firing the ≥5× cue on pure noise while the p-value on the same row
+  > correctly reads null. Dividing by the Poisson-binomial mean re-uses the burden
+  > correction the test already makes, so the Fold and the q can no longer disagree.
 - **`all·ALL` quality flag** – the tab's unit hitting the category at *any* curation
   status. A large gap (all·ALL ≫ pass·ALL) means the pass signal came from a noisy,
   poor-quality pool — treat that row with suspicion.

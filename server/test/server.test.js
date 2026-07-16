@@ -3692,8 +3692,11 @@ describe('Gene Summary impact counts and annotations', function () {
         // Pass-tier cell = "count (% of cohort) ✓" — 2 probands, 10% of 20, q=0.01<0.05.
         const passAllCol = hdr.indexOf('pass·ALL') + 1
         expect(String(dataRow.getCell(passAllCol).value)).to.equal('2 (10%) ✓')
+        // Fold = observed ÷ expected-under-the-null. Σpᵢ = 0.2 (2 probands, burden 1, p=0.1)
+        // ⇒ 2/0.2 = 10×, consistent with this row's own q=0.010. The old form printed "1.0×"
+        // — i.e. "exactly chance" — next to a significant q, which is a contradiction.
         const foldCol = hdr.indexOf('Fold (pass·ALL)') + 1
-        expect(String(dataRow.getCell(foldCol).value)).to.equal('1.0×')       // (2/20)/0.1
+        expect(String(dataRow.getCell(foldCol).value)).to.equal('10×')
         // Exact stats moved off to the right: p / q for the ALL tier.
         const pqCol = hdr.indexOf('ALL p/q') + 1
         expect(String(dataRow.getCell(pqCol).value)).to.equal('0.010 / 0.010')

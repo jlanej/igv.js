@@ -136,9 +136,14 @@ describe('litmus: proportions are exactly reconstructable from the raw counts', 
             expect(g.cells['all|ALL'].variants).to.be.at.least(g.cells['pass|ALL'].variants)
             expect(g.cells['all|ALL'].individuals).to.be.at.least(g.cells['pass|ALL'].individuals)
             expect(g.cells['all|ALL'].genes).to.be.at.least(g.cells['pass|ALL'].genes)
-            // Headline SAMPLE fold = (# pass·ALL samples ÷ the true cohort) ÷ prevalence
-            if (g.foldSampleAll != null) expect(g.foldSampleAll).to.be.closeTo((g.refIndividuals / conv.totalProbands) / g.prevalence, 1e-9)
-            // Headline DNM fold = (# pass·ALL DNMs ÷ pass DNMs) ÷ prevalence
+            // Headline SAMPLE fold = # pass·ALL probands ÷ the Poisson-binomial mean Σpᵢ —
+            // the SAME expectation the sample p-value uses, so fold and q cannot disagree.
+            // (NOT (k/cohort)/prevalence: that divides a per-proband rate by a per-draw
+            // prevalence, so under the null it tracks the mean variant burden, not 1.)
+            if (g.foldSampleAll != null) {
+                expect(g.foldSampleAll).to.be.closeTo(g.refIndividuals / g.cells['pass|ALL'].expSample, 1e-9)
+            }
+            // Headline DNM fold = (# pass·ALL DNMs ÷ pass DNMs) ÷ prevalence ≡ k ÷ (n·p)
             if (g.foldDnmAll != null) expect(g.foldDnmAll).to.be.closeTo((g.refVariants / conv.nPassDnms) / g.prevalence, 1e-9)
             // Cumulative tiers are monotonic: HIGH ⊆ HIGH+MOD ⊆ HIGH+MOD+LOW ⊆ ALL.
             for (let i = 1; i < passTierKeys.length; i++) {
