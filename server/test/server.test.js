@@ -3832,6 +3832,68 @@ describe('Gene Summary impact counts and annotations', function () {
         }
     })
 
+    it('BOTH Test B tab builders RUN — every branch, no ReferenceError', function () {
+        // This exists because a bad range-delete removed colLetter/FMT_*/fmtP/fmtR from
+        // buildDnmRateCategoryTab and shipped: the file still PARSED, so a syntax check
+        // could not see it, and the failure only appeared as a ReferenceError at runtime.
+        // Six tests broke on one deleted helper. Smoke-run every branch of both builders.
+        const {buildDnmRateCategoryTab, buildDnmRatePerGeneTab} = require('../server')
+        const styles = {headerFill: {}, headerFont: {}, borderThin: {}}
+        const cell = (x) => Object.assign({k: 3, kSyn: 1, T: 4, lambda: 0.01, catMu: 5e-5,
+            catMuSyn: 3e-4, theta: 0.14, p: 1e-6, q: 1e-5, pCond: 1e-4, qCond: 1e-3}, x)
+        const base = () => ({
+            meta: {model: 'de_novo', N: 220, nReliable: true, nUsed: 4, nDistinctProbands: 3,
+                exclIndel: 1, exclXY: 1, exclNonCoding: 2, exclNoMu: 1, exclNoClassMu: 1,
+                byClass: {nonSplice: 3, mis: 0, syn: 20}, rateGenes: 18541,
+                totalP: {nonSplice: 0.0257, mis: 0.352, syn: 0.159},
+                classifiedVia: {consequence: 4, impact: 0},
+                unmodelledTerms: {intron_variant: 5, splice_region_variant: 3},
+                calibration: {syn: {obs: 20, exp: 70.0, ratio: 0.286}, mis: {obs: 0, exp: 154.9, ratio: 0},
+                    nonSplice: {obs: 3, exp: 11.3, ratio: 0.265}, synRelSe: 0.22}},
+            perCategory: {tiers: [{key: 'HIGH', label: 'nonsense+splice', classes: ['nonSplice']},
+                    {key: 'HIGH_MOD', label: 'nonsense+splice+missense', classes: ['nonSplice', 'mis']}],
+                sections: [{id: 'fam', label: 'Fam', muSource: true, m: 20, mCond: 20, groups: [
+                    {term: 'T', probands: 3, genes: ['A', 'B', 'C'], kTop: 3,
+                        cells: {HIGH: cell({}), HIGH_MOD: cell({})}}]}]},
+            perGene: {tracks: [{key: 'lof', label: 'nonsense+splice (SNV)', classes: ['nonSplice'], discovery: true},
+                    {key: 'syn', label: 'synonymous (calibrator)', classes: ['syn'], discovery: false}],
+                rows: [{gene: 'TSC2', track: 'lof', trackLabel: 'nonsense+splice (SNV)', discovery: true,
+                    k: 2, mu: 4.17e-6, lambda: 2 * 220 * 4.17e-6, p: 5e-7, q: 1e-4,
+                    constraint: {loeuf: 0.21, pli: 0.99}}],
+                familySizes: {lof: 18000, syn: 18000}, observedRows: {lof: 1, syn: 0}}
+        })
+        const withMeta = (over) => { const d = base(); Object.assign(d.meta, over); return d }
+        // Every branch of both builders must simply RUN.
+        for (const [name, dnm] of [
+            ['reliable N', base()],
+            ['provisional N', withMeta({nReliable: false})],
+            ['IMPACT fallback', withMeta({classifiedVia: {consequence: 0, impact: 4}})],
+            ['no unmodelled terms', withMeta({unmodelledTerms: {}})],
+        ]) {
+            expect(() => buildDnmRateCategoryTab(new ExcelJS.Workbook(), dnm, styles), `category: ${name}`).to.not.throw()
+            expect(() => buildDnmRatePerGeneTab(new ExcelJS.Workbook(), dnm, styles), `per-gene: ${name}`).to.not.throw()
+        }
+        const empty = base(); empty.perCategory.sections = []; empty.perGene.rows = []
+        expect(() => buildDnmRateCategoryTab(new ExcelJS.Workbook(), empty, styles), 'category: empty').to.not.throw()
+        expect(() => buildDnmRatePerGeneTab(new ExcelJS.Workbook(), empty, styles), 'per-gene: empty').to.not.throw()
+        const noCon = base(); noCon.perGene.rows[0].constraint = null
+        expect(() => buildDnmRatePerGeneTab(new ExcelJS.Workbook(), noCon, styles), 'per-gene: no constraint').to.not.throw()
+
+        // …and the per-gene headers must align with the column map, carrying BOTH axes.
+        const wb = new ExcelJS.Workbook()
+        buildDnmRatePerGeneTab(wb, base(), styles)
+        const ws = wb.getWorksheet('DNM Rate (per-gene)')
+        let hdr = [], row = null
+        ws.eachRow(r => { const f = r.getCell(1).value
+            if (f === 'Gene') r.eachCell(c => hdr.push(String(c.value)))
+            if (/^TSC2/.test(String(f))) row = r })
+        expect(hdr).to.deep.equal(['Gene', 'k (de novo SNVs)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q', 'LOEUF', 'pLI', 'Constrained?'])
+        // The second axis lands in the right cells: surprise (λ, p) and constraint, side by side.
+        expect(row.getCell(hdr.indexOf('LOEUF') + 1).value).to.equal(0.21)
+        expect(row.getCell(hdr.indexOf('pLI') + 1).value).to.equal(0.99)
+        expect(row.getCell(hdr.indexOf('Constrained?') + 1).value).to.equal('Yes')
+    })
+
     it('the DNM Rate tab builds with a live POISSON formula reproducing the Poisson engine (real rates)', function () {
         const {computeModelEnrichment, categoryRateSums, DE_NOVO, poissonUpperTail} = require('../dnm-enrichment')
         const {buildDnmRateCategoryTab} = require('../server')

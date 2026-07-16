@@ -1827,6 +1827,11 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     const ws = workbook.addWorksheet('DNM Rate (gene-set)')
     const meta = dnm.meta, sections = dnm.perCategory.sections, tiers = dnm.perCategory.tiers
     const N = meta.N || 0, reliable = !!meta.nReliable
+    const colLetter = (n) => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26) } return s }
+    const FMT_PVAL = '[<0.001]0.0E+00;0.000', FMT_MU = '0.00E+00', FMT_LAM = '[<0.05]0.0E+00;0.000'
+    const fmtP = (p) => p == null ? '—' : (p < 0.001 ? p.toExponential(1) : p.toFixed(3))
+    const fmtR = (x) => x == null ? '—' : x.toFixed(2)
+    // ✓ = Poisson q<0.05, gated on a defensible N. λ = 2·N·Σp uses N directly (there is no
     // fitted scale for it to cancel against), so a provisional N really does shrink λ and
     // really does make the p anti-conservative — that gate is meaningful again.
     // The Poisson is CONSERVATIVE by construction here: a real cohort can only MISS de novo
