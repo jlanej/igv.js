@@ -63,13 +63,17 @@ function buildCells() {
 // Enrichment statistics — "is this convergence more than chance?"
 //
 // An OPTIONAL gene-level over-representation test (hypergeometric / one-tailed
-// Fisher) backing the descriptive proportions. It runs against each annotation
-// SOURCE's own gene universe (per-source prevalence — gnomAD-scored genes,
-// ClinVar/GenCC gene sets, each gene-set library's gene set), i.e. the genome
-// prevalence of the category, NOT the cohort's variant-bearing genes. Still a
-// gene-level ORA — it is NOT a de-novo mutation-rate model (a gene-count null
-// only approximates the true length/mutability-weighted null; that needs a
-// multi-proband cohort + denovolyzeR), so it is secondary to the proportions.
+// Fisher) backing the descriptive proportions. It runs against EACH DIMENSION's
+// OWN gene universe — the genes that source actually classifies (see
+// sourceUniverseStats) — and computeConvergence gates that dimension's trials to
+// the same set, so the chance rate and the draws describe one gene set. It is the
+// category's prevalence in that universe, NOT the cohort's variant-bearing genes.
+// Still a gene-level ORA: it is a DISTRIBUTIONAL null, asking
+// whether variants cluster in a category more than gene counts predict. It is
+// not a mutation-rate model and does not pretend to be one — genes differ in
+// length and mutability, so a category of long genes attracts more variants
+// under this null than under a rate-aware one. That complementary test is a
+// separate question (see dnm-enrichment.js), not a better version of this one.
 //
 // All pure, deterministic, dependency-free (log-gamma so large N is stable).
 // -------------------------------------------------------------------------
@@ -185,46 +189,90 @@ function benjaminiHochberg(pvals, mTotal) {
 }
 
 /**
- * Per-source genome prevalence: for each dimension, how many genes in THAT
- * source's own universe carry each term, and the universe size. This is the
- * "% of all genes in the category" denominator (per-source, cohort-independent)
- * and the ORA background. Pure — takes the already-loaded bundle Maps + the
- * gene-set library Maps. Term derivation MUST match geneTermsFor so the source
- * counts and the per-gene terms agree.
- * @param {{gnomad?:Map, clinvar?:Map, gencc?:Map}} bundles
+ * Per-dimension background: for each dimension d, the gene universe U_d that its
+ * source actually knows about, how many of those genes carry each term, and the
+ * gene set itself. {size:|U_d|, counts:{term:|K∩U_d|}, genes:Set<UPPER>}.
+ *
+ * EACH DIMENSION HAS ITS OWN UNIVERSE, AND THE TRIALS MUST BE GATED TO MATCH.
+ * The null says "if this variant had landed in a random gene, how often would it
+ * be in this category?" — and 'random gene' can only mean a gene the source could
+ * have classified. gnomAD scores constraint for 17,479 genes; a gene it never
+ * scored is UNMEASURED, not unconstrained. GenCC asserts on 6,099; MSigDB Hallmark
+ * annotates 4,384. So computeConvergence gates each dimension's trials (its
+ * binomial n, and each proband's burden dᵢ) on THIS `genes` set — that identity
+ * between p's denominator and the trials is the whole point, and it is why the set
+ * is returned rather than just its size.
+ *
+ * THE BUG THIS REPLACES: p was already per-source, but the trials stayed
+ * genome-wide, so a term's share of ITS LIBRARY was tested against draws from the
+ * whole genome. The damage is exact and one-directional — every dimension's
+ * expected count was inflated by 1/(its coverage of the gene pool the variants
+ * actually land in), because draws it could never classify were still counted as
+ * trials. Simulated on the shipped bundles (N=220, genes drawn uniformly from the
+ * 32,668 genes any source knows; observed/expected, 1.00 = correct):
+ *
+ *   dimension        U_d as % of pool   observed/expected (old)
+ *   MSigDB Hallmark        13.4%              0.133
+ *   WikiPathways           27.5%              0.268
+ *   Reactome               35.8%              0.353
+ *   HGNC families          47.7%              0.477
+ *   InterPro domain        58.6%              0.590
+ *
+ * — the reading equals the coverage, which is the signature. So the old test was
+ * never anti-conservative, it was progressively VACUOUS: on Hallmark a genuine 3x
+ * enrichment would read 3 x 0.133 = 0.40x, i.e. apparent DEPLETION. Gating the
+ * trials restores 0.98-1.00 across every dimension. The exact factor is cohort-
+ * dependent (it follows from where that cohort's variants land), which is why each
+ * section now publishes its own gated n beside the cohort-wide totals.
+ *
+ * WHY NOT ONE SHARED GENOME BACKGROUND: it would need a genome-wide gene list, and
+ * the only protein-coding list we bundle is gnomAD's, which is AUTOSOME-ONLY —
+ * gnomAD v4.1 publishes no chrX constraint at all. Gating every dimension on it
+ * would drop every X-linked variant (DMD, MECP2, FMR1, DDX3X) from these tabs,
+ * though ClinVar/GenCC/InterPro/Reactome all annotate them. Per-dimension
+ * universes keep X wherever a library knows it, and treat "unmeasured" as
+ * unmeasured instead of silently recoding it as "not a member".
+ *
+ * THE COST, which the sheet must state: each dimension answers a CONDITIONAL
+ * question ("among genes GenCC has an assertion for, do mine converge on AD?"),
+ * so folds are comparable WITHIN a dimension, not across dimensions.
+ *
+ * Terms are derived by calling geneTermsFor — the SAME function that derives the
+ * per-gene terms for observed variants — so numerator and denominator cannot drift
+ * apart. A dimension with no source is absent: no background ⇒ no test ⇒ excluded
+ * from the BH family entirely.
+ *
+ * @param {{gnomad?:Map, clinvar?:Map, gencc?:Map}} bundles  records keyed UPPER
  * @param {Object<string,Map>} [geneSetLibs]  {dimId: Map<UPPER,[terms]>}
- * @returns {Object<string,{size:number, counts:Object}>}  by dimension id
+ * @returns {Object<string,{size:number, counts:Object, genes:Set<string>}>} by dim id
  */
 function sourceUniverseStats(bundles, geneSetLibs) {
     const out = {}
-    const gn = bundles && bundles.gnomad
-    if (gn && gn.size) {
-        const counts = {}
-        for (const rec of gn.values()) {
-            if (rec && typeof rec.loeuf === 'number' && rec.loeuf < 0.6) counts['LOEUF < 0.6 (LoF-constrained)'] = (counts['LOEUF < 0.6 (LoF-constrained)'] || 0) + 1
-            if (rec && typeof rec.pli === 'number' && rec.pli >= 0.9) counts['pLI ≥ 0.9'] = (counts['pLI ≥ 0.9'] || 0) + 1
+    const b = bundles || {}
+    const providerFor = (g) => ({
+        gnomad: b.gnomad ? b.gnomad.get(g) : null,
+        clinvar: b.clinvar ? b.clinvar.get(g) : null,
+        gencc: b.gencc ? b.gencc.get(g) : null
+    })
+    // One walk per dimension over ITS OWN source gene list. geneTermsFor returns
+    // every dimension's terms for a gene; we take only this dimension's, so the
+    // membership rule is defined exactly once, in one function.
+    const walk = (dimId, geneKeys) => {
+        const genes = new Set(), counts = {}
+        for (const g of geneKeys) {
+            genes.add(g)
+            const terms = geneTermsFor(g, providerFor(g), null, geneSetLibs)[dimId] || []
+            for (const t of terms) counts[t] = (counts[t] || 0) + 1
         }
-        out.constraint = {size: gn.size, counts}
+        if (genes.size) out[dimId] = {size: genes.size, counts, genes}
     }
-    const cv = bundles && bundles.clinvar
-    if (cv && cv.size) {
-        let plp = 0
-        for (const rec of cv.values()) if (rec && rec.plp > 0) plp++
-        out.clinvar = {size: cv.size, counts: {'Has ClinVar P/LP': plp}}
-    }
-    const gc = bundles && bundles.gencc
-    if (gc && gc.size) {
-        const counts = {}
-        for (const rec of gc.values()) if (rec && Array.isArray(rec.moi)) for (const m of rec.moi) counts[m] = (counts[m] || 0) + 1
-        out.gencc = {size: gc.size, counts}
-    }
+    if (b.gnomad && b.gnomad.size) walk('constraint', b.gnomad.keys())
+    if (b.clinvar && b.clinvar.size) walk('clinvar', b.clinvar.keys())
+    if (b.gencc && b.gencc.size) walk('gencc', b.gencc.keys())
     if (geneSetLibs) {
         for (const dimId of Object.keys(geneSetLibs)) {
             const lib = geneSetLibs[dimId]
-            if (!lib || !lib.size) continue
-            const counts = {}
-            for (const terms of lib.values()) for (const t of terms) counts[t] = (counts[t] || 0) + 1
-            out[dimId] = {size: lib.size, counts}
+            if (lib && lib.size) walk(dimId, lib.keys())
         }
     }
     return out
@@ -245,8 +293,8 @@ function computeConvergence(variants, opts) {
     const dims = opts.dimensions || DIMENSIONS
     const cells = buildCells()
 
-    // Background = each annotation source's OWN gene universe (per-source
-    // prevalence), NOT the cohort. srcU[dimId] = {size:N, counts:{term:K}}.
+    // Background = each dimension's OWN gene universe U_d, with its gene set, NOT the
+    // cohort. srcU[dimId] = {size:|U_d|, counts:{term:|K∩U_d|}, genes:Set}.
     const srcU = opts.sourceUniverse || {}
     const totalProbands = opts.totalProbands || 0   // ALL cohort probands (grid % base)
 
@@ -255,19 +303,40 @@ function computeConvergence(variants, opts) {
     for (const d of dims) acc[d.id] = {}
     const cellGenes = {}, cellInds = {}, cellVars = {}
     for (const c of cells) { cellGenes[c.key] = new Set(); cellInds[c.key] = new Set(); cellVars[c.key] = 0 }
-    // Per-pass-tier, per-proband IGV-pass DNM burden (d_i for each impact tier) —
-    // the null for the conservative SAMPLE test at each tier: more DNMs ⇒ higher
-    // chance of a category hit. Keyed by tier (HIGH ⊆ HIGH+MOD ⊆ … ⊆ ALL).
     const passTierKeys = cells.filter(c => c.statusKey === 'pass').map(c => c.tierKey)
+
+    // PER-DIMENSION trial state. A dimension's null draws from ITS OWN universe U_d,
+    // so its binomial n and its per-proband burden dᵢ must count ONLY variants whose
+    // gene is in U_d — the same set p's denominator is. A variant in a gene U_d never
+    // heard of is not a draw from that dimension's null: counting it inflates n (and
+    // dᵢ) against a p it could never have hit, which is exactly the bug being fixed.
+    // A dimension with NO background (srcU[d] absent) is not tested at all, so it
+    // needs no trial state — its universe is null and it is gated out downstream.
+    const dimBurden = {}, dimNDnms = {}, dimOutside = {}
+    for (const d of dims) {
+        dimBurden[d.id] = {}; dimNDnms[d.id] = {}
+        for (const tk of passTierKeys) { dimBurden[d.id][tk] = new Map(); dimNDnms[d.id][tk] = 0 }
+        dimOutside[d.id] = {variants: 0, genes: new Set()}
+    }
+    // A background WITHOUT a `genes` set leaves that dimension's trials ungated. That
+    // is only correct when every observed gene is in the universe by construction —
+    // true for synthetic fixtures ("pretend the universe has 100 genes"), never for
+    // real data. sourceUniverseStats always supplies `genes`, and a litmus test pins
+    // that the export's own path does; anything hand-rolling a background must too.
+    const universeOf = (dimId) => (srcU[dimId] && srcU[dimId].genes) || null
+
+    // Cohort-wide (UNGATED) burden — descriptive only. It is the base for the grid's
+    // "% of cohort probands" and the tab summary, never for a p-value: every test
+    // uses its own dimension's gated burden above.
     const passBurdenByTier = {}
     for (const tk of passTierKeys) passBurdenByTier[tk] = new Map()
 
     for (const v of variants) {
         const gene = geneCol ? v[geneCol] : null
         if (!gene) continue
-        const terms = geneTerms.get(String(gene).toUpperCase())
-        if (!terms) continue
         const upper = String(gene).toUpperCase()
+        const terms = geneTerms.get(upper)
+        if (!terms) continue
         const impact = impactCol ? String(v[impactCol] || '').toUpperCase() : ''
         const status = v.curation_status
         // The independent unit: the proband/sample. Falls back to a single
@@ -281,11 +350,21 @@ function computeConvergence(variants, opts) {
             cellGenes[c.key].add(upper)
             cellInds[c.key].add(individual)
             cellVars[c.key]++                        // total DNMs in this stratum
-            if (c.statusKey === 'pass') {            // per-tier proband DNM burden
+            if (c.statusKey === 'pass') {
                 const bm = passBurdenByTier[c.tierKey]
                 bm.set(individual, (bm.get(individual) || 0) + 1)
             }
             for (const d of dims) {
+                const U = universeOf(d.id)
+                if (U && !U.has(upper)) {            // not a draw from THIS dimension's null
+                    if (c.key === REF_CELL) { dimOutside[d.id].variants++; dimOutside[d.id].genes.add(upper) }
+                    continue
+                }
+                if (c.statusKey === 'pass') {        // this dimension's trials, at this tier
+                    const bm = dimBurden[d.id][c.tierKey]
+                    bm.set(individual, (bm.get(individual) || 0) + 1)
+                    dimNDnms[d.id][c.tierKey]++
+                }
                 const tlist = terms[d.id] || []
                 for (const term of tlist) {
                     const bucket = acc[d.id][term] || (acc[d.id][term] = {})
@@ -298,14 +377,14 @@ function computeConvergence(variants, opts) {
         }
     }
 
-    // Pass denominators + per-tier burden arrays / DNM totals for the tests.
+    // Cohort-wide denominators — descriptive (banners, the grid's "%"), not test inputs.
     const nPassProbands = passBurdenByTier['ALL'].size   // probands with ≥1 pass DNM
     const nPassDnms = cellVars[REF_CELL]                 // total pass DNMs (= pass|ALL)
     const burdenByTier = {}, nDnmsByTier = {}, nProbandsByTier = {}, burdenHistByTier = {}
     for (const tk of passTierKeys) {
         burdenByTier[tk] = [...passBurdenByTier[tk].values()]
-        nDnmsByTier[tk] = cellVars['pass|' + tk]         // binomial n (DNM test) for this tier
-        nProbandsByTier[tk] = passBurdenByTier[tk].size  // at-risk probands (sample test) for this tier
+        nDnmsByTier[tk] = cellVars['pass|' + tk]         // cohort pass DNMs at this tier
+        nProbandsByTier[tk] = passBurdenByTier[tk].size  // cohort at-risk probands at this tier
         // Burden HISTOGRAM {d: # probands with exactly d pass DNMs at this tier}.
         // Each proband's null hit-probability pᵢ = 1-(1-prev)^dᵢ depends ONLY on dᵢ, so
         // this histogram + a category's prevalence fully determine that category's
@@ -321,7 +400,19 @@ function computeConvergence(variants, opts) {
         // pass tier. The display filters (minCount below, top-N in the sheet) are applied
         // AFTER the correction and cannot change any q — see the BH note below.
         const allGroups = []
-        const u = srcU[d.id] || null                   // {size, counts} or null (no offline source)
+        const u = srcU[d.id] || null                   // {size, counts, genes} or null (no source)
+        // THIS dimension's trials: burden arrays / DNM totals counted only over genes
+        // in U_d. These, not the cohort-wide ones, are every test input below — and
+        // they are published per dimension so each p-value stays reproducible.
+        const dTrialBurden = {}, dTrialN = {}, dTrialProbands = {}, dTrialHist = {}
+        for (const tk of passTierKeys) {
+            dTrialBurden[tk] = [...dimBurden[d.id][tk].values()]
+            dTrialN[tk] = dimNDnms[d.id][tk]
+            dTrialProbands[tk] = dimBurden[d.id][tk].size
+            const h = {}
+            for (const dd of dTrialBurden[tk]) h[dd] = (h[dd] || 0) + 1
+            dTrialHist[tk] = h
+        }
         for (const term of Object.keys(acc[d.id])) {
             const bucket = acc[d.id][term]
             const ref = bucket[REF_CELL] || {individuals: new Set(), genes: new Set(), variants: 0}
@@ -334,7 +425,8 @@ function computeConvergence(variants, opts) {
                 cellCounts[c.key] = cd ? {individuals: cd.individuals.size, genes: cd.genes.size, variants: cd.variants}
                     : {individuals: 0, genes: 0, variants: 0}
             }
-            // Background: per-source genome prevalence = catSize / source size.
+            // Background: the category's share of THIS dimension's universe U_d —
+            // |K∩U_d| / |U_d| — the same set dTrialBurden/dTrialN below are gated on.
             let prevalence = null, catSize = null
             if (u && u.counts[term] != null && u.size > 0) {
                 catSize = u.counts[term]
@@ -342,7 +434,8 @@ function computeConvergence(variants, opts) {
             }
             // Enrichment PER PASS TIER, attached to each pass cell. SAMPLE =
             // Poisson-binomial with that tier's per-proband burden; DNM = binomial
-            // over that tier's pass DNMs. Prevalence (a gene property) is shared.
+            // over that tier's pass DNMs. Both are THIS DIMENSION's gated trials, so
+            // the trials and the prevalence describe the same gene set.
             for (const tk of passTierKeys) {
                 if (prevalence == null) continue
                 const cc = cellCounts['pass|' + tk]
@@ -358,19 +451,19 @@ function computeConvergence(variants, opts) {
                 // degenerate tier (no pass DNMs / no at-risk probands cohort-wide), which
                 // correctly keeps a vacuous tier out of the family instead of padding it
                 // with one phantom p=1 per category.
-                cc.pDnm = binomUpperTail(cc.variants, nDnmsByTier[tk], prevalence)
+                cc.pDnm = binomUpperTail(cc.variants, dTrialN[tk], prevalence)
                 if (sampleCol) {
-                    cc.pSample = poissonBinomUpperTail(cc.individuals, burdenByTier[tk].map(dd => 1 - Math.pow(1 - prevalence, dd)))
+                    cc.pSample = poissonBinomUpperTail(cc.individuals, dTrialBurden[tk].map(dd => 1 - Math.pow(1 - prevalence, dd)))
                 }
                 // Mean of this tier's Poisson-binomial null: Σᵢ pᵢ = Σᵢ [1-(1-prev)^dᵢ],
                 // i.e. the expected # probands hitting the category by chance. Reported
                 // per tier so every tier's test is reproducible from printed inputs
                 // (it is defined regardless of the observed count, so no >0 gate).
                 if (sampleCol && prevalence > 0) {
-                    cc.expSample = burdenByTier[tk].reduce((s, dd) => s + (1 - Math.pow(1 - prevalence, dd)), 0)
+                    cc.expSample = dTrialBurden[tk].reduce((s, dd) => s + (1 - Math.pow(1 - prevalence, dd)), 0)
                 }
                 // Binomial mean for the DNM test at this tier (n·p) — same rationale.
-                if (prevalence > 0) cc.expDnm = nDnmsByTier[tk] * prevalence
+                if (prevalence > 0) cc.expDnm = dTrialN[tk] * prevalence
             }
             // Headline folds at pass|ALL = OBSERVED ÷ EXPECTED-UNDER-THE-NULL.
             const refCC = cellCounts[REF_CELL]
@@ -386,8 +479,10 @@ function computeConvergence(variants, opts) {
             // burden histogram on the derivation sheet.
             const expAll = refCC.expSample
             const foldSampleAll = (sampleCol && expAll > 0) ? refCC.individuals / expAll : null
-            // DNM fold: (k/n)/p ≡ k/(n·p) — already observed ÷ expected, correctly centred at 1.
-            const foldDnmAll = (prevalence > 0 && nPassDnms > 0) ? (refCC.variants / nPassDnms) / prevalence : null
+            // DNM fold: k / (n·p) — observed ÷ expected, centred at 1. n is THIS
+            // dimension's gated pass-DNM total, not the cohort's: dividing by the
+            // cohort total while p is a share of U_d is the very mismatch being fixed.
+            const foldDnmAll = (refCC.expDnm > 0) ? refCC.variants / refCC.expDnm : null
             // (The pass|ALL sample expectation lives on cells['pass|ALL'].expSample, set
             // per tier above — no separate ALL-only copy to drift out of sync.)
             allGroups.push({term, refIndividuals, refGenes, refVariants, catSize, prevalence,
@@ -421,8 +516,12 @@ function computeConvergence(variants, opts) {
         // A tier only contributes hypotheses when its test is defined cohort-wide (the
         // tails return null for a degenerate tier), so count the live tiers per track.
         const nLibTerms = u ? Object.keys(u.counts).length : 0
-        const dnmTiers = passTierKeys.filter(tk => nDnmsByTier[tk] > 0).length
-        const smpTiers = sampleCol ? passTierKeys.filter(tk => (burdenByTier[tk] || []).length > 0).length : 0
+        // A tier contributes hypotheses only where THIS dimension's test is defined —
+        // its own gated trials, not the cohort's. A tier whose gated pool is empty (no
+        // pass variant landed in U_d) is vacuous and must stay OUT of m rather than pad
+        // it with phantom p=1 rows and make every real q needlessly conservative.
+        const dnmTiers = passTierKeys.filter(tk => dTrialN[tk] > 0).length
+        const smpTiers = sampleCol ? passTierKeys.filter(tk => dTrialBurden[tk].length > 0).length : 0
         const mSample = Math.max(nLibTerms * smpTiers, sTests.filter(c => c.pSample != null).length)
         const mDnm = Math.max(nLibTerms * dnmTiers, dTests.filter(c => c.pDnm != null).length)
         benjaminiHochberg(sTests.map(c => c.pSample), mSample).forEach((q, i) => { sTests[i].qSample = q })
@@ -436,8 +535,17 @@ function computeConvergence(variants, opts) {
         const psp = g => (g.cells[REF_CELL].pSample == null ? 1 : g.cells[REF_CELL].pSample)
         groups.sort((a, b) => b.refIndividuals - a.refIndividuals || b.refGenes - a.refGenes
             || (psp(a) - psp(b)) || a.term.localeCompare(b.term))
+        // Each section publishes ITS OWN test inputs. The burden histogram is now a
+        // per-dimension quantity (pᵢ = 1−(1−p)^dᵢ uses this dimension's gated dᵢ), so
+        // the derivation sheet needs one per dimension to keep the sample p-values
+        // reproducible outside Excel. nOutside* disclose what U_d could not draw.
         return {id: d.id, label: d.label, groups, sourceSize: u ? u.size : null,
-            mSample, mDnm, nCategories: allGroups.length}
+            mSample, mDnm, nCategories: allGroups.length,
+            available: !!u,
+            nDnmsByTier: dTrialN, nProbandsByTier: dTrialProbands, burdenHistByTier: dTrialHist,
+            nOutsideUniverse: u ? dimOutside[d.id].variants : 0,
+            nOutsideGenes: u ? dimOutside[d.id].genes.size : 0,
+            outsideGenesSample: u ? [...dimOutside[d.id].genes].sort().slice(0, 20) : []}
     })
 
     const cellSummary = cells.map(c => ({
@@ -451,15 +559,22 @@ function computeConvergence(variants, opts) {
     // so the sheet can show the exact test inputs / a reproducible Excel formula.
     // burdenHistByTier completes that: it is the sample test's remaining hidden input,
     // so publishing it makes every reported sample p-value externally reproducible.
+    // NOTE the split: the top-level nDnmsByTier / nProbandsByTier / burdenHistByTier
+    // are COHORT-WIDE and descriptive (banners, the grid's "%"). They are NOT the test
+    // inputs — each section carries its own gated copies, because each dimension draws
+    // from its own universe. Reading a p-value against these would misreproduce it.
     return {cells: cellSummary, sections, hasSamples: !!sampleCol,
         totalProbands, nPassProbands, nPassDnms, nDnmsByTier, nProbandsByTier, burdenHistByTier}
 }
 
 /**
- * Derive the per-gene term lists (all dimensions) from the assembled
- * annotations, for the export's genes. Term derivation here MUST match
- * sourceUniverseStats (which counts the same terms over each source's full gene
- * universe) so a gene's terms and the per-source prevalence agree.
+ * Derive the per-gene term lists (all dimensions) from the assembled annotations.
+ * This is the SINGLE definition of "which terms does a gene carry": the observed
+ * variants' genes come through here, and so does every gene of every dimension's
+ * background universe (sourceUniverseStats calls this function once per gene of
+ * each source's own gene list). The numerator and the denominator of every
+ * prevalence therefore agree by construction, rather than by two implementations
+ * being kept in step by hand.
  * @param {string} gene
  * @param {Object} providerObj  {gnomad, clinvar, gencc} records for this gene
  * @param {Object|null} myGeneAnn  MyGene annotation (domains) — export genes only

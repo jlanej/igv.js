@@ -371,7 +371,10 @@ describe('gene-analysis convergence (independent signals)', function () {
         expect(poissonBinomUpperTail(1, [])).to.equal(null)
     })
 
-    it('sourceUniverseStats derives per-source prevalence from bundles + libraries', function () {
+    it('sourceUniverseStats gives each dimension its own universe + gene set', function () {
+        // Each source knows a DIFFERENT set of genes, so each dimension divides by its
+        // own: constraint by gnomAD's 3, gencc by GenCC's 2, fam by the library's 3.
+        // The `genes` Set is what computeConvergence gates that dimension's trials on.
         const gnomad = new Map([['A', {pli: 0.95}], ['B', {pli: 0.1}], ['C', {loeuf: 0.3}]])
         const gencc = new Map([['A', {moi: ['Autosomal dominant']}], ['B', {moi: ['Autosomal recessive']}]])
         const fam = new Map([['A', ['T']], ['B', ['T']], ['C', []]])
@@ -379,10 +382,26 @@ describe('gene-analysis convergence (independent signals)', function () {
         expect(su.constraint.size).to.equal(3)
         expect(su.constraint.counts['pLI ≥ 0.9']).to.equal(1)                        // A
         expect(su.constraint.counts['LOEUF < 0.6 (LoF-constrained)']).to.equal(1)    // C
-        expect(su.gencc.size).to.equal(2)
+        expect(su.gencc.size, 'gencc divides by its own 2 genes').to.equal(2)
         expect(su.gencc.counts['Autosomal dominant']).to.equal(1)
-        expect(su.fam.size).to.equal(3)
+        expect(su.fam.size, 'fam divides by its own 3 genes').to.equal(3)
         expect(su.fam.counts.T).to.equal(2)                                          // A,B
+        // The gene set must be exposed — without it the engine cannot gate the trials
+        // and the whole fix silently reverts to the mismatch it replaces.
+        expect(su.constraint.genes).to.be.instanceOf(Set)
+        expect([...su.constraint.genes].sort()).to.deep.equal(['A', 'B', 'C'])
+        expect([...su.gencc.genes].sort()).to.deep.equal(['A', 'B'])
+        for (const d of Object.keys(su)) expect(su[d].genes.size).to.equal(su[d].size)
+    })
+
+    it('a dimension with no source is absent — no background, no test', function () {
+        // Not merely untested: it must not appear at all, so it can never enter a BH
+        // family or print a p against a background it does not have.
+        const su = sourceUniverseStats({}, {fam: new Map([['A', ['T']]])})
+        expect(su.constraint).to.equal(undefined)
+        expect(su.gencc).to.equal(undefined)
+        expect(su.fam.size).to.equal(1)
+        expect(Object.keys(sourceUniverseStats({}, {})), 'nothing at all').to.be.empty
     })
 
     it('per-source prevalence + per-pass-tier sample & DNM enrichment attach to cells', function () {
@@ -391,6 +410,7 @@ describe('gene-analysis convergence (independent signals)', function () {
             ['D', []], ['E', []], ['F', []], ['G', []], ['H', []], ['I', []], ['J', []]])
         const srcU = sourceUniverseStats({}, {fam: famLib})
         expect(srcU.fam.counts.T).to.equal(3)
+        expect(srcU.fam.size).to.equal(10)
         // Two pass probands (X, Y), each one pass HIGH DNM → all 4 pass tiers = 2.
         const conv = computeConvergence(
             [{gene: 'A', s: 'X', impact: 'HIGH', curation_status: 'pass'},
@@ -563,6 +583,8 @@ describe('gene-analysis convergence (independent signals)', function () {
     })
 
     it('sourceUniverseStats omits constraint when no gnomad bundle (GRCh37 build gate)', function () {
+        // No constraint background ⇒ the dimension is absent ⇒ not tested at all,
+        // rather than tested against a v4.1 background it doesn't match.
         const su = sourceUniverseStats({clinvar: new Map([['A', {plp: 1}]])}, {})
         expect(su.constraint).to.equal(undefined)
         expect(su.clinvar.size).to.equal(1)

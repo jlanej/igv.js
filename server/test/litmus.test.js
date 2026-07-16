@@ -36,6 +36,8 @@ const gsLibs = {
     msigdbHallmark: geneSets.libMap('msigdbHallmark'),
     domain: geneSets.libMap('domain'),   // InterPro protein-domain background
 }
+// Per-dimension backgrounds, built exactly as the export builds them. Each carries
+// its own gene universe (`genes`), which the engine gates that dimension's trials on.
 const SRC = sourceUniverseStats({gnomad: gnB, clinvar: cvB, gencc: gcB}, gsLibs)
 
 describe('litmus: bundled data loads with expected magnitudes', function () {
@@ -91,6 +93,67 @@ describe('litmus: per-source prevalences are in sane ranges', function () {
     })
 })
 
+describe('litmus: per-dimension universes, with the trials gated to match', function () {
+    // The bug this pins: the chance rate p was already per-source, but the TRIALS
+    // stayed genome-wide — so a category's share of its own library was tested
+    // against draws from the whole genome, inflating every dimension's expected
+    // count by 1/(its coverage) and making narrow libraries unable to fire at all.
+    // The fix is the identity asserted here: the pool the trials are drawn from IS
+    // the set p's denominator counts over.
+    it('each dimension carries its OWN universe and gene set', function () {
+        const dims = Object.keys(SRC)
+        expect(dims.length, 'dimensions with a background').to.be.greaterThan(4)
+        for (const d of dims) {
+            expect(SRC[d].genes, `${d} exposes its gene set for gating`).to.be.instanceOf(Set)
+            expect(SRC[d].genes.size, `${d} size matches its gene set`).to.equal(SRC[d].size)
+        }
+        // The universes are genuinely each source's own — not one shared number.
+        expect(SRC.constraint.size, 'constraint == gnomAD bundle').to.equal(gnB.size)
+        expect(SRC.gencc.size, 'gencc == GenCC bundle').to.equal(gcB.size)
+        expect(SRC.msigdbHallmark.size, 'hallmark == its library').to.equal(gsLibs.msigdbHallmark.size)
+        expect(new Set(Object.keys(SRC).map(d => SRC[d].size)).size, 'universes differ').to.be.greaterThan(3)
+    })
+    it('X-linked genes survive wherever a source knows them (gnomAD has no chrX)', function () {
+        // gnomAD v4.1 publishes no chrX constraint, so DDX3X/MECP2 are absent from the
+        // constraint universe — but InterPro/ClinVar classify them and DO test them.
+        // A single shared background built from gnomAD would have dropped these genes
+        // from every dimension; this is the concrete reason the universes differ.
+        for (const x of ['DDX3X', 'MECP2', 'DMD']) {
+            expect(SRC.constraint.genes.has(x), `${x} absent from constraint`).to.equal(false)
+            expect(SRC.domain.genes.has(x), `${x} present in domain`).to.equal(true)
+        }
+    })
+    it('a dimension\'s trials count ONLY genes in its own universe', function () {
+        const genes = ['DDX3X', 'TSC2']   // X-linked (not in constraint) + autosomal (in both)
+        const geneTerms = new Map()
+        for (const g of genes) geneTerms.set(g, geneTermsFor(g, {gnomad: gnB.get(g), clinvar: cvB.get(g), gencc: gcB.get(g)}, null, gsLibs))
+        const conv = computeConvergence(genes.map((g, i) => ({gene: g, impact: 'HIGH', curation_status: 'pass', s: 'P' + i})), {
+            geneCol: 'gene', impactCol: 'impact', sampleCol: 's', geneTerms,
+            dimensions: [{id: 'constraint', label: 'C'}, {id: 'domain', label: 'D'}],
+            sourceUniverse: SRC, totalProbands: 2, minCount: 1})
+        const c = conv.sections.find(s => s.id === 'constraint'), d = conv.sections.find(s => s.id === 'domain')
+        expect(c.nDnmsByTier.ALL, 'constraint n excludes the X-linked gene').to.equal(1)
+        expect(d.nDnmsByTier.ALL, 'domain n includes both').to.equal(2)
+        expect(c.nOutsideUniverse, 'constraint reports the exclusion').to.equal(1)
+        expect(c.outsideGenesSample).to.include('DDX3X')
+        expect(d.nOutsideUniverse, 'domain excludes nothing').to.equal(0)
+        // Cohort-wide counts stay UNGATED — they are descriptive, never test inputs.
+        expect(conv.nPassDnms, 'cohort total counts both').to.equal(2)
+        // Each section publishes its own burden histogram (the sample test's input).
+        expect(c.burdenHistByTier.ALL).to.be.an('object')
+        expect(d.burdenHistByTier.ALL).to.be.an('object')
+    })
+    it('no background ⇒ dimension is marked unavailable and not tested', function () {
+        const geneTerms = new Map([['TSC2', geneTermsFor('TSC2', {gnomad: gnB.get('TSC2')}, null, gsLibs)]])
+        const conv = computeConvergence([{gene: 'TSC2', impact: 'HIGH', curation_status: 'pass', s: 'P1'}], {
+            geneCol: 'gene', impactCol: 'impact', sampleCol: 's', geneTerms,
+            dimensions: [{id: 'gencc', label: 'G'}], sourceUniverse: {}, totalProbands: 1, minCount: 1})
+        expect(conv.sections[0].available, 'no source ⇒ unavailable').to.equal(false)
+        expect(conv.sections[0].sourceSize).to.equal(null)
+        for (const g of conv.sections[0].groups) expect(g.prevalence, 'no p without a background').to.equal(null)
+    })
+})
+
 describe('litmus: geneTermsFor and sourceUniverseStats agree (the key invariant)', function () {
     // If the per-gene term derivation and the source-universe counting ever
     // drift, the prevalence numerator (cat size) stops matching the observed
@@ -142,9 +205,27 @@ describe('litmus: proportions are exactly reconstructable from the raw counts', 
             // prevalence, so under the null it tracks the mean variant burden, not 1.)
             if (g.foldSampleAll != null) {
                 expect(g.foldSampleAll).to.be.closeTo(g.refIndividuals / g.cells['pass|ALL'].expSample, 1e-9)
+                // expSample must be Σ_d n_d·[1−(1−p)^d] over THIS dimension's OWN gated
+                // burden histogram — the exact quantity the derivation sheet publishes and
+                // the samples tab re-derives live by SUMPRODUCT. Pinning it against the
+                // published histogram is what makes the sample track's gating testable at
+                // all: fold and expSample move together, so the fold assertion above cannot
+                // catch a revert to the cohort-wide burden, which would silently republish
+                // every sample p-value (a 5.7× convergence would print as 2.9×).
+                expect(g.cells['pass|ALL'].expSample).to.be.closeTo(
+                    Object.entries(s.burdenHistByTier.ALL).reduce(
+                        (acc, [d, n]) => acc + n * (1 - Math.pow(1 - g.prevalence, Number(d))), 0), 1e-9)
             }
-            // Headline DNM fold = (# pass·ALL DNMs ÷ pass DNMs) ÷ prevalence ≡ k ÷ (n·p)
-            if (g.foldDnmAll != null) expect(g.foldDnmAll).to.be.closeTo((g.refVariants / conv.nPassDnms) / g.prevalence, 1e-9)
+            // Headline DNM fold = k ÷ (n·p) = k ÷ "Expected n·p", where n is THIS
+            // dimension's GATED trial count — NOT the cohort-wide pass total, which is
+            // larger whenever a variant fell outside this dimension's universe. Dividing
+            // by the cohort total against a p that is a share of U_d is precisely the
+            // mismatch this build fixes, so the fold must ride the same expectation as
+            // the p-value: they cannot be allowed to disagree.
+            if (g.foldDnmAll != null) {
+                expect(g.foldDnmAll).to.be.closeTo(g.refVariants / g.cells['pass|ALL'].expDnm, 1e-9)
+                expect(g.cells['pass|ALL'].expDnm).to.be.closeTo((s.nDnmsByTier.ALL || 0) * g.prevalence, 1e-9)
+            }
             // Cumulative tiers are monotonic: HIGH ⊆ HIGH+MOD ⊆ HIGH+MOD+LOW ⊆ ALL.
             for (let i = 1; i < passTierKeys.length; i++) {
                 expect(g.cells[passTierKeys[i]].individuals).to.be.at.least(g.cells[passTierKeys[i - 1]].individuals)

@@ -3740,13 +3740,19 @@ describe('Gene Summary impact counts and annotations', function () {
                 dimensions: [{id: 'fam', label: 'Fam'}],
                 sourceUniverse: {fam: {size: 100, counts: {T: 10}}}, totalProbands: 20})
 
-        // The engine must expose the histogram (it is the sample test's hidden input),
-        // and it must genuinely DIFFER per tier.
-        expect(conv.burdenHistByTier, 'burdenHistByTier returned').to.be.an('object')
-        expect(conv.burdenHistByTier.ALL).to.deep.equal({1: 1, 2: 1})   // P2 has 1, P1 has 2 (incl. MODIFIER)
-        expect(conv.burdenHistByTier.HIGH).to.deep.equal({1: 2})        // MODIFIER excluded ⇒ P1:1, P2:1
-        expect(conv.nDnmsByTier.HIGH).to.equal(2)
-        expect(conv.nDnmsByTier.ALL).to.equal(3)
+        // Each SECTION must expose its own histogram — it is the sample test's hidden
+        // input, and it is per-dimension because each dimension's trials are gated to
+        // its own gene universe. Assert the section's copy, not the cohort-wide one:
+        // that is what the derivation sheet publishes and what every p-value uses.
+        // (This fixture's background has no `genes` set, so the trials are ungated and
+        // the two coincide — which is exactly why the assertion must name the one the
+        // sheet reads, or it would keep passing after the sheet started reading another.)
+        const sec = conv.sections[0]
+        expect(sec.burdenHistByTier, 'per-section burdenHistByTier returned').to.be.an('object')
+        expect(sec.burdenHistByTier.ALL).to.deep.equal({1: 1, 2: 1})   // P2 has 1, P1 has 2 (incl. MODIFIER)
+        expect(sec.burdenHistByTier.HIGH).to.deep.equal({1: 2})        // MODIFIER excluded ⇒ P1:1, P2:1
+        expect(sec.nDnmsByTier.HIGH).to.equal(2)
+        expect(sec.nDnmsByTier.ALL).to.equal(3)
 
         const wb = new ExcelJS.Workbook()
         const styles = {headerFill: {}, headerFont: {}, borderThin: {}}
@@ -3756,22 +3762,27 @@ describe('Gene Summary impact counts and annotations', function () {
         const dws = wb.getWorksheet('Gene Analysis (derivation)')
         expect(dws, 'derivation sheet created').to.not.be.undefined
 
-        // The published histogram rows must re-sum to the reported denominators.
-        const dCol = refs.dCol, aCol = refs.tierCol.ALL
+        // The histogram is PER DIMENSION (each dimension's trials are gated to its own
+        // gene universe), so the refs are keyed by dimension id — using another
+        // dimension's block would reproduce nobody's p-value.
+        const fam = refs.byDim[sec.id]
+        expect(fam, `derivation block for "${sec.id}"`).to.not.be.undefined
+        // The published histogram rows must re-sum to THIS dimension's denominators.
+        const dCol = fam.dCol, aCol = fam.tierCol.ALL
         let probands = 0, dnms = 0
-        for (let r = refs.firstRow; r <= refs.lastRow; r++) {
+        for (let r = fam.firstRow; r <= fam.lastRow; r++) {
             const d = dws.getRow(r).getCell(dCol).value
             const n = dws.getRow(r).getCell(aCol).value
             probands += n; dnms += d * n
         }
-        expect(probands, 'histogram sums to at-risk probands').to.equal(conv.nProbandsByTier.ALL)
-        expect(dnms, 'Σ dᵢ·n_d sums to pass DNMs').to.equal(conv.nDnmsByTier.ALL)
+        expect(probands, 'histogram sums to this dimension\'s at-risk probands').to.equal(sec.nProbandsByTier.ALL)
+        expect(dnms, 'Σ dᵢ·n_d sums to this dimension\'s gated pass variants').to.equal(sec.nDnmsByTier.ALL)
 
         // THE CLAIM: histogram + p reproduces the reported exact p-value.
-        const g = conv.sections[0].groups[0]
+        const g = sec.groups[0]
         const p = g.prevalence
         const burden = []
-        for (let r = refs.firstRow; r <= refs.lastRow; r++) {
+        for (let r = fam.firstRow; r <= fam.lastRow; r++) {
             const d = dws.getRow(r).getCell(dCol).value
             for (let i = 0; i < dws.getRow(r).getCell(aCol).value; i++) burden.push(d)
         }
@@ -3797,13 +3808,15 @@ describe('Gene Summary impact counts and annotations', function () {
         // so its Expected/n genuinely differ from ALL — if every tier read one tier's
         // columns (or one tier's histogram), these would collide.
         const cellVal = (lbl) => dataRow.getCell(hdr.indexOf(lbl) + 1).value
-        expect(cellVal('n at-risk (HIGH)')).to.equal(conv.nProbandsByTier.HIGH)
+        // n is the DIMENSION's gated at-risk count — not the cohort-wide total.
+        expect(cellVal('n at-risk (HIGH)')).to.equal(sec.nProbandsByTier.HIGH)
         const eHigh = cellVal('Expected Σpᵢ (HIGH)')
         expect(eHigh.result).to.be.closeTo(g.cells['pass|HIGH'].expSample, 1e-12)
         expect(eHigh.result, 'HIGH Expected must differ from ALL').to.not.be.closeTo(eCell.result, 1e-9)
-        // …and each tier's SUMPRODUCT must read its OWN histogram column.
-        expect(eHigh.formula).to.contain(`$${colLetterFor(refs.tierCol.HIGH)}$${refs.firstRow}`)
-        expect(eCell.formula).to.contain(`$${colLetterFor(refs.tierCol.ALL)}$${refs.firstRow}`)
+        // …and each tier's SUMPRODUCT must read its OWN histogram column, in ITS OWN
+        // dimension's block (the blocks are per-dimension now).
+        expect(eHigh.formula).to.contain(`$${colLetterFor(fam.tierCol.HIGH)}$${fam.firstRow}`)
+        expect(eCell.formula).to.contain(`$${colLetterFor(fam.tierCol.ALL)}$${fam.firstRow}`)
         expect(eHigh.formula).to.not.equal(eCell.formula)
 
         // The live P(X≥k) formula must reference THAT tier's own k / n cells — a bug that
