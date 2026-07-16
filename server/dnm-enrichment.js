@@ -125,9 +125,19 @@ const RATE_FIELD = {nonSplice: 'pNonSplice', mis: 'pMis', syn: 'pSyn'}
 // fourth column because it makes the LoF tier's target sum to the published p_lof BY
 // CONSTRUCTION (pNonSplice + (p_lof − pNonSplice) ≡ p_lof) rather than by our arithmetic
 // agreeing with theirs. Verified against the table: 0 of 19,587 genes have p_lof <
-// pNonSplice, and the derived frameshift target is 0.851× the SNV-only LoF target
-// (Samocha 2014 models frameshift at ~1.25× the nonsense rate — this is the model's own
-// arithmetic, not an approximation of ours).
+// pNonSplice, and the derived frameshift target is 0.851× the SNV-only LoF target —
+// reproduced independently by denovolyzeR (0.855) and denovonear/MANE (0.854), both of
+// which publish frameshift explicitly and both of which give frameshift/nonsense = 1.2500,
+// Samocha 2014's stated assumption. So this recovers the model's own frameshift rate.
+//
+// KNOW WHAT YOU ARE GETTING: that rate is a FLAT PER-BP CONSTANT × CDS length. Measured,
+// frameshift/bp takes exactly ONE value across all 19,587 genes (6.81e-10, spread 1.0000×),
+// while the context-aware nonsense+splice rate per bp takes 19,342 values spanning 54×. The
+// frameshift half of the LoF target therefore carries NO sequence context — it is a length
+// proxy, and homopolymer/STR indel hotspots get no credit for being hotspots. A gene's
+// frameshift/(non+splice) varies only because the DENOMINATOR has context. This is Samocha
+// 2014's simplification, shared by every implementation; it is disclosed on the tab rather
+// than papered over, because ~46% of the LoF target's mass rides on it.
 function rateFor(rec, cls) {
     if (!rec) return null
     if (cls === 'frameshift') {

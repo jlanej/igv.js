@@ -205,8 +205,23 @@ async function buildGnomad() {
 //         (non+splice)/syn        0.1608            0.1681
 //         frameshift/syn          0.1421            0.1437
 //         frameshift/(non+splice) 0.851             0.855
-//       and denovolyzeR's frameshift/non = 1.2500 exactly — Samocha 2014 models frameshift at
-//       1.25× the nonsense rate, so the recovered term IS the model's own frameshift rate.
+//       and denovolyzeR's frameshift/non = 1.2500 exactly, matching Samocha 2014's stated
+//       frameshift assumption — so the recovered term IS the model's own frameshift rate.
+//
+// WHAT THE MODEL'S FRAMESHIFT RATE ACTUALLY IS — measured, and a real limitation to disclose
+// rather than a detail. The recovered per-gene frameshift rate is a FLAT PER-BP CONSTANT times
+// CDS length: frameshift/bp takes exactly ONE distinct value across all 19,587 genes
+// (6.810762e-10, spread max/min = 1.0000). For contrast, the nonsense+splice rate per bp — a
+// genuinely context-aware term from the trinucleotide model — takes 19,342 distinct values and
+// spans 54.4x. denovonear's independently-emitted frameshift_rate is the same construction with
+// the same constant (6.8043e-10, agreeing to 0.1%), calibrated so the exome total = 1.25x total
+// nonsense.
+// So: the frameshift HALF of the LoF target carries NO sequence context — it is a length proxy.
+// A gene's frameshift/(non+splice) ratio varies (p10 0.61, median 0.86, p90 1.45) ONLY because
+// the DENOMINATOR has context; the numerator does not. Real indel hotspots (homopolymers, short
+// tandem repeats) get no credit, and CpG-rich genes get no frameshift penalty. This is Samocha
+// 2014's own simplification, not ours, and it is shared by every implementation of it — but it
+// means the LoF tier's target is context-aware for ~54% of its mass and length-only for ~46%.
 // NB denovolyzeR's own "all" class DOES include frameshift (all = syn+mis+lof there), whereas
 // DeNovoWEST's p_all does not. The two tables define "all" differently; do not carry an
 // intuition from one to the other. Note also splice/non = 0.46 in this model — essential
