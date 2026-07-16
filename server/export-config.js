@@ -48,9 +48,24 @@ const DEFAULT_EXPORT_CONFIG = {
         mitoLocalization: true,   // mitochondrial localization (binary, MitoCarta inventory)
         mitoSubLocalization: true,// sub-mitochondrial localization (Matrix/MIM/MOM/IMS)
         mitoPathways: true,       // MitoPathways3.0 functional hierarchy
-        // Test B: de novo mutation-rate enrichment (separate "DNM Rate" tab).
-        // De-novo-only (needs an `inheritance` column) + gnomAD μ (GRCh38); self-skips otherwise.
-        dnmRateTest: true         // λ = 2·N·μ Poisson enrichment (Samocha framework, gnomAD v4.1 rates)
+        // Test B: de novo mutation-rate enrichment (separate "DNM Rate" tabs).
+        //
+        // WITHHELD (default false) pending a rate-source correction. It is OFF because it is
+        // ACTIVELY WRONG, not merely unvalidated: λ is built from gnomAD's lof.mu/mis.mu/syn.mu,
+        // which are NOT per-transmission de novo rates. gnomAD fits `expected = mu·slope +
+        // intercept` and refits the slope, so mu is identified only up to a proportionality
+        // constant — summing it predicts 0.276 coding de novo per trio against a published
+        // ~1.0–1.3, i.e. λ ≈ 3.9× too small. Deflated λ drags small-μ genes across the FDR
+        // threshold on a SINGLE de novo: measured against the shipped bundle, ~200 genes earn
+        // q<0.05 off one variant at N=220 (530 at N=50) where correct rates give 32. Its class
+        // balance is separately wrong (lof.mu/syn.mu = 0.319 vs 0.168 from three independent
+        // implementations), which no scale constant can repair.
+        //
+        // The replacement is built and validated — data/annotations/dnm_rates.json.gz
+        // (`build-annotation-data.js dnmRates`): SNV-only per-transmission probabilities from
+        // the Samocha 2014 model. Re-enable once the engine reads it and applies the empirical
+        // calibration ê (λ = 2·N·p·ê). Setting this true today re-ships the false ✓ marks.
+        dnmRateTest: false        // ⚠ see above — do not enable until λ reads dnm_rates.json.gz
     },
 
     // Per-gene impact counts on the Gene Summary tab (curation-derived, not

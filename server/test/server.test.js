@@ -3904,17 +3904,17 @@ describe('Gene Summary impact counts and annotations', function () {
         const res = await request(app).post('/api/export/xlsx')
             .send({variantIds: [0, 1, 2, 3, 4], exportConfig: {genomeBuild: 'hg19',
                 geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false, gnomadConstraint: {enabled: false}, clinvar: {enabled: false}},
-                geneAnalysis: {enabled: true, domain: false}}})
+                geneAnalysis: {enabled: true, domain: false, dnmRateTest: true}}})   // opt in, else hg19 isn't what suppresses it
             .buffer(true).parse(binaryParser).expect(200)
         const wb = new ExcelJS.Workbook()
         await wb.xlsx.load(res.body)
         expect(wb.worksheets.map(w => w.name)).to.not.include.members(['DNM Rate (gene-set)', 'DNM Rate (per-gene)'])
     })
 
-    it('xlsx emits the DNM Rate tab when the data has an inheritance column + gnomAD μ', async function () {
+    it('xlsx emits the DNM Rate tab when explicitly opted in (inheritance column + gnomAD μ)', async function () {
         this.timeout(10000)
         const exportConfig = {geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false},
-            geneAnalysis: {enabled: true, domain: false}}
+            geneAnalysis: {enabled: true, domain: false, dnmRateTest: true}}
         const res = await request(app).post('/api/export/xlsx')
             .send({variantIds: [0, 1, 2, 3, 4], exportConfig})
             .buffer(true).parse(binaryParser).expect(200)
@@ -3922,5 +3922,31 @@ describe('Gene Summary impact counts and annotations', function () {
         await wb.xlsx.load(res.body)
         const names = wb.worksheets.map(w => w.name)
         expect(names, names.join(',')).to.include.members(['DNM Rate (gene-set)', 'DNM Rate (per-gene)'])   // both tabs wired (placeholder genes ⇒ empty, but present)
+    })
+
+    // Test B ships WITHHELD: its λ comes from gnomAD's lof/mis/syn.mu, which are mutability
+    // covariates, not per-transmission de novo rates (λ ≈ 3.9x too small ⇒ ~200 false q<0.05
+    // genes off a single variant at N=220). Guards the default so it cannot be re-enabled by
+    // accident — only a deliberate dnmRateTest:true brings it back.
+    it('Test B is withheld by DEFAULT — no DNM Rate tab unless explicitly opted in', async function () {
+        this.timeout(10000)
+        const {DEFAULT_EXPORT_CONFIG} = require('../export-config')
+        expect(DEFAULT_EXPORT_CONFIG.geneAnalysis.dnmRateTest, 'default must stay false pending the rate-source fix').to.equal(false)
+        const exportConfig = {geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false},
+            geneAnalysis: {enabled: true, domain: false}}   // no dnmRateTest ⇒ default applies
+        const res = await request(app).post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4], exportConfig})
+            .buffer(true).parse(binaryParser).expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        const names = wb.worksheets.map(w => w.name)
+        expect(names, names.join(',')).to.not.include.members(['DNM Rate (gene-set)', 'DNM Rate (per-gene)'])
+        // ...and the Read Me says so, rather than leaving the reader to notice an absence.
+        const readme = wb.getWorksheet('Read Me')
+        let withheldRow = null
+        readme.eachRow(r => { if (String(r.getCell(1).value || '').includes('Mutation-rate test (withheld)')) withheldRow = r })
+        expect(withheldRow, 'Read Me must document the withheld test').to.not.be.null
+        // The note must say it is a DELIBERATE suppression, not an accidental absence.
+        expect(String(withheldRow.getCell(2).value)).to.include('deliberately withheld')
     })
 })
