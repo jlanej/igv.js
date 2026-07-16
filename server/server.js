@@ -1389,7 +1389,7 @@ function buildReadmeSheet(workbook, opts) {
         row('Inclusion / exclusion', 'Counted: curation-PASS + `inheritance==de_novo` + autosomal + a modelled consequence class + a gene with a de novo RATE FOR THAT class + SNV, EXCEPT frameshift. Frameshift is the one class the rate model gives an indel term (p_lof − pNonSplice), so frameshift de novo indels are counted AND targeted; every other class pairs with an SNV-only rate, so a nonsense or missense call on an indel has no target. Excluded (STILL analysed by Test A): indels OTHER than frameshift (inframe insertion/deletion, and any non-frameshift class called on an indel, have no rate term), chrX/Y (2·N assumes two autosomal copies; proband sex unknown), MODIFIER/non-coding (no coding rate), genes without a rate, and genes lacking a rate for the variant\'s own class (no modelable target → would inflate k without λ). Under the IMPACT fallback (no Consequence column) frameshift is not countable — IMPACT lumps it in with nonsense under HIGH — so the LoF tier goes SNV-only on BOTH the count and the target: less powerful, never inflated. Exact excluded counts print on the tab.')
         row('Cohort N', 'N = the Sample-QC trio count when a --sample-qc file is loaded (counts 0-DNM trios — the correct denominator). Without it, N falls back to distinct probands in the callset, which UNDERCOUNTS (omits 0-DNM trios) → λ too small → anti-conservative p; the tab then marks results PROVISIONAL and withholds the ✓.')
         row('Multiple testing & calibration', 'FDR q = Benjamini-Hochberg per dimension across the FULL a-priori (category × tier) grid — every library category with a modelable μ, including those with NO observed de novo (exact p=1). Correcting only across the categories that happened to be hit would let the data choose the family and push the true FDR far above nominal; the minCount display filter runs AFTER the correction, so hiding a row never changes a q. Family size m prints in each section header. ✓ = q<0.05 (withheld when N is provisional). A synonymous calibration control (observed vs 2·N·Σsyn.μ) is reported: ≈1 ⇒ complete ascertainment; a ratio a little above 1 is expected because LOW-impact over-counts true synonymous, and a provisional N inflates it further. Power comes largely from recurrence, so category singletons rarely survive FDR.')
-        row('Two tabs', '"DNM Rate (gene-set)" tests gene-SET categories (the dimensions above). "DNM Rate (per-gene)" runs the same λ = 2·N·p Poisson at GENE level — one row per (gene, track) with an observed de novo variant. There, LoF / missense / protein-altering are separate EXOME-WIDE discovery families (BH across all modelable genes, not just the observed ones) and synonymous is the calibrator, shown without a discovery q. Per-gene λ is tiny, so power comes from RECURRENCE (≥2 de novo in one gene).', 'gene-set + per-gene')
+        row('Three tests, three FDR families', 'Every row carries THREE p-values because there are three different questions, and they have SEPARATE Benjamini-Hochberg families — one correction shared across them would be three chances at the same alpha. (1) POISSON, "P(X≥k)": k ~ Poisson(λ = 2·N·Σp) — more de novo than the germline rate predicts? The only one that can see an ABSOLUTE excess; needs N and the rate table\'s absolute scale, and its obs/exp is corrupted in exact proportion by any cohort-wide artefact (a uniform 3× inflation from lenient curation or a hypermutator moves it 867→2600). (2) SCALE-FREE, "p/q (scale-free)": k ~ Binomial(k + k_syn, θ), θ = Σp/(Σp+Σp_syn) — is this category skewed toward damage relative to its OWN synonymous variants? 2·N cancels out of θ. Gene-set only: a single gene has ~0.004 expected synonymous de novo, so it degenerates to θ^k and discards gene size. (3) SHARE, "p/q (share)": k | K ~ Binomial(K, π), π = Σp ÷ Σp(exome), K = the cohort\'s own total de novo count for those classes — over-represented among the de novo we ACTUALLY SAW? Needs NO trio count and NO absolute scale, so it survives a provisional N, and its obs/exp = k/(K·π) is INVARIANT under that same 3× inflation (465.0 either way). Its price is the mirror image: a GENUINE exome-wide excess divides out too, so it reports only RELATIVE over-representation. Both (1) and (3) run per-gene as well; (3) is the only scale-free test that works there. NB the share p-value still shrinks as the cohort grows — that is more data measuring the same share, not an artefact being handled; read its obs/exp for the artefact-proof number. Method for (3): Kobren, Moldovan et al., Nat Commun 2025 (RaMeDiES), implemented from the published description — their code (GPL-3) and precomputed files (variant pathogenicity scores, several non-commercial) are NOT used.', 'Poisson + scale-free + share')
         row('References', 'Samocha et al. Nat Genet 2014;46:944 (framework + rate model); Ware et al. Curr Protoc Hum Genet 2015 (denovolyzeR); Karczewski et al. Nature 2020;581:434 & Chen et al. Nature 2024;625:92 (gnomAD rates); Benjamini & Hochberg JRSS-B 1995;57:289 (FDR).')
     }
 
@@ -1858,6 +1858,8 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     // class-skewed curation pass rate moves θ and it over-rejects, while the Poisson merely
     // loses power. Its value is that it is immune to the rate table's absolute scale.
     const condStr = (cc) => { if (!cc || cc.pCond == null) return '—'; return `${fmtP(cc.pCond)} / ${fmtP(cc.qCond)}` }
+    // The cohort-conditioned test: k | K ~ Binomial(K, π). Its own family, its own column.
+    const shareStr = (cc) => { if (!cc || cc.pShare == null) return '—'; return `${fmtP(cc.pShare)} / ${fmtP(cc.qShare)}` }
     const MAX_GROUPS_PER_DIM = 25
 
     // Columns: Category | tier "k ✓" | # genes | # probands | tier "p/q" (Poisson) |
@@ -1870,10 +1872,12 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     const nAlt = meta.altTable ? 2 : 0
     const CG = 1 + nT + 1, CP = CG + 1, PQ0 = CP + 1
     const CQ0 = PQ0 + nT                                   // scale-free p/q, one per tier
-    const DK = CQ0 + nT, DKS = DK + 1, DMU = DKS + 1, DMUS = DMU + 1, DTH = DMUS + 1
+    const SQ0 = CQ0 + nT                                   // cohort-conditioned p/q, one per tier
+    const DK = SQ0 + nT, DKS = DK + 1, DMU = DKS + 1, DMUS = DMU + 1, DTH = DMUS + 1
     const DLAM = DTH + 1, DP = DLAM + 1
-    const DLAMALT = nAlt ? DP + 1 : null, DRATIO = nAlt ? DP + 2 : null
-    const GENES = DP + nAlt + 1
+    const SK = DP + 1, SPI = SK + 1, SEXP = SPI + 1, SP = SEXP + 1   // share derivation
+    const DLAMALT = nAlt ? SP + 1 : null, DRATIO = nAlt ? SP + 2 : null
+    const GENES = SP + nAlt + 1
     const nCols = GENES
     const headTier = tiers[nT - 1]           // the broadest coding tier = the derivation worked example
 
@@ -1922,7 +1926,9 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     const headers = ['Category', ...tiers.map(t => t.label), '# genes', '# probands',
         ...tiers.map(t => `${t.label} p/q`),
         ...tiers.map(t => `${t.label} p/q (scale-free)`),
+        ...tiers.map(t => `${t.label} p/q (share)`),
         `k (${headTier.label})`, 'k syn', 'Σp', 'Σp syn', 'θ', 'λ = 2·N·Σp', 'P(X≥k)',
+        'K (cohort)', 'π = Σp/Σp(exome)', 'exp share = K·π', 'P(X≥k | K)',
         ...(meta.altTable ? ['λ (cross-check)', 'λ ratio'] : []), 'Genes']
     r++
     const hdr = ws.addRow(headers)
@@ -1969,6 +1975,7 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
             vals.push(g.genes.length, g.probands)
             for (const t of tiers) vals.push(pqStr(g.cells[t.key]))
             for (const t of tiers) vals.push(condStr(g.cells[t.key]))
+            for (const t of tiers) vals.push(shareStr(g.cells[t.key]))
             // derivation (headTier), with live Excel formulas
             const kA = colLetter(DK) + rowNum, muA = colLetter(DMU) + rowNum, lamA = colLetter(DLAM) + rowNum
             const muSA = colLetter(DMUS) + rowNum
@@ -1981,6 +1988,13 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
             vals.push((hc.k > 0 && hc.lambda != null)
                 ? {formula: `1-POISSON(${kA}-1,${lamA},TRUE)`, result: hc.p}
                 : '—')
+            // The cohort-conditioned derivation, live: π and the expected share are formulas so a
+            // reader can SEE that neither N nor the absolute scale appears anywhere in them.
+            vals.push(hc.kCohort != null ? hc.kCohort : '—')
+            vals.push(hc.pi != null ? hc.pi : '—')
+            const kcA = colLetter(SK) + rowNum, piA = colLetter(SPI) + rowNum
+            vals.push(hc.expShare != null ? {formula: `${kcA}*${piA}`, result: hc.expShare} : '—')
+            vals.push(hc.pShare != null ? {formula: `1-BINOM.DIST(${kA}-1,${kcA},${piA},TRUE)`, result: hc.pShare} : '—')
             // The cross-check λ for the same k under the OTHER rate table, and the ratio. Near 1
             // ⇒ the rate source is not carrying this row. No p — see the cross-check banner.
             if (meta.altTable) {
@@ -2038,8 +2052,9 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
     // the λ-ratio column when the second rate table is present.
     const nAlt = (dnm.meta && dnm.meta.altTable) ? 2 : 0
     const G = 1, K = 2, MU = 3, LAM = 4, P = 5, Q = 6
-    const LAMALT = nAlt ? 7 : null, RATIO = nAlt ? 8 : null
-    const LOEUF = 7 + nAlt, PLI = 8 + nAlt, CONS = 9 + nAlt, nCols = 9 + nAlt
+    const SK = 7, SPI = 8, SP = 9, SQ = 10                 // cohort-conditioned share test
+    const LAMALT = nAlt ? 11 : null, RATIO = nAlt ? 12 : null
+    const LOEUF = 11 + nAlt, PLI = 12 + nAlt, CONS = 13 + nAlt, nCols = 13 + nAlt
     const mergeAcross = (rr) => ws.mergeCells(rr, 1, rr, nCols)
     let r = 0
     const banner = (text, font) => { r++; const row = ws.addRow([text]); mergeAcross(r); row.getCell(1).font = font; row.getCell(1).alignment = {wrapText: true, vertical: 'top'}; return row }
@@ -2052,7 +2067,8 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
     // The scale-free test is deliberately NOT offered here. It is not an oversight and it
     // is not laziness: it is measurably vacuous at gene level, and shipping it would invite
     // a reader to trust a number that carries no information about the gene.
-    banner(`WHY THERE IS NO "scale-free" COLUMN HERE (there is one on the gene-set tab): that test conditions on a row's OWN total T = k + k_syn, which needs the row to actually contain synonymous de novo variants. A gene does not. At N=${N} the AVERAGE gene expects ${meta.rateGenes > 0 ? (2 * N * meta.totalP.syn / meta.rateGenes).toFixed(4) : '≈0.004'} synonymous de novo variants (2·N·Σp_syn ÷ ${meta.rateGenes ? meta.rateGenes.toLocaleString() : '~18.5k'} genes) — well under a 1% chance of even one — so T = k almost always, and the test collapses to p = θ^k. That uses NOTHING about the gene's mutational target size: a huge gene and a tiny one, each with 2 nonsense de novo, would receive an IDENTICAL p-value. Gene size is precisely the information that makes a per-gene rate test meaningful, so the Poisson λ = 2·N·p is the only test offered at this level. A gene set aggregates hundreds of genes, so its synonymous count is real and the scale-free test is informative there.`,
+    banner(`THE "P(X≥k | K)" COLUMN — the scale-free test that DOES work at gene level, and why it is a different one from the gene-set tab's. That tab conditions a category on its OWN synonymous count; a GENE has none to speak of. At N=${N} the average gene expects ${meta.rateGenes > 0 ? (2 * N * meta.totalP.syn / meta.rateGenes).toFixed(4) : "≈0.004"} synonymous de novo (2·N·Σp_syn ÷ ${meta.rateGenes ? meta.rateGenes.toLocaleString() : "~18.5k"} genes) — well under a 1% chance of even one — so T would equal k and that test would collapse to p = θ^k, which uses NOTHING about the gene's target size: a huge gene and a tiny one, each with 2 nonsense de novo, would get an IDENTICAL p. Gene size is precisely the information a per-gene rate test exists to use. So this column conditions on the COHORT's total instead: k | K ~ Binomial(K, π) with π = p(gene) ÷ Σp(exome) and K = ${meta.byClass ? "the cohort's own de novo count for that track" : "the cohort total"}. K is a real number, so gene size re-enters through π and the test has power. Measured on this design: TTN (largest target) and MTRNR2L5 (smallest), both with k=2, give P = 6.7e-3 vs 1.3e-9 — size is doing the work. It needs NO trio count and NO absolute rate scale, so it stays valid when N is provisional, exactly when the Poisson beside it is least trustworthy. READ IT AS A COMPANION, NOT A TIEBREAK: the two answer different questions and have SEPARATE FDR families. The Poisson asks "more than the germline rate predicts?" — it can see an ABSOLUTE excess but its obs/exp is corrupted in exact proportion by any cohort-wide artefact (measured: a uniform 3× inflation from lenient curation or a hypermutator moves it 867→2600, a fabricated effect). This one asks "over-represented among the de novo we ACTUALLY SAW?" — its obs/exp = k/(K·π) is INVARIANT under that same 3× inflation (465.0 either way), because the multiplier lands in k and K alike and divides out. The price is the mirror image: a GENUINE exome-wide excess divides out too, so it can only ever report a RELATIVE excess. Note both p-values still shrink as the cohort grows — that is more data measuring the same share, not the artefact being handled. Read the obs/exp, not the p, when you want the artefact-proof number. Method: Kobren, Moldovan et al., Nat Commun 2025 (RaMeDiES); implemented from the published description.`,
+
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
     if (!reliable) banner('⚠ PROVISIONAL N: no Sample-QC trio file → N is a lower bound → λ too small → anti-conservative p; ✓ withheld. (Unlike the gene-set tab, there is no scale-free fallback at gene level — see the note above.)', {bold: true, italic: true, size: 10, color: {argb: 'FFB03A2E'}})
     r++; ws.addRow([])
@@ -2062,6 +2078,7 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
     // carrying the row; '—' says the OTHER table has no rate for this gene (e.g. MYC, which
     // DeNovoWEST leaves rate-less at p_all=NA) — which is 'unknown', never 'zero target'.
     const headers = ['Gene', 'k (de novo variants)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q',
+        'K (cohort)', 'π = p/Σp(exome)', 'P(X≥k | K)', 'q (share)',
         ...(altT ? ['λ (cross-check)', 'λ ratio'] : []), 'LOEUF', 'pLI', 'Constrained?']
     r++
     const hdr = ws.addRow(headers)
@@ -2102,6 +2119,13 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
                 {formula: `2*${N}*${muA}`, result: row.lambda},
                 (row.k > 0 && row.lambda != null) ? {formula: `1-POISSON(${kA}-1,${lamA},TRUE)`, result: row.p} : '—',
                 tr.discovery ? (row.q == null ? '—' : row.q) : 'cal',
+                // The cohort-conditioned test — the ONLY scale-free one that works at gene
+                // level (see the banner). Live formula: no N, no absolute scale in it.
+                row.kCohort == null ? '—' : row.kCohort,
+                row.pi == null ? '—' : row.pi,
+                row.pShare == null ? '—'
+                    : {formula: `1-BINOM.DIST(${kA}-1,${colLetter(SK)}${rowNum},${colLetter(SPI)}${rowNum},TRUE)`, result: row.pShare},
+                tr.discovery ? (row.qShare == null ? '—' : row.qShare) : 'cal',
                 ...(altT ? [row.lambdaAlt == null ? '—' : row.lambdaAlt,
                     row.lambdaRatio == null ? '—' : row.lambdaRatio] : []),
                 con.loeuf != null ? con.loeuf : '—',
@@ -2115,6 +2139,9 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
             const xr = ws.addRow(vals)
             xr.eachCell(c => { c.border = borderThin; if (idx % 2 === 1) c.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}} })
             for (const c of [K, MU, LAM, P, Q, LOEUF, PLI, CONS]) xr.getCell(c).alignment = {horizontal: 'center'}
+            if (typeof vals[SPI - 1] === 'number') xr.getCell(SPI).numFmt = FMT_MU
+            if (tr.discovery && typeof vals[SQ - 1] === 'number') xr.getCell(SQ).numFmt = FMT_PVAL
+            xr.getCell(SP).numFmt = FMT_PVAL
             if (nAlt) {
                 if (typeof vals[LAMALT - 1] === 'number') xr.getCell(LAMALT).numFmt = FMT_LAM
                 if (typeof vals[RATIO - 1] === 'number') xr.getCell(RATIO).numFmt = '0.000'

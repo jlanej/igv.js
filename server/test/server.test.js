@@ -3887,7 +3887,7 @@ describe('Gene Summary impact counts and annotations', function () {
         ws.eachRow(r => { const f = r.getCell(1).value
             if (f === 'Gene') r.eachCell(c => hdr.push(String(c.value)))
             if (/^TSC2/.test(String(f))) row = r })
-        expect(hdr).to.deep.equal(['Gene', 'k (de novo variants)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q', 'LOEUF', 'pLI', 'Constrained?'])
+        expect(hdr).to.deep.equal(['Gene', 'k (de novo variants)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q', 'K (cohort)', 'π = p/Σp(exome)', 'P(X≥k | K)', 'q (share)', 'LOEUF', 'pLI', 'Constrained?'])
         // The second axis lands in the right cells: surprise (λ, p) and constraint, side by side.
         expect(row.getCell(hdr.indexOf('LOEUF') + 1).value).to.equal(0.21)
         expect(row.getCell(hdr.indexOf('pLI') + 1).value).to.equal(0.99)
@@ -4023,7 +4023,7 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(pgws, 'per-gene tab created').to.not.be.undefined
         const phdr = []; let tscRow = null
         pgws.eachRow(r => { const f = r.getCell(1).value; if (f === 'Gene') r.eachCell(c => phdr.push(String(c.value))); if (/^TSC2/.test(String(f))) tscRow = r })
-        expect(phdr).to.deep.equal(['Gene', 'k (de novo variants)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q', 'LOEUF', 'pLI', 'Constrained?'])
+        expect(phdr).to.deep.equal(['Gene', 'k (de novo variants)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q', 'K (cohort)', 'π = p/Σp(exome)', 'P(X≥k | K)', 'q (share)', 'LOEUF', 'pLI', 'Constrained?'])
         expect(tscRow, 'TSC2 row').to.not.be.null
         const pgP = tscRow.getCell(phdr.indexOf('P(X≥k)') + 1).value
         const pgLam = tscRow.getCell(phdr.indexOf('λ = 2·N·p') + 1).value
