@@ -1861,12 +1861,19 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     const MAX_GROUPS_PER_DIM = 25
 
     // Columns: Category | tier "k ✓" | # genes | # probands | tier "p/q" (Poisson) |
-    //          tier "p/q" (scale-free) | k | k_syn | Σp | Σp_syn | θ | λ | P(X≥k) | Genes
+    //          tier "p/q" (scale-free) | k | k_syn | Σp | Σp_syn | θ | λ | P(X≥k)
+    //          [| λ (cross-check) | λ ratio]  | Genes
+    // nAlt is 0 or 2 and EVERY constant downstream of λ is derived from it — the cross-check
+    // columns are inserted, not appended, so a hardcoded index here would silently write the
+    // gene list into the ratio column.
     const T0 = 2, nT = tiers.length
+    const nAlt = meta.altTable ? 2 : 0
     const CG = 1 + nT + 1, CP = CG + 1, PQ0 = CP + 1
     const CQ0 = PQ0 + nT                                   // scale-free p/q, one per tier
     const DK = CQ0 + nT, DKS = DK + 1, DMU = DKS + 1, DMUS = DMU + 1, DTH = DMUS + 1
-    const DLAM = DTH + 1, DP = DLAM + 1, GENES = DP + 1
+    const DLAM = DTH + 1, DP = DLAM + 1
+    const DLAMALT = nAlt ? DP + 1 : null, DRATIO = nAlt ? DP + 2 : null
+    const GENES = DP + nAlt + 1
     const nCols = GENES
     const headTier = tiers[nT - 1]           // the broadest coding tier = the derivation worked example
 
@@ -1893,6 +1900,14 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     const cal = meta.calibration || {}
     banner(`MODEL FIT — the QC readout, and a REAL check (not a tautology). Observed vs expected under λ = 2·N·Σp, exome-wide, per class: synonymous ${cal.syn ? cal.syn.obs : 0} vs ${cal.syn && cal.syn.exp != null ? cal.syn.exp.toFixed(1) : '—'} = ${cal.syn ? fmtR(cal.syn.ratio) : '—'}${cal.synRelSe != null ? ` (±${(100 * cal.synRelSe).toFixed(0)}%)` : ''}  ·  missense ${cal.mis ? cal.mis.obs : 0} vs ${cal.mis && cal.mis.exp != null ? cal.mis.exp.toFixed(1) : '—'} = ${cal.mis ? fmtR(cal.mis.ratio) : '—'}  ·  nonsense+splice ${cal.nonSplice ? cal.nonSplice.obs : 0} vs ${cal.nonSplice && cal.nonSplice.exp != null ? cal.nonSplice.exp.toFixed(1) : '—'} = ${cal.nonSplice ? fmtR(cal.nonSplice.ratio) : '—'}${cal.frameshift ? `  ·  frameshift ${cal.frameshift.obs} vs ${cal.frameshift.exp != null ? cal.frameshift.exp.toFixed(1) : '—'} = ${fmtR(cal.frameshift.ratio)} (the INDEL class — expect it BELOW the synonymous ratio, since de novo indel calling is less sensitive than SNV calling; that gap is exactly what it measures)` : ''}. READ THE SYNONYMOUS ONE FIRST: it is ~selection-neutral, so it should sit near 1.0 and it measures how many de novo variants this cohort actually detects and curates. ≈1 ⇒ the rate model fits and the tests below have their full power. Well under 1 ⇒ you are seeing only that fraction of de novo variants, so every test below is CONSERVATIVE and correspondingly under-powered — not wrong, just quiet. Far ABOVE 1 ⇒ the rate model does not fit this data and nothing below should be trusted (this is the check that caught a 4.5× error in an earlier rate source).`,
         {bold: true, italic: true, size: 10, color: {argb: 'FF1F618D'}})
+    // The rate source is the question a reader is most entitled to be sceptical about ("is this
+    // model from 2014?"). Answer it with a number they can check, not a citation.
+    if (meta.altTable && meta.altTable.agreement) {
+        const ag = meta.altTable.agreement
+        const pct = (r) => r == null ? '—' : `${((r - 1) * 100).toFixed(1)}%`
+        banner(`RATE-SOURCE CROSS-CHECK — the λ above does not depend on which rate table produced it, and you can check that here rather than take it on trust. λ is computed from "${meta.rateTable ? meta.rateTable.label : 'the primary table'}" (${meta.rateGenes.toLocaleString()} modelable autosomal genes) and INDEPENDENTLY from "${meta.altTable.label}" (${(meta.altTable.rateGenes || 0).toLocaleString()} genes); the "λ (cross-check)" column prints the second one per row. Exome-wide the two targets differ by: synonymous ${pct(ag.syn)}  ·  missense ${pct(ag.mis)}  ·  nonsense+splice ${pct(ag.nonSplice)}  ·  LoF ${pct(ag.lof)}. They agree because they are the SAME published mutation model (Samocha 2014) built independently on DIFFERENT transcript sets — one from the DeNovoWEST release, one recomputed with denovonear over MANE Select v1.5/GRCh38 — so a per-row ratio near 1 means the rate source is NOT what is carrying that row. A ratio far from 1 means the two transcript sets disagree about that gene's size, which is a fact about annotation, not about your cohort. There is no second p-value and no second FDR family: a second p would only invite reading whichever is smaller.`,
+            {italic: true, size: 10, color: {argb: 'FF117864'}})
+    }
     banner(`NO SCALE IS FITTED to this cohort, deliberately. An empirical calibration (ê = observed_syn ÷ expected_syn, applied as λ = 2·N·Σp·ê) was built and REMOVED: measured, it made the test 1.4–3.0× too permissive on exactly the categories read first (its noise enters λ un-propagated, worse the larger the category), and it imported curation bias, since a reviewer who passes damaging variants more readily than synonymous ones shrinks every λ. Un-calibrated, λ can only be too LARGE — a cohort can miss de novo variants but cannot invent them — so the tests below are conservative under any ascertainment or curation regime. The price is power when the synonymous ratio is well below 1, and that is exactly what the ratio above tells you. Refs: Samocha 2014 Nat Genet 46:944 (model); Kaplanis & Samocha 2020 Nature 586:757 + DeNovoWEST, MIT (rates); Benjamini-Hochberg 1995; Benjamini-Yekutieli 2001 (FDR under the nested tiers' positive dependence).`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
     banner(`CURATION — the assumption behind every count here, stated plainly. Every variant counted above is a CURATION-PASS de novo. The tests ask whether damaging de novo exceed the mutation rate; they cannot know WHY a variant was passed. The assumption is that review is CLASS-BLIND — that synonymous de novo are examined as readily as damaging ones. Nothing in this tool filters review by impact, so that holds by default; it can be broken only by a reviewing habit, and the model-fit ratios above are how you would see it. Read them together: if synonymous were reviewed less than damaging, the synonymous ratio would sit BELOW the damaging ratios, and the gap between the class ratios is the measure of it. Note this cannot make the Poisson over-reject — λ never uses the synonymous count — it would only mean the synonymous ratio understates true detection, i.e. the tests are even more conservative than it suggests.`,
@@ -1907,7 +1922,8 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     const headers = ['Category', ...tiers.map(t => t.label), '# genes', '# probands',
         ...tiers.map(t => `${t.label} p/q`),
         ...tiers.map(t => `${t.label} p/q (scale-free)`),
-        `k (${headTier.label})`, 'k syn', 'Σp', 'Σp syn', 'θ', 'λ = 2·N·Σp', 'P(X≥k)', 'Genes']
+        `k (${headTier.label})`, 'k syn', 'Σp', 'Σp syn', 'θ', 'λ = 2·N·Σp', 'P(X≥k)',
+        ...(meta.altTable ? ['λ (cross-check)', 'λ ratio'] : []), 'Genes']
     r++
     const hdr = ws.addRow(headers)
     hdr.eachCell(c => { c.fill = headerFill; c.font = headerFont; c.border = borderThin; c.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true} })
@@ -1965,12 +1981,23 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
             vals.push((hc.k > 0 && hc.lambda != null)
                 ? {formula: `1-POISSON(${kA}-1,${lamA},TRUE)`, result: hc.p}
                 : '—')
+            // The cross-check λ for the same k under the OTHER rate table, and the ratio. Near 1
+            // ⇒ the rate source is not carrying this row. No p — see the cross-check banner.
+            if (meta.altTable) {
+                vals.push(hc.lambdaAlt == null ? '—' : hc.lambdaAlt)
+                vals.push(hc.lambdaRatio == null ? '—' : hc.lambdaRatio)
+            }
             vals.push(genesStr)
             r++
             const row = ws.addRow(vals)
             row.eachCell(c => { c.border = borderThin; if (idx % 2 === 1) c.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}} })
             for (let i = 0; i < nT; i++) row.getCell(T0 + i).alignment = {horizontal: 'center'}
             for (const c of [CG, CP, DK, DKS, DMU, DMUS, DTH, DLAM, DP]) row.getCell(c).alignment = {horizontal: 'center'}
+            if (nAlt) {
+                for (const c of [DLAMALT, DRATIO]) row.getCell(c).alignment = {horizontal: 'center'}
+                if (typeof hc.lambdaAlt === 'number') row.getCell(DLAMALT).numFmt = FMT_LAM
+                if (typeof hc.lambdaRatio === 'number') row.getCell(DRATIO).numFmt = '0.000'
+            }
             for (let i = 0; i < nT; i++) { row.getCell(PQ0 + i).alignment = {horizontal: 'center'}; row.getCell(CQ0 + i).alignment = {horizontal: 'center'} }
             row.getCell(DMU).numFmt = FMT_MU; row.getCell(DMUS).numFmt = FMT_MU
             row.getCell(DTH).numFmt = '0.0000'
@@ -2006,7 +2033,13 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
     const isSig = (row) => reliable && row.discovery && row.q != null && row.q < 0.05   // ✓ withheld when provisional
     const MAX_PER_TRACK = 100
 
-    const G = 1, K = 2, MU = 3, LAM = 4, P = 5, Q = 6, LOEUF = 7, PLI = 8, CONS = 9, nCols = 9
+    // nAlt is 0 or 2: the cross-check λ columns are INSERTED after q, so every constant after
+    // them is derived rather than hardcoded — otherwise LOEUF would silently be written into
+    // the λ-ratio column when the second rate table is present.
+    const nAlt = (dnm.meta && dnm.meta.altTable) ? 2 : 0
+    const G = 1, K = 2, MU = 3, LAM = 4, P = 5, Q = 6
+    const LAMALT = nAlt ? 7 : null, RATIO = nAlt ? 8 : null
+    const LOEUF = 7 + nAlt, PLI = 8 + nAlt, CONS = 9 + nAlt, nCols = 9 + nAlt
     const mergeAcross = (rr) => ws.mergeCells(rr, 1, rr, nCols)
     let r = 0
     const banner = (text, font) => { r++; const row = ws.addRow([text]); mergeAcross(r); row.getCell(1).font = font; row.getCell(1).alignment = {wrapText: true, vertical: 'top'}; return row }
@@ -2024,7 +2057,12 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
     if (!reliable) banner('⚠ PROVISIONAL N: no Sample-QC trio file → N is a lower bound → λ too small → anti-conservative p; ✓ withheld. (Unlike the gene-set tab, there is no scale-free fallback at gene level — see the note above.)', {bold: true, italic: true, size: 10, color: {argb: 'FFB03A2E'}})
     r++; ws.addRow([])
 
-    const headers = ['Gene', 'k (de novo variants)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q', 'LOEUF', 'pLI', 'Constrained?']
+    const altT = meta.altTable || null
+    // The cross-check λ rides beside the primary one. A ratio near 1 says the rate source is not
+    // carrying the row; '—' says the OTHER table has no rate for this gene (e.g. MYC, which
+    // DeNovoWEST leaves rate-less at p_all=NA) — which is 'unknown', never 'zero target'.
+    const headers = ['Gene', 'k (de novo variants)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q',
+        ...(altT ? ['λ (cross-check)', 'λ ratio'] : []), 'LOEUF', 'pLI', 'Constrained?']
     r++
     const hdr = ws.addRow(headers)
     hdr.eachCell(c => { c.fill = headerFill; c.font = headerFont; c.border = borderThin; c.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true} })
@@ -2064,6 +2102,8 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
                 {formula: `2*${N}*${muA}`, result: row.lambda},
                 (row.k > 0 && row.lambda != null) ? {formula: `1-POISSON(${kA}-1,${lamA},TRUE)`, result: row.p} : '—',
                 tr.discovery ? (row.q == null ? '—' : row.q) : 'cal',
+                ...(altT ? [row.lambdaAlt == null ? '—' : row.lambdaAlt,
+                    row.lambdaRatio == null ? '—' : row.lambdaRatio] : []),
                 con.loeuf != null ? con.loeuf : '—',
                 con.pli != null ? con.pli : '—',
                 // Use the provider's isConstrained — it declares itself the SINGLE SOURCE OF
@@ -2075,6 +2115,10 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
             const xr = ws.addRow(vals)
             xr.eachCell(c => { c.border = borderThin; if (idx % 2 === 1) c.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}} })
             for (const c of [K, MU, LAM, P, Q, LOEUF, PLI, CONS]) xr.getCell(c).alignment = {horizontal: 'center'}
+            if (nAlt) {
+                if (typeof vals[LAMALT - 1] === 'number') xr.getCell(LAMALT).numFmt = FMT_LAM
+                if (typeof vals[RATIO - 1] === 'number') xr.getCell(RATIO).numFmt = '0.000'
+            }
             if (typeof vals[LOEUF - 1] === 'number') xr.getCell(LOEUF).numFmt = '0.00'
             if (typeof vals[PLI - 1] === 'number') xr.getCell(PLI).numFmt = '0.00'
             xr.getCell(MU).numFmt = FMT_MU; xr.getCell(LAM).numFmt = FMT_LAM; xr.getCell(P).numFmt = FMT_PVAL
@@ -2577,7 +2621,14 @@ app.post('/api/export/xlsx', async (req, res) => {
                         // The rate table is keyed by gene symbol and carries no coordinates, so
                         // it needs no GRCh38 gate — Test B runs on GRCh37 too. (If anything the
                         // rates are GRCh37-native: DeNovoWEST's table comes from the DDD study.)
-                        const rates = dnmRates.getRates()
+                        // Which of the two bundled rate tables drives the TEST. Both are the same
+                        // Samocha-2014 model on different transcripts and agree to 0.6% per gene,
+                        // so this is a provenance choice, not a statistical one: 'denovowest' is
+                        // the published table and is regenerable with one fetch; 'mane' has current
+                        // symbols and covers MYC (which DeNovoWEST leaves rate-less) but needs an
+                        // offline rebuild. The other table is reported alongside as a cross-check.
+                        const primaryTable = (exportCfg.geneAnalysis && exportCfg.geneAnalysis.ratePrimary) || dnmRates.DEFAULT_TABLE
+                        const rates = dnmRates.getRates(primaryTable)
                         // The CONSTRAINT dimension is the one exception, and it is gated exactly
                         // as Test A gates it: getBundle() is v4.1/GRCh38, but on a GRCh37 export
                         // the per-gene constraint TERMS come from the live v2.1.1 API. Passing
@@ -2600,11 +2651,25 @@ app.post('/api/export/xlsx', async (req, res) => {
                             // is SNV-only on BOTH sides. computeModelEnrichment throws if these
                             // disagree, and the surrounding try/catch drops the tab: a missing tab
                             // beats one whose LoF λ is 1.85x too large.
-                            const categoryMu = categoryRateSums(rates, {gnomad: gnB, clinvar: clinvarProvider.getGenes(), gencc: genccProvider.getGenes()}, gsLibs, !!consequenceCol)
+                            const rateBundles = {gnomad: gnB, clinvar: clinvarProvider.getGenes(), gencc: genccProvider.getGenes()}
+                            const categoryMu = categoryRateSums(rates, rateBundles, gsLibs, !!consequenceCol)
+                            // THE CROSS-CHECK TABLE. Two independently-built tables of the SAME
+                            // Samocha-2014 model on DIFFERENT transcripts (DeNovoWEST's published
+                            // 2014-era set vs denovonear on MANE Select v1.5/GRCh38). They agree to
+                            // 0.6% per gene, and printing both λ lets a reader CHECK that the rate
+                            // source is not carrying a finding instead of taking our word. It yields
+                            // a second λ only — no second p, no second BH family. Absent bundle ⇒
+                            // null ⇒ the columns simply do not appear.
+                            const altId = dnmRates.availableTables().find(t => t !== primaryTable) || null
+                            const altRates = altId ? dnmRates.getRates(altId) : null
+                            const altCategoryMu = (altRates && altRates.size)
+                                ? categoryRateSums(altRates, rateBundles, gsLibs, !!consequenceCol) : null
                             const dnm = computeModelEnrichment(filtered, {
                                 model: DE_NOVO, geneCol, impactCol: gaImpactCol, consequenceCol, statusCol: 'curation_status',
                                 sampleCol: xlsSampleCol, chromCol: 'chrom', refCol: 'ref', altCol: 'alt', inheritanceCol,
                                 geneTerms, dimensions, muByGene: rates, categoryMu,
+                                rateTable: dnmRates.describe(primaryTable),
+                                altMuByGene: altRates, altCategoryMu, altTable: altId ? dnmRates.describe(altId) : null,
                                 // totalProbands = max(distinct probands in callset, Sample-QC trio count)
                                 // — never undercounts below observed probands even in the reliable path.
                                 N: totalProbands, nReliable, minCount: 1,

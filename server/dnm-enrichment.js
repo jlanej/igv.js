@@ -377,7 +377,12 @@ function categoryRateSums(rates, bundles, geneSetLibs, countFrameshift = false) 
 function computeModelEnrichment(variants, opts) {
     const {model = DE_NOVO, geneCol, impactCol, consequenceCol = null, statusCol = 'curation_status',
         sampleCol, chromCol, refCol, altCol, inheritanceCol,
-        geneTerms, dimensions, muByGene, categoryMu, N, nReliable = false, minCount = 1} = opts
+        geneTerms, dimensions, muByGene, categoryMu, N, nReliable = false, minCount = 1,
+        // The CROSS-CHECK table (optional). Same 2014 rate model, different transcripts. It
+        // produces a SECOND λ per cell/row and nothing else: no second p, no second BH family.
+        // The question it answers is "is the rate source carrying this finding?", and a ratio
+        // answers it. A second p-value would only invite reading whichever is smaller.
+        altMuByGene = null, altCategoryMu = null, altTable = null, rateTable = null} = opts
     const cols = {geneCol, impactCol, consequenceCol, sampleCol, chromCol, refCol, altCol, inheritanceCol}
 
     if (model.nullType !== 'poisson-rate') {
@@ -504,10 +509,35 @@ function computeModelEnrichment(variants, opts) {
     meta.rateGenes = (categoryMu && categoryMu.nGenes) || 0
     meta.totalP = {nonSplice: total.nonSplice || 0, frameshift: total.frameshift || 0,
         mis: total.mis || 0, syn: total.syn || 0}
+    meta.rateTable = rateTable || null
+
+    // --- the cross-check table: agreement, reported rather than asserted -------------------
+    // Two independently-built tables of the SAME 2014 model on different transcripts. If a
+    // category's λ is the same under both, the rate source is not what carries the finding —
+    // and that is a statement a reader can CHECK on the sheet, not one they must take on trust.
+    const altTot = (altCategoryMu && altCategoryMu.total) || null
+    if (altTable && altTot) {
+        const ratio = (a, b) => (b > 0 ? a / b : null)
+        meta.altTable = Object.assign({}, altTable, {
+            totalP: {nonSplice: altTot.nonSplice || 0, frameshift: altTot.frameshift || 0,
+                mis: altTot.mis || 0, syn: altTot.syn || 0},
+            rateGenes: altCategoryMu.nGenes || 0,
+            // Exome-wide agreement per class: alt ÷ primary. ~1 ⇒ the tables concur.
+            agreement: {
+                syn: ratio(altTot.syn, total.syn),
+                mis: ratio(altTot.mis, total.mis),
+                nonSplice: ratio(altTot.nonSplice, total.nonSplice),
+                lof: ratio((altTot.nonSplice || 0) + (altTot.frameshift || 0),
+                    (total.nonSplice || 0) + (total.frameshift || 0))
+            }
+        })
+    }
 
     // --- per category × coding tier: k, λ = 2N·Σμ, p ---
+    const altCatMu = (altCategoryMu && altCategoryMu.byDim) || {}
     const sections = (dimensions || []).map(d => {
         const dimMu = catMu[d.id] || {}
+        const altDimMu = altCatMu[d.id] || {}
         // observed k per term per class, from the used variants that carry the term
         const obs = {}   // term -> {nonSplice, frameshift, mis, probands:Set, genes:Set}  (syn excluded — it is the calibrator)
         // A category's OWN synonymous count. Not a discovery quantity: it is the
@@ -579,8 +609,15 @@ function computeModelEnrichment(variants, opts) {
                 const theta = (sumMu + sumSyn) > 0 ? sumMu / (sumMu + sumSyn) : null
                 const T = k + kSyn
                 const pCond = theta == null ? null : (T > 0 ? binomUpperTail(k, T, theta) : 1)
+                // The cross-check λ: the SAME k against the other table's target. Reported as a
+                // λ and a ratio, never as a rival p-value.
+                const altT = altDimMu[term] || null
+                const altSumMu = altT ? tier.classes.reduce((s, c) => s + (altT[c] || 0), 0) : null
+                const lambdaAlt = (altSumMu != null && N > 0 && altSumMu > 0) ? 2 * N * altSumMu : null
                 cells[tier.key] = {k, kSyn, T, lambda, catMu: sumMu, catMuSyn: sumSyn, theta,
-                    p, q: null, pCond, qCond: null}
+                    p, q: null, pCond, qCond: null,
+                    lambdaAlt, catMuAlt: altSumMu,
+                    lambdaRatio: (lambdaAlt != null && lambda > 0) ? lambdaAlt / lambda : null}
             }
             allGroups.push({term, cells, kTop: cells[TOP].k, probands: o.probands.size,
                 genes: [...o.genes].sort(), refK: cells[TOP].k})
@@ -648,8 +685,15 @@ function computeModelEnrichment(variants, opts) {
             if (k <= 0) continue                         // only OBSERVED (gene, track) rows
             const mu = tr.classes.reduce((s, c) => s + rateOf(rec, c), 0)
             const lambda = (N > 0 && mu > 0) ? 2 * N * mu : null
+            // Cross-check: the same k against the other table's per-gene target. A gene absent
+            // from the alt table yields null — reported as "—", never as a silent 0 (which would
+            // read as "the other table says this gene has no target", the opposite of "unknown").
+            const altRec = altMuByGene ? altMuByGene.get(gene) : null
+            const muAlt = altRec ? tr.classes.reduce((s, c) => s + rateOf(altRec, c), 0) : null
+            const lambdaAlt = (muAlt != null && N > 0 && muAlt > 0) ? 2 * N * muAlt : null
             perGeneRows.push({gene, track: tr.key, trackLabel: tr.label, discovery: tr.discovery,
                 k, mu, lambda, p: (lambda != null && k > 0) ? poissonUpperTail(k, lambda) : null, q: null,
+                muAlt, lambdaAlt, lambdaRatio: (lambdaAlt != null && lambda > 0) ? lambdaAlt / lambda : null,
                 constraint: conOf(gene)})
         }
     }

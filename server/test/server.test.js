@@ -3894,6 +3894,85 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(row.getCell(hdr.indexOf('Constrained?') + 1).value).to.equal('Yes')
     })
 
+    it('BOTH rate tables ship, agree, and the cross-check columns land under their own headers', function () {
+        // "Report both" only means anything if the second table is REALLY there and REALLY
+        // independent. And inserting two columns mid-table is exactly how a hardcoded index
+        // silently starts writing the gene list into the ratio column — so build the real
+        // workbook and read the headers back rather than trusting the constants.
+        const {computeModelEnrichment, categoryRateSums, DE_NOVO} = require('../dnm-enrichment')
+        const {buildDnmRateCategoryTab, buildDnmRatePerGeneTab} = require('../server')
+        const dnmRates = require('../dnm-rates')
+        const dnw = dnmRates.getRates('denovowest'), mane = dnmRates.getRates('mane')
+        expect(dnw.size, 'DeNovoWEST table bundled').to.be.greaterThan(15000)
+        expect(mane.size, 'MANE/denovonear table bundled').to.be.greaterThan(15000)
+        expect(dnmRates.availableTables(), 'both tables readable').to.include.members(['denovowest', 'mane'])
+        // MYC is the concrete gene the MANE table rescues: DeNovoWEST leaves it rate-less (p_all=NA).
+        expect(mane.has('MYC'), 'MANE has MYC').to.equal(true)
+        expect(dnw.has('MYC'), 'DeNovoWEST does NOT (p_all=NA) — the gap the second table fills').to.equal(false)
+
+        const fam = new Map([['TSC2', ['TSC complex']]])
+        const geneTerms = new Map([['TSC2', {fam: ['TSC complex']}]])
+        const V = (o) => Object.assign({gene: 'TSC2', curation_status: 'pass', inheritance: 'de_novo', chrom: 'chr16'}, o)
+        const variants = [
+            V({Consequence: 'stop_gained', impact: 'HIGH', ref: 'C', alt: 'T', sample: 'P1'}),
+            V({Consequence: 'frameshift_variant', impact: 'HIGH', ref: 'AT', alt: 'A', sample: 'P2'}),
+            V({Consequence: 'synonymous_variant', impact: 'LOW', ref: 'G', alt: 'A', sample: 'P3'})
+        ]
+        const build = (withAlt) => computeModelEnrichment(variants, Object.assign({
+            model: DE_NOVO, geneCol: 'gene', impactCol: 'impact', consequenceCol: 'Consequence',
+            sampleCol: 'sample', chromCol: 'chrom', refCol: 'ref', altCol: 'alt', inheritanceCol: 'inheritance',
+            geneTerms, dimensions: [{id: 'fam', label: 'Fam'}], muByGene: dnw,
+            categoryMu: categoryRateSums(dnw, {}, {fam}, true), rateTable: dnmRates.describe('denovowest'),
+            N: 220, nReliable: true, minCount: 1
+        }, withAlt ? {altMuByGene: mane, altCategoryMu: categoryRateSums(mane, {}, {fam}, true),
+            altTable: dnmRates.describe('mane')} : {}))
+
+        const dnm = build(true)
+        // The agreement is the POINT: same 2014 model, independently built on different
+        // transcripts. If these ever drift far from 1, the workbook's central claim is false.
+        const ag = dnm.meta.altTable.agreement
+        for (const cls of ['syn', 'mis', 'nonSplice', 'lof']) {
+            expect(ag[cls], `exome-wide ${cls} agreement (alt/primary) must be ~1`).to.be.within(0.9, 1.1)
+        }
+
+        const headersOf = (wb, tab, firstCell) => {
+            const ws = wb.getWorksheet(tab)
+            let hdr = null, dat = null
+            ws.eachRow(rw => {
+                const f = rw.getCell(1).value
+                if (f === 'Category' || f === 'Gene') { hdr = []; rw.eachCell(c => hdr.push(String(c.value))) }
+                const fv = typeof f === 'string' ? f.replace(' ✓', '') : f
+                if (!dat && fv === firstCell) { dat = []; rw.eachCell({includeEmpty: true}, c => dat.push(c.value)) }
+            })
+            return {hdr, dat}
+        }
+        const styles = {headerFill: {}, headerFont: {}, borderThin: {}}
+
+        for (const tab of [['DNM Rate (gene-set)', 'TSC complex'], ['DNM Rate (per-gene)', 'TSC2']]) {
+            const wb = new ExcelJS.Workbook()
+            buildDnmRateCategoryTab(wb, dnm, styles); buildDnmRatePerGeneTab(wb, dnm, styles)
+            const {hdr, dat} = headersOf(wb, tab[0], tab[1])
+            expect(hdr, `${tab[0]} has the cross-check columns`).to.include.members(['λ (cross-check)', 'λ ratio'])
+            const iR = hdr.indexOf('λ ratio')
+            // THE assertion: the ratio column must hold a ratio. A column-index bug puts the
+            // gene list or a constraint value here, and a bare `to.exist` would not notice.
+            expect(dat[iR], `${tab[0]} λ ratio value sits under its own header`).to.be.a('number')
+            expect(dat[iR], `${tab[0]} λ ratio ~1 (the two tables agree on TSC2)`).to.be.within(0.9, 1.1)
+            // …and the columns AFTER the insertion point must not have shifted under it.
+            const last = tab[0].includes('per-gene') ? 'Constrained?' : 'Genes'
+            expect(hdr[hdr.length - 1], `${tab[0]} last column still ${last}`).to.equal(last)
+        }
+
+        // With no alt table the columns vanish entirely and the layout closes up cleanly.
+        const wb2 = new ExcelJS.Workbook()
+        buildDnmRateCategoryTab(wb2, build(false), styles); buildDnmRatePerGeneTab(wb2, build(false), styles)
+        for (const tab of [['DNM Rate (gene-set)', 'Genes'], ['DNM Rate (per-gene)', 'Constrained?']]) {
+            const {hdr} = headersOf(wb2, tab[0], ' ')
+            expect(hdr, `${tab[0]}: no alt table ⇒ no cross-check column`).to.not.include('λ (cross-check)')
+            expect(hdr[hdr.length - 1], `${tab[0]}: layout closes up`).to.equal(tab[1])
+        }
+    })
+
     it('the DNM Rate tab builds with a live POISSON formula reproducing the Poisson engine (real rates)', function () {
         const {computeModelEnrichment, categoryRateSums, DE_NOVO, poissonUpperTail} = require('../dnm-enrichment')
         const {buildDnmRateCategoryTab} = require('../server')

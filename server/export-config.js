@@ -92,7 +92,22 @@ const DEFAULT_EXPORT_CONFIG = {
         // measured blockers above are resolved and the Read Me / banner prose now matches the
         // shipped model. Enabling is a judgement call about whether a Poisson at this cohort
         // size earns its space, which is a separate question from whether it is correct.
-        dnmRateTest: false        // off by decision, not by defect — see above
+        dnmRateTest: false,       // off by decision, not by defect — see above
+
+        // Which bundled rate table drives Test B. BOTH ship and BOTH are reported: they are the
+        // SAME Samocha-2014 model on DIFFERENT transcripts and agree to 0.6% per gene (median
+        // ratio 1.002, p10 0.994, p90 1.006), so this picks provenance, not statistics. The other
+        // table is printed alongside as a λ cross-check, which turns "the rate source isn't
+        // driving this" from a claim into something a reader can check on the sheet.
+        //   'denovowest' — DeNovoWEST's PUBLISHED per-gene table (Kaplanis 2020, MIT). Regenerable
+        //                  with one fetch. 20,453 genes / 819 on X. Cost: 2014-era transcripts, so
+        //                  current symbols need HGNC prev/alias resolution (98.55% join), and 67
+        //                  genes carry p_all=NA and get NO rate — MYC among them.
+        //   'mane'       — denovonear 0.13.0 (MIT) on MANE Select v1.5/GRCh38. 19,228 genes / 834
+        //                  on X, current symbols so the join is direct, and MYC HAS a rate. Cost:
+        //                  not regenerable from npm (needs python + denovonear + MANE GTF + GRCh38
+        //                  FASTA offline), so the built bundle is committed.
+        ratePrimary: 'denovowest'
     },
 
     // Per-gene impact counts on the Gene Summary tab (curation-derived, not
