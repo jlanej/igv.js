@@ -279,7 +279,13 @@ async function buildDnmRates() {
         sSyn += r.pSyn; sMis += r.pMis; sNs += r.pNonSplice
     }
     process.stdout.write(`  autosomal Σp: syn=${sSyn.toFixed(6)} mis=${sMis.toFixed(6)} non+splice=${sNs.toFixed(6)}\n`)
-    process.stdout.write(`  sanity: (non+splice)/syn = ${(sNs / sSyn).toFixed(4)} (published 0.168; genetic-code cap ~0.11–0.18)\n`)
+    // NB: "genetic-code cap" was a claim of mine that does not hold — a codon-level bound
+    // assumes uniform codon usage, and CpG hypermutability LOWERS this ratio rather than
+    // raising it. The defensible reference is the empirical value from three independent
+    // implementations of the Samocha 2014 model (0.16–0.17), plus gnomAD's own
+    // exp_lof/exp_syn = 0.187. gnomAD's lof.mu/syn.mu = 0.319 is the outlier, which is why
+    // λ must not be built from it.
+    process.stdout.write(`  sanity: (non+splice)/syn = ${(sNs / sSyn).toFixed(4)} (expect ~0.16–0.17; Samocha 2014 model)\n`)
     process.stdout.write(`  sanity: 2·Σ(syn+mis+non+splice) = ${(2 * (sSyn + sMis + sNs)).toFixed(3)} coding de novo/trio (published ~1.0–1.3)\n`)
 
     const payload = {
