@@ -3854,10 +3854,8 @@ describe('Gene Summary impact counts and annotations', function () {
             consequenceCol: 'Consequence', sampleCol: 'sample', chromCol: 'chrom', refCol: 'ref', altCol: 'alt',
             inheritanceCol: 'inheritance', geneTerms, dimensions: [{id: 'fam', label: 'Fam'}], muByGene: rates,
             categoryMu: categoryRateSums(rates, {gnomad: gnB}, {fam}), N: 100, nReliable: true, minCount: 1})
-        // No synonymous variants here ⇒ ê cannot be fitted ⇒ λ falls back to 2·N·Σp and
-        // the tab must withhold ✓. That fallback is the point of the guard, so pin it.
-        expect(dnm.meta.calibration.eHatUsable, 'no syn ⇒ ê not fitted').to.equal(false)
-        expect(dnm.meta.eApplied, 'uncalibrated ⇒ scale 1').to.equal(1)
+        // λ = 2·N·Σp with NO fitted scale — pin that ê has not come back.
+        expect(dnm.meta.eApplied, 'no fitted scale').to.equal(undefined)
         expect(dnm.meta.nUsed).to.equal(2)
         const wb = new ExcelJS.Workbook()
         buildDnmRateCategoryTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
@@ -3865,11 +3863,11 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(ws, 'DNM Rate tab created').to.not.be.undefined
         const hdr = []; let dataRow = null
         ws.eachRow(r => { const f = r.getCell(1).value; if (f === 'Category') r.eachCell(c => hdr.push(String(c.value))); if (f === 'TSC complex') dataRow = r })
-        expect(hdr).to.include.members(['Category', 'nonsense+splice', 'nonsense+splice+missense', 'k (nonsense+splice+missense)', 'λ = 2·N·Σp·ê', 'P(X≥k)'])
+        expect(hdr).to.include.members(['Category', 'nonsense+splice', 'nonsense+splice+missense', 'k (nonsense+splice+missense)', 'λ = 2·N·Σp', 'P(X≥k)'])
         expect(hdr).to.not.include('HIGH+MOD+LOW')                      // synonymous is the calibrator, never a discovery tier
         expect(dataRow, 'TSC complex row').to.not.be.null
         const kCell = dataRow.getCell(hdr.indexOf('k (nonsense+splice+missense)') + 1).value
-        const lamCell = dataRow.getCell(hdr.indexOf('λ = 2·N·Σp·ê') + 1).value
+        const lamCell = dataRow.getCell(hdr.indexOf('λ = 2·N·Σp') + 1).value
         const pCell = dataRow.getCell(hdr.indexOf('P(X≥k)') + 1).value
         expect(kCell).to.equal(2)
         expect(lamCell.formula).to.match(/^2\*100\*/)                    // λ = 2·N·Σμ live formula
@@ -3884,10 +3882,10 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(pgws, 'per-gene tab created').to.not.be.undefined
         const phdr = []; let tscRow = null
         pgws.eachRow(r => { const f = r.getCell(1).value; if (f === 'Gene') r.eachCell(c => phdr.push(String(c.value))); if (/^TSC2/.test(String(f))) tscRow = r })
-        expect(phdr).to.deep.equal(['Gene', 'k (de novo SNVs)', 'p (rate)', 'λ = 2·N·p·ê', 'P(X≥k)', 'q'])
+        expect(phdr).to.deep.equal(['Gene', 'k (de novo SNVs)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q', 'LOEUF', 'pLI', 'Constrained?'])
         expect(tscRow, 'TSC2 row').to.not.be.null
         const pgP = tscRow.getCell(phdr.indexOf('P(X≥k)') + 1).value
-        const pgLam = tscRow.getCell(phdr.indexOf('λ = 2·N·p·ê') + 1).value
+        const pgLam = tscRow.getCell(phdr.indexOf('λ = 2·N·p') + 1).value
         expect(pgP.formula).to.match(/^1-POISSON\(.*TRUE\)$/)
         expect(pgP.result).to.be.closeTo(poissonUpperTail(tscRow.getCell(2).value, pgLam.result), 1e-12)
     })
@@ -3897,9 +3895,8 @@ describe('Gene Summary impact counts and annotations', function () {
         // Hand-built dnm result with a significant q but nReliable:false.
         const dnm = {meta: {model: 'de_novo', N: 5, nReliable: false, nUsed: 3, nDistinctProbands: 3,
                 exclIndel: 0, exclXY: 0, exclNonCoding: 0, exclNoMu: 0, exclNoClassMu: 0,
-                byClass: {nonSplice: 3, mis: 0, syn: 20},
-                eApplied: 1, calibration: {syn: {obs: 20, exp: 20, ratio: 1}, mis: {}, nonSplice: {},
-                    eHat: 1, eHatRelSe: 0.22, eHatUsable: true, minSyn: 10}},
+                byClass: {nonSplice: 3, mis: 0, syn: 20}, rateGenes: 18000, totalP: {syn: 0.159},
+                calibration: {syn: {obs: 20, exp: 20, ratio: 1}, mis: {}, nonSplice: {}, synRelSe: 0.22}},
             perCategory: {tiers: [{key: 'HIGH', label: 'HIGH', classes: ['nonSplice']}, {key: 'HIGH_MOD', label: 'HIGH+MOD', classes: ['nonSplice', 'mis']}],
                 sections: [{id: 'fam', label: 'Fam', muSource: true, groups: [
                     {term: 'T', probands: 3, genes: ['A', 'B', 'C'], kTop: 3,
@@ -3925,53 +3922,61 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(String(dataRow.getCell(hdr.indexOf('HIGH+MOD') + 1).value)).to.equal('3')
     })
 
-    it('provisional N: the SCALE-FREE test carries the ✓, because it does not use N', function () {
-        // The policy this pins: when the Poisson's inputs are untrustworthy (no defensible
-        // N, or ê unfitted), do not throw the question away — fall to the test that needs
-        // neither. Same fixture as above, now WITH a significant scale-free q.
+    it('provisional N withholds ✓ — and now that gate MEANS something again', function () {
+        // Under the retired fitted-ê design N cancelled out of λ entirely, so this gate was
+        // gating on a mechanism that could not occur. With λ = 2·N·Σp, N is back in the
+        // formula: a provisional N really does shrink λ and really does make p
+        // anti-conservative. The scale-free q is printed but never drives ✓ — it is the
+        // WEAKER test against curation skew, which is the hazard that actually threatens
+        // this data.
         const {buildDnmRateCategoryTab} = require('../server')
         const cell = (extra) => Object.assign({k: 3, kSyn: 1, T: 4, lambda: 0.01, catMu: 5e-5,
-            catMuSyn: 3e-4, theta: 0.14, eApplied: 1, p: 1e-6, q: 1e-5}, extra)
-        const dnm = {meta: {model: 'de_novo', N: 5, nReliable: false, nUsed: 4, nDistinctProbands: 3,
+            catMuSyn: 3e-4, theta: 0.14, p: 1e-6, q: 1e-5}, extra)
+        const mk = (nReliable) => ({meta: {model: 'de_novo', N: 5, nReliable, nUsed: 4, nDistinctProbands: 3,
                 exclIndel: 0, exclXY: 0, exclNonCoding: 0, exclNoMu: 0, exclNoClassMu: 0,
-                byClass: {nonSplice: 3, mis: 0, syn: 20}, eApplied: 1, rateGenes: 18000, totalP: {syn: 0.159},
-                calibration: {syn: {obs: 20, exp: 20, ratio: 1}, mis: {}, nonSplice: {},
-                    eHat: 1, eHatRelSe: 0.22, eHatUsable: true, minSyn: 10}},
+                byClass: {nonSplice: 3, mis: 0, syn: 20}, rateGenes: 18000, totalP: {syn: 0.159},
+                calibration: {syn: {obs: 20, exp: 20, ratio: 1}, mis: {}, nonSplice: {}, synRelSe: 0.22}},
             perCategory: {tiers: [{key: 'HIGH', label: 'HIGH', classes: ['nonSplice']}, {key: 'HIGH_MOD', label: 'HIGH+MOD', classes: ['nonSplice', 'mis']}],
                 sections: [{id: 'fam', label: 'Fam', muSource: true, m: 20, mCond: 20, groups: [
                     {term: 'T', probands: 3, genes: ['A', 'B', 'C'], kTop: 3,
                         cells: {HIGH: cell({pCond: 1e-4, qCond: 1e-3}), HIGH_MOD: cell({pCond: 2e-4, qCond: 2e-3})}}]}]},
-            perGene: {rows: [], familySizes: {}, observedRows: {}}}
-        const wb = new ExcelJS.Workbook()
-        buildDnmRateCategoryTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
-        const ws = wb.getWorksheet('DNM Rate (gene-set)')
-        let hdr = [], dataRow = null
-        ws.eachRow(r => { const f = r.getCell(1).value
-            if (f === 'Category') r.eachCell(c => hdr.push(String(c.value)))
-            if (f === 'T') dataRow = r })
-        expect(dataRow, 'T row').to.not.be.null
-        // ✓ IS shown — driven by the scale-free q, not the Poisson's.
-        expect(String(dataRow.getCell(hdr.indexOf('HIGH') + 1).value)).to.equal('3 ✓')
-        // Both p/q pairs are printed side by side, so a reader can see which is which.
-        expect(hdr).to.include.members(['HIGH p/q', 'HIGH p/q (scale-free)', 'θ', 'k syn', 'Σp syn'])
-        expect(String(dataRow.getCell(hdr.indexOf('HIGH p/q (scale-free)') + 1).value)).to.contain('/')
+            perGene: {rows: [], familySizes: {}, observedRows: {}}})
+        const read = (dnm) => {
+            const wb = new ExcelJS.Workbook()
+            buildDnmRateCategoryTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
+            const ws = wb.getWorksheet('DNM Rate (gene-set)')
+            let hdr = [], dataRow = null
+            ws.eachRow(r => { const f = r.getCell(1).value
+                if (f === 'Category') r.eachCell(c => hdr.push(String(c.value)))
+                if (f === 'T') dataRow = r })
+            return {hdr, dataRow}
+        }
+        // Provisional N: no ✓, even though BOTH q's are significant.
+        const prov = read(mk(false))
+        expect(String(prov.dataRow.getCell(prov.hdr.indexOf('HIGH') + 1).value)).to.equal('3')
+        // Defensible N: the Poisson drives ✓.
+        const ok = read(mk(true))
+        expect(String(ok.dataRow.getCell(ok.hdr.indexOf('HIGH') + 1).value)).to.equal('3 ✓')
+        // Both p/q pairs are still printed side by side either way.
+        expect(ok.hdr).to.include.members(['HIGH p/q', 'HIGH p/q (scale-free)', 'θ', 'k syn', 'Σp syn'])
     })
 
-    it('the λ formula reproduces λ — it must carry ê, not just 2·N·Σp', function () {
-        // A live formula that prints 2*N*Σp beside a λ that is 2*N*Σp*ê makes the sheet
-        // contradict itself. Pin that the emitted arithmetic matches the value.
+    it('the λ formula IS the model — 2·N·Σp, reproducing the printed λ exactly', function () {
+        // With no fitted scale there is nothing for the formula to omit: it prints the same
+        // arithmetic the p-value used. (Under the retired ê design this cell emitted
+        // 2*N*Σp beside a λ of 2*N*Σp*ê, so the sheet contradicted itself — the reason the
+        // formula and the value are pinned together here.)
         const {buildDnmRateCategoryTab} = require('../server')
-        const E = 0.5, N = 100, SUMP = 5e-5
+        const N = 100, SUMP = 5e-5
         const dnm = {meta: {model: 'de_novo', N, nReliable: true, nUsed: 4, nDistinctProbands: 3,
                 exclIndel: 0, exclXY: 0, exclNonCoding: 0, exclNoMu: 0, exclNoClassMu: 0,
-                byClass: {nonSplice: 3, mis: 0, syn: 20}, eApplied: E, rateGenes: 18000, totalP: {syn: 0.159},
-                calibration: {syn: {obs: 20, exp: 40, ratio: 0.5}, mis: {}, nonSplice: {},
-                    eHat: E, eHatRelSe: 0.22, eHatUsable: true, minSyn: 10}},
+                byClass: {nonSplice: 3, mis: 0, syn: 20}, rateGenes: 18000, totalP: {syn: 0.159},
+                calibration: {syn: {obs: 20, exp: 40, ratio: 0.5}, mis: {}, nonSplice: {}, synRelSe: 0.22}},
             perCategory: {tiers: [{key: 'HIGH', label: 'HIGH', classes: ['nonSplice']}],
                 sections: [{id: 'fam', label: 'Fam', muSource: true, m: 20, mCond: 20, groups: [
                     {term: 'T', probands: 3, genes: ['A'], kTop: 3,
-                        cells: {HIGH: {k: 3, kSyn: 1, T: 4, lambda: 2 * N * SUMP * E, catMu: SUMP, catMuSyn: 3e-4,
-                            theta: 0.14, eApplied: E, p: 1e-6, q: 1e-5, pCond: 0.5, qCond: 0.9}}}]}]},
+                        cells: {HIGH: {k: 3, kSyn: 1, T: 4, lambda: 2 * N * SUMP, catMu: SUMP, catMuSyn: 3e-4,
+                            theta: 0.14, p: 1e-6, q: 1e-5, pCond: 0.5, qCond: 0.9}}}]}]},
             perGene: {rows: [], familySizes: {}, observedRows: {}}}
         const wb = new ExcelJS.Workbook()
         buildDnmRateCategoryTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
@@ -3980,10 +3985,11 @@ describe('Gene Summary impact counts and annotations', function () {
         ws.eachRow(r => { const f = r.getCell(1).value
             if (f === 'Category') r.eachCell(c => hdr.push(String(c.value)))
             if (f === 'T') dataRow = r })
-        const lam = dataRow.getCell(hdr.indexOf('λ = 2·N·Σp·ê') + 1).value
-        expect(lam.result, 'the printed λ carries ê').to.be.closeTo(2 * N * SUMP * E, 1e-15)
-        expect(lam.formula, 'and the live formula carries ê too').to.contain(String(E))
-        // θ is live and shows 2·N and ê are simply absent from it
+        const lam = dataRow.getCell(hdr.indexOf('λ = 2·N·Σp') + 1).value
+        expect(lam.result).to.be.closeTo(2 * N * SUMP, 1e-15)
+        // The formula must be exactly 2*N*<the Σp cell> — two factors, no third.
+        expect(lam.formula).to.match(new RegExp(`^2\\*${N}\\*[A-Z]+\\d+$`))
+        // θ is live and shows N is simply absent from it
         const th = dataRow.getCell(hdr.indexOf('θ') + 1).value
         expect(th.formula).to.not.contain(String(N))
         expect(th.result).to.equal(0.14)

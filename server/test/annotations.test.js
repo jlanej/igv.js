@@ -670,7 +670,7 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         dimensions: [{id: 'fam', label: 'Fam'}], muByGene: rates,
         categoryMu: categoryRateSums(rates, {gnomad}, {fam}), N: 100, nReliable: true, minCount: 1}, extra)
 
-    it('gates to pass de novo SNV autosomal coding, and λ = 2·N·Σp·ê', function () {
+    it('gates to pass de novo SNV autosomal coding, and λ = 2·N·Σp', function () {
         const variants = [
             V({gene: 'G1', impact: 'HIGH', s: 'P1'}),                                   // used lof
             V({gene: 'G2', impact: 'MODERATE', chrom: '2', ref: 'C', alt: 'T', s: 'P2'}), // used mis
@@ -687,15 +687,16 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(m.exclNonCoding).to.equal(1)
         expect(m.nUsed).to.equal(2)
         expect(m.byClass).to.deep.equal({nonSplice: 1, mis: 1, syn: 0})
-        // No synonymous variants here ⇒ ê cannot be fitted ⇒ λ falls back to the raw 2·N·Σp
-        // (scale 1) and the tab withholds ✓. Pin it, so the λ assertions below are read
-        // against a KNOWN scale rather than an accidental one.
-        expect(m.calibration.eHatUsable, 'no syn ⇒ ê unfitted').to.equal(false)
-        expect(m.eApplied, 'unfitted ê ⇒ scale 1').to.equal(1)
+        // NO fitted scale exists at all — λ is 2·N·Σp, full stop. Pin that nothing named ê
+        // survives: a reintroduced calibration is what made this test 1.4–3.0x too permissive
+        // on the largest categories, and it must not come back by accident.
+        expect(m.eApplied, 'no fitted scale').to.equal(undefined)
+        expect(m.calibration.eHat, 'no ê in the diagnostics either').to.equal(undefined)
+        expect(m.calibration.syn.ratio, 'the syn ratio is a REAL observed/expected').to.equal(0)
         const T = res.perCategory.sections.find(s => s.id === 'fam').groups.find(g => g.term === 'T')
         expect(res.perCategory.tiers.map(t => t.key)).to.deep.equal(['HIGH', 'HIGH_MOD'])   // no synonymous tier
         expect(T.cells.HIGH.k).to.equal(1)
-        expect(T.cells.HIGH.lambda).to.be.closeTo(2 * 100 * 3e-6 * 1, 1e-12)     // 2·N·Σp_nonSplice(T)·ê
+        expect(T.cells.HIGH.lambda).to.be.closeTo(2 * 100 * 3e-6, 1e-12)     // 2·N·Σp_nonSplice(T) — no scale
         expect(T.cells.HIGH.p).to.be.closeTo(poissonUpperTail(1, 2 * 100 * 3e-6), 1e-12)
         expect(T.cells.HIGH_MOD.k).to.equal(2)                               // nonsense+splice + mis
         expect(T.cells.HIGH.q).to.be.a('number')                            // BH applied
@@ -741,10 +742,9 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(t2.cells.HIGH_MOD.q).to.be.closeTo(t2.cells.HIGH_MOD.p * 4, 1e-9)   // rank 1 of m=4
     })
 
-    it('scale-free conditional binomial: 2·N and ê CANCEL — the whole point of it', function () {
-        // θ = Σp_disc/(Σp_disc+Σp_syn) contains neither N nor ê, so the same counts must
-        // give the SAME p at any cohort size and any calibration. If this ever fails, the
-        // test has stopped being scale-free and its reason for existing is gone.
+    it('scale-free conditional binomial: N cancels out of θ — its reason for existing', function () {
+        // θ = Σp_disc/(Σp_disc+Σp_syn) contains no N, so the same counts must give the SAME
+        // p at any cohort size. If this fails the test is no longer scale-free.
         const mk = (N) => computeModelEnrichment([
             V({gene: 'G1', impact: 'HIGH', s: 'P1'}), V({gene: 'G1', impact: 'HIGH', s: 'P2'}),
             V({gene: 'G2', impact: 'LOW', chrom: '2', s: 'P3'})            // a synonymous, to make T > k

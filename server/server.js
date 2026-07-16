@@ -1293,8 +1293,8 @@ function buildReadmeSheet(workbook, opts) {
     if (hasGene && exportCfg.sheets.geneSummary) row('Gene Summary', 'One row per gene: curation counts, impact-passing counts, and gene-level annotations. See the column dictionary below.')
     if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis (derivation)', 'Reproducibility appendix for the samples tab: the per-tier proband DNM-burden histogram + denominators that, with a category\'s "% all genes", let you recompute every reported sample p-value exactly (Excel has no Poisson-binomial function). Only present when the data has a sample column.')
     if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled) row('Gene Analysis (samples) / (DNMs)', 'Convergence, in two matching tabs: which shared attributes (gnomAD constraint, ClinVar history, protein domain, GenCC inheritance; Reactome & WikiPathways pathways, HGNC gene families, MSigDB Hallmark processes, MitoCarta mitochondrial sets) your genes stack up on. Both are IGV-pass; the "(samples)" tab counts distinct probands (conservative headline), the "(DNMs)" tab counts pass DNMs. Each is a category × cumulative-impact-tier matrix of "count (%)" (with a green ✓ for FDR q<0.05, and the exact p/q to the right) against the category\'s genome-wide prevalence ("% all genes"), plus a burden-corrected Fold (observed ÷ expected, so 1× = chance). An all·ALL column flags noisy (non-pass) pools. Every tier\'s full test inputs are printed to the right so each p-value is reproducible. See the dictionary below.')
-    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled && exportCfg.geneAnalysis.dnmRateTest !== false) row('DNM Rate (gene-set)', 'De novo mutation-rate enrichment (Test B): whether a gene set carries more DE NOVO variants than the germline mutation rate predicts for N trios — Poisson λ = 2·N·Σp·ê, with a live =1−POISSON(k−1,λ,TRUE) derivation. p = the per-gene per-transmission de novo rate (Samocha 2014 model, bundled from DeNovoWEST); ê = the scale fitted from this cohort\'s own synonymous class. De-novo-only; appears only when the data has an `inheritance` column and the rate bundle is present. Complements the origin-agnostic Gene Analysis tabs. See the Methods dictionary below.')
-    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled && exportCfg.geneAnalysis.dnmRateTest !== false) row('DNM Rate (per-gene)', 'The same de novo mutation-rate test at GENE level: one row per (gene, track) with an observed de novo SNV, k vs Poisson λ = 2·N·p·ê, live =1−POISSON(k−1,λ,TRUE). Nonsense+splice / missense / protein-altering are separate Benjamini-Hochberg discovery families; synonymous is the calibrator that fits ê (no discovery q). Power comes from recurrence (≥2 de novos/gene).')
+    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled && exportCfg.geneAnalysis.dnmRateTest !== false) row('DNM Rate (gene-set)', 'De novo mutation-rate enrichment (Test B): whether a gene set carries more DE NOVO variants than the germline mutation rate predicts for N trios — Poisson λ = 2·N·Σp, with a live =1−POISSON(k−1,λ,TRUE) derivation. p = the per-gene per-transmission de novo rate (Samocha 2014 model, bundled from DeNovoWEST). No scale is fitted to the cohort; the per-class observed/expected ratios are reported as a model-fit diagnostic instead. De-novo-only; appears only when the data has an `inheritance` column and the rate bundle is present. Complements the origin-agnostic Gene Analysis tabs. See the Methods dictionary below.')
+    if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled && exportCfg.geneAnalysis.dnmRateTest !== false) row('DNM Rate (per-gene)', 'The same de novo mutation-rate test at GENE level: one row per (gene, track) with an observed de novo SNV, k vs Poisson λ = 2·N·p, live =1−POISSON(k−1,λ,TRUE). Nonsense+splice / missense / protein-altering are separate Benjamini-Hochberg discovery families; synonymous is the model-fit diagnostic (no discovery q). Power comes from recurrence (≥2 de novos/gene).')
     if (exportCfg.sheets.sampleSummary) row('Sample Summary', 'Per-sample variant counts by impact group and frequency threshold, with cohort mean/median.')
     if (hasSampleQc && exportCfg.sheets.sampleQc) row('Sample QC', 'Per-sample sequencing QC metrics with threshold-based pass/warn/fail assessment.')
     if (exportCfg.sheets.appliedFilters) row('Applied Filters', 'The filters and export settings used to produce this report (self-documenting).')
@@ -1382,13 +1382,13 @@ function buildReadmeSheet(workbook, opts) {
     if (hasGene && exportCfg.sheets.geneAnalysis && exportCfg.geneAnalysis && exportCfg.geneAnalysis.enabled && exportCfg.geneAnalysis.dnmRateTest !== false) {
         section('DNM Rate (gene-set) — de novo mutation-rate enrichment (Test B)')
         row('Purpose & scope', 'A SECOND, complementary test (its own tab) asking whether more DE NOVO variants fall in a gene set than the germline mutation rate predicts for a cohort of N trios — the classic de novo enrichment framework. DE-NOVO-ONLY: suppressed unless the data has an `inheritance` column (only `de_novo` variants are counted) and gnomAD μ is available (GRCh38). The Gene Analysis samples/DNMs tabs (Test A) are the origin-agnostic clustering test and are unaffected; every variant type (incl. indels) remains represented there.')
-        row('Model & formula', 'For a category × cumulative PROTEIN-ALTERING tier (nonsense+splice; nonsense+splice+missense), the observed count k of curation-pass de novo SNVs is modelled as Poisson with mean λ = 2·N·Σp·ê, where N = trio count, Σp = the summed per-transmission de novo rate over the category\'s AUTOSOMAL genes with a rate (over exactly the genes counted in k), and ê is the empirical calibration below. P = P(X ≥ k) = 1 − POISSON(k−1, λ, TRUE) (a live Excel formula). Constant 2 = the two parental transmissions at risk per proband. The BH family is the dimension\'s A-PRIORI grid — every library category with a modelable rate × every coding tier, NOT just the categories carrying an observed de novo (an unhit category has k=0, hence the exact p=1). m is printed in each section header.', 'X ~ Poisson(2·N·Σp·ê); P(X≥k)=1−POISSON(k−1,λ,TRUE)')
+        row('Model & formula', 'For a category × cumulative PROTEIN-ALTERING tier (nonsense+splice; nonsense+splice+missense), the observed count k of curation-pass de novo SNVs is modelled as Poisson with mean λ = 2·N·Σp, where N = trio count and Σp = the summed per-transmission de novo rate over the category\'s AUTOSOMAL genes with a rate (over exactly the genes counted in k). NO scale is fitted to the cohort: the rate table is used as published, which keeps λ a known constant and makes the test conservative — a cohort can MISS de novo variants but never invent them, so P(X≥k) is if anything too large. P = P(X ≥ k) = 1 − POISSON(k−1, λ, TRUE) (a live Excel formula). Constant 2 = the two parental transmissions at risk per proband. The per-class observed/expected ratios on the tab are the model-fit DIAGNOSTIC (the synonymous one is ~selection-neutral and should sit near 1); they are reported, never folded into λ. The BH family is the dimension\'s A-PRIORI grid — every library category with a modelable rate × every coding tier, NOT just the categories carrying an observed de novo (an unhit category has k=0, hence the exact p=1). m is printed in each section header.', 'X ~ Poisson(2·N·Σp); P(X≥k)=1−POISSON(k−1,λ,TRUE)')
         row('Rates (p)', 'Per-gene, per-class, PER-TRANSMISSION de novo probabilities from the Samocha 2014 trinucleotide model, bundled from the DeNovoWEST release (data/annotations/dnm_rates.json.gz). Classes: pSyn, pMis, and pNonSplice = p_all − p_syn − p_mis (nonsense + essential-splice SNVs). NOT the source table\'s p_lof, which includes frameshift and so cannot be paired with an SNV-only observed count. NOT gnomAD\'s lof.mu/mis.mu/syn.mu either: those are a MUTABILITY COVARIATE, identified only up to a proportionality constant (gnomAD fits expected = mu·slope + intercept and refits the slope), and summing them predicts 0.276 coding de novo per trio against a published ~1.0–1.3. This table sums to 1.074 per trio at (non+splice)/syn = 0.161, against ~0.16–0.17 from independent implementations. The gnomAD μ columns remain elsewhere in the export as a mutability covariate — they are simply not a rate.', 'DeNovoWEST (MIT); Samocha 2014', 'MIT')
-        row('Consequence mapping', 'Classes come from the VEP molecular Consequence when the data has that column: stop_gained / splice_donor_variant / splice_acceptor_variant → nonsense+splice; missense_variant → missense; synonymous_variant → synonymous. VEP orders its &-separated list most-severe-first, and the most severe MODELLED term wins. Everything else (UTR, intron, regulatory, start/stop_lost, stop_retained, and every other splice_* term — region, polypyrimidine tract, 5th base — which are intronic modifiers, not essential-splice SNVs) has no rate term and is excluded; the excluded terms are counted and listed on the tab. WITHOUT a Consequence column the mapping falls back to IMPACT severity (HIGH→nonsense+splice, MODERATE→missense, LOW→synonymous), which is an APPROXIMATION and is flagged on the tab: VEP LOW is NOT synonymous — measured on a real cohort, 34% of LOW rows were splice-region/intronic. That matters because synonymous is the CALIBRATOR: contaminating it inflates ê and rescales every discovery λ. Frameshift/inframe indels are excluded by the SNV-only rule regardless.', 'VEP Consequence (IMPACT fallback)')
+        row('Consequence mapping', 'Classes come from the VEP molecular Consequence when the data has that column: stop_gained / splice_donor_variant / splice_acceptor_variant → nonsense+splice; missense_variant → missense; synonymous_variant → synonymous. VEP orders its &-separated list most-severe-first, and the most severe MODELLED term wins. Everything else (UTR, intron, regulatory, start/stop_lost, stop_retained, and every other splice_* term — region, polypyrimidine tract, 5th base — which are intronic modifiers, not essential-splice SNVs) has no rate term and is excluded; the excluded terms are counted and listed on the tab. WITHOUT a Consequence column the mapping falls back to IMPACT severity (HIGH→nonsense+splice, MODERATE→missense, LOW→synonymous), which is an APPROXIMATION and is flagged on the tab: VEP LOW is NOT synonymous — measured on a real cohort, 34% of LOW rows were splice-region/intronic. That matters because the synonymous class is the model-fit DIAGNOSTIC: contaminating it corrupts the one honest QC readout on the tab. Frameshift/inframe indels are excluded by the SNV-only rule regardless.', 'VEP Consequence (IMPACT fallback)')
         row('Inclusion / exclusion', 'Counted: curation-PASS + `inheritance==de_novo` + SNV (ref/alt length 1) + autosomal + HIGH/MOD/LOW + gene with gnomAD μ FOR THAT consequence class. Excluded (STILL analysed by Test A): indels (μ is SNV-only), chrX/Y (2·N assumes two autosomal copies; proband sex unknown), MODIFIER/non-coding (no coding μ), genes without μ, and genes lacking μ for the variant\'s own class (no modelable target → would inflate k without λ). Exact excluded counts print on the tab.')
         row('Cohort N', 'N = the Sample-QC trio count when a --sample-qc file is loaded (counts 0-DNM trios — the correct denominator). Without it, N falls back to distinct probands in the callset, which UNDERCOUNTS (omits 0-DNM trios) → λ too small → anti-conservative p; the tab then marks results PROVISIONAL and withholds the ✓.')
         row('Multiple testing & calibration', 'FDR q = Benjamini-Hochberg per dimension across the FULL a-priori (category × tier) grid — every library category with a modelable μ, including those with NO observed de novo (exact p=1). Correcting only across the categories that happened to be hit would let the data choose the family and push the true FDR far above nominal; the minCount display filter runs AFTER the correction, so hiding a row never changes a q. Family size m prints in each section header. ✓ = q<0.05 (withheld when N is provisional). A synonymous calibration control (observed vs 2·N·Σsyn.μ) is reported: ≈1 ⇒ complete ascertainment; a ratio a little above 1 is expected because LOW-impact over-counts true synonymous, and a provisional N inflates it further. Power comes largely from recurrence, so category singletons rarely survive FDR.')
-        row('Two tabs', '"DNM Rate (gene-set)" tests gene-SET categories (the dimensions above). "DNM Rate (per-gene)" runs the same λ = 2·N·p·ê Poisson at GENE level — one row per (gene, track) with an observed de novo SNV. There, nonsense+splice / missense / protein-altering are separate EXOME-WIDE discovery families (BH across all modelable genes, not just the observed ones) and synonymous is the calibrator, shown without a discovery q. Per-gene λ is tiny, so power comes from RECURRENCE (≥2 de novo in one gene).', 'gene-set + per-gene')
+        row('Two tabs', '"DNM Rate (gene-set)" tests gene-SET categories (the dimensions above). "DNM Rate (per-gene)" runs the same λ = 2·N·p Poisson at GENE level — one row per (gene, track) with an observed de novo SNV. There, nonsense+splice / missense / protein-altering are separate EXOME-WIDE discovery families (BH across all modelable genes, not just the observed ones) and synonymous is the calibrator, shown without a discovery q. Per-gene λ is tiny, so power comes from RECURRENCE (≥2 de novo in one gene).', 'gene-set + per-gene')
         row('References', 'Samocha et al. Nat Genet 2014;46:944 (framework + rate model); Ware et al. Curr Protoc Hum Genet 2015 (denovolyzeR); Karczewski et al. Nature 2020;581:434 & Chen et al. Nature 2024;625:92 (gnomAD rates); Benjamini & Hochberg JRSS-B 1995;57:289 (FDR).')
     }
 
@@ -1818,7 +1818,7 @@ function buildGeneAnalysisTab(workbook, conv, styles, track, derivRefs) {
 /**
  * "DNM Rate (gene-set)" tab — the de novo mutation-rate enrichment (Test B).
  * Category × cumulative coding tier: observed k pass de novo SNVs vs a Poisson null
- * λ = 2·N·Σp·ê, with a live =1-POISSON(k-1, λ, TRUE) derivation. Publication-grade:
+ * λ = 2·N·Σp, with a live =1-POISSON(k-1, λ, TRUE) derivation. Publication-grade:
  * the banner carries the full method, inputs, exclusions, and synonymous calibration.
  * `dnm` = computeModelEnrichment() output. Wrapped by the caller in try/catch.
  */
@@ -1827,43 +1827,21 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     const ws = workbook.addWorksheet('DNM Rate (gene-set)')
     const meta = dnm.meta, sections = dnm.perCategory.sections, tiers = dnm.perCategory.tiers
     const N = meta.N || 0, reliable = !!meta.nReliable
-    // Calibrated = ê was actually fitted from enough synonymous variants. Without it λ
-    // asserts perfect ascertainment, so the test is optimistic and earns no ✓.
-    const calibrated = !!(meta.calibration && meta.calibration.eHatUsable)
-    const colLetter = (n) => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26) } return s }
-    const FMT_PVAL = '[<0.001]0.0E+00;0.000', FMT_MU = '0.00E+00', FMT_LAM = '[<0.05]0.0E+00;0.000'
-    const fmtP = (p) => p == null ? '—' : (p < 0.001 ? p.toExponential(1) : p.toFixed(3))
-    const fmtR = (x) => x == null ? '—' : x.toFixed(2)
-    // ✓ = "significant under the strongest test that is VALID for this cohort".
-    //
-    // The Poisson needs a defensible N and a fitted ê. When it has both, it is the
-    // primary test — and it is well calibrated: simulated on the real rate bundle under
-    // the null, its rejection rate never exceeds nominal at any cohort size (0.49-0.99x
-    // of α; the fitted ê costs nothing measurable, because ê is unbiased and its residual
-    // noise is second-order against Poisson discreteness).
-    //
-    // When N is provisional or ê could not be fitted, the Poisson's inputs are not
-    // trustworthy, and the OLD behaviour was to withhold ✓ entirely. That threw away a
-    // valid answer: the conditional binomial needs NEITHER N NOR ê (both cancel out of θ),
-    // so it still holds. ✓ then follows it instead.
-    //
-    // Selecting on WHICH TEST is valid uses metadata (is there a Sample-QC file? are there
-    // ≥10 synonymous de novo?), never a p-value, so this is not test-shopping.
-    const poissonValid = reliable && calibrated
-    // The exact scale λ was built with. Emitted into the live λ formula at full precision,
-    // so the formula reproduces the printed λ rather than approximating it.
-    const eApplied = meta.eApplied != null ? meta.eApplied : 1
-    const isSig = (cc) => {
-        if (!cc) return false
-        if (poissonValid) return cc.q != null && cc.q < 0.05
-        return cc.qCond != null && cc.qCond < 0.05
-    }
+    // fitted scale for it to cancel against), so a provisional N really does shrink λ and
+    // really does make the p anti-conservative — that gate is meaningful again.
+    // The Poisson is CONSERVATIVE by construction here: a real cohort can only MISS de novo
+    // variants, so E[k] = λ·f with f ≤ 1. Measured 0.81× of nominal at f=1 and lower as f
+    // falls; curation skew cannot inflate it, because the synonymous count is not in λ.
+    const poissonValid = reliable
+    const isSig = (cc) => poissonValid && cc && cc.q != null && cc.q < 0.05
     const kStr = (cc) => { if (!cc || !cc.k) return ''; return isSig(cc) ? `${cc.k} ✓` : `${cc.k}` }
     const pqStr = (cc) => { if (!cc || cc.p == null) return '—'; return `${fmtP(cc.p)} / ${fmtP(cc.q)}` }
-    // The scale-free companion, printed for EVERY row regardless of which test drives ✓ —
-    // a reader must be able to see both, and disagreement between them is informative:
-    // significant on the Poisson but not here means the category's excess is not a class
-    // SKEW, i.e. it may be an artefact of N, ê, or uneven ascertainment rather than selection.
+    // The scale-free companion, printed for every row but NEVER driving ✓. It answers a
+    // different question — "is this category SKEWED toward damage relative to its own
+    // synonymous variants?" — and it is the WEAKER of the two against the hazard that
+    // actually threatens this data: because it compares damaging against synonymous, a
+    // class-skewed curation pass rate moves θ and it over-rejects, while the Poisson merely
+    // loses power. Its value is that it is immune to the rate table's absolute scale.
     const condStr = (cc) => { if (!cc || cc.pCond == null) return '—'; return `${fmtP(cc.pCond)} / ${fmtP(cc.qCond)}` }
     const MAX_GROUPS_PER_DIM = 25
 
@@ -1882,32 +1860,29 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     const banner = (text, font) => { r++; const row = ws.addRow([text]); mergeAcross(r); row.getCell(1).font = font; row.getCell(1).alignment = {wrapText: true, vertical: 'top'}; return row }
 
     banner('Gene Analysis — DE NOVO MUTATION-RATE enrichment (Test B)', {bold: true, size: 14, color: {argb: 'FF2C3E50'}})
-    banner(`This is the DE-NOVO-ONLY, mutation-rate test — distinct from the origin-agnostic "Gene Analysis (samples/DNMs)" tabs (Test A). Model: the # of de novo SNVs in a category is Poisson with mean λ = 2·N·Σp·ê, N = ${N} trios (${reliable ? 'Sample-QC trio count, includes 0-DNM trios' : 'PROVISIONAL — no Sample-QC file, N is a lower bound'}), p = the per-gene per-transmission de novo rate (Samocha 2014 trinucleotide model, bundled from DeNovoWEST), ê = the calibration fitted from this cohort's own synonymous class (see below). Classes: nonsense+essential-splice SNVs and missense; the two columns are CUMULATIVE PROTEIN-ALTERING tiers. Synonymous is the CALIBRATOR, never a discovery column. Each cell = # observed de novo SNVs; ✓ = Benjamini-Hochberg FDR q<0.05 (per dimension).`,
+    banner(`This is the DE-NOVO-ONLY, mutation-rate test — distinct from the origin-agnostic "Gene Analysis (samples/DNMs)" tabs (Test A). Model: the # of de novo SNVs in a category is Poisson with mean λ = 2·N·Σp, N = ${N} trios (${reliable ? 'Sample-QC trio count, includes 0-DNM trios' : 'PROVISIONAL — no Sample-QC file, N is a lower bound'}), p = the per-gene per-transmission de novo rate (Samocha 2014 trinucleotide model, bundled from DeNovoWEST). NO scale is fitted to this cohort — see below for why, and for how to read the model-fit ratios. Classes: nonsense+essential-splice SNVs and missense; the two columns are CUMULATIVE PROTEIN-ALTERING tiers. Synonymous is the CALIBRATOR, never a discovery column. Each cell = # observed de novo SNVs; ✓ = Benjamini-Hochberg FDR q<0.05 (per dimension).`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    banner(`Derivation (worked for the ${headTier.label} tier): "k" = observed de novo SNVs; "Σp" = summed per-transmission rate over the category's autosomal genes (the same genes k is counted on); "λ = 2·N·Σp·ê" = the chance expectation; "P(X≥k)" is a LIVE Excel formula  =1−POISSON(k−1, λ, TRUE)  that reproduces the "${headTier.label} p/q" value. p/q for every tier are in their own columns.`,
+    banner(`Derivation (worked for the ${headTier.label} tier): "k" = observed de novo SNVs; "Σp" = summed per-transmission rate over the category's autosomal genes (the same genes k is counted on); "λ = 2·N·Σp" = the chance expectation; "P(X≥k)" is a LIVE Excel formula  =1−POISSON(k−1, λ, TRUE)  that reproduces the "${headTier.label} p/q" value. p/q for every tier are in their own columns.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    banner(`Observed: ${meta.nUsed} curation-pass de novo SNVs (${meta.byClass.nonSplice} nonsense+splice, ${meta.byClass.mis} missense, ${meta.byClass.syn} synonymous) across ${meta.nDistinctProbands} probands${meta.classifiedVia && meta.classifiedVia.impact > 0 ? `. CLASSIFIED BY IMPACT SEVERITY for ${meta.classifiedVia.impact} of them (no VEP Consequence column) — an approximation: VEP LOW is NOT synonymous, and synonymous is what fits ê` : (meta.classifiedVia && meta.classifiedVia.consequence > 0 ? ', classified by VEP molecular consequence' : '')}. Excluded from Test B (still analysed by Test A): ${meta.exclIndel} indels, ${meta.exclXY} chrX/Y, ${meta.exclNonCoding} with no modelled consequence, ${meta.exclNoMu} genes with no rate (or non-autosomal), ${meta.exclNoClassMu} with no rate for the variant's own class. SNV-only and autosomal-only are REQUIRED: the rates are SNV-only, and 2·N counts two parental transmissions, which assumes two copies.`,
+    banner(`Observed: ${meta.nUsed} curation-pass de novo SNVs (${meta.byClass.nonSplice} nonsense+splice, ${meta.byClass.mis} missense, ${meta.byClass.syn} synonymous) across ${meta.nDistinctProbands} probands${meta.classifiedVia && meta.classifiedVia.impact > 0 ? `. CLASSIFIED BY IMPACT SEVERITY for ${meta.classifiedVia.impact} of them (no VEP Consequence column) — an approximation: VEP LOW is NOT synonymous, and the synonymous class is the model-fit diagnostic` : (meta.classifiedVia && meta.classifiedVia.consequence > 0 ? ', classified by VEP molecular consequence' : '')}. Excluded from Test B (still analysed by Test A): ${meta.exclIndel} indels, ${meta.exclXY} chrX/Y, ${meta.exclNonCoding} with no modelled consequence, ${meta.exclNoMu} genes with no rate (or non-autosomal), ${meta.exclNoClassMu} with no rate for the variant's own class. SNV-only and autosomal-only are REQUIRED: the rates are SNV-only, and 2·N counts two parental transmissions, which assumes two copies.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
     // The excluded consequences, named. This is not decoration: it is how a reader sees
     // WHAT the model declined to score — e.g. that splice_region/polypyrimidine calls are
-    // not synonymous, which is exactly the contamination that would corrupt ê if these
-    // were classified by IMPACT severity instead.
+    // not synonymous, which is exactly the contamination that would corrupt the model-fit
+    // diagnostic if these were classified by IMPACT severity instead.
     const unmodelled = Object.entries(meta.unmodelledTerms || {}).sort((a, b) => b[1] - a[1])
     if (unmodelled.length) {
         banner(`Consequences seen but NOT modelled (no SNV rate term, so they enter neither k nor λ): ${unmodelled.slice(0, 12).map(([t, n]) => `${t} ×${n}`).join(', ')}${unmodelled.length > 12 ? `, … (+${unmodelled.length - 12} more terms)` : ''}. Note what is in this list: every splice_* term other than donor/acceptor (region, polypyrimidine tract, 5th base) is an INTRONIC modifier, not an essential-splice SNV, and none of them are synonymous — which is why classes are taken from the molecular consequence rather than from VEP's IMPACT severity.`,
             {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
     }
     const cal = meta.calibration || {}
-    banner(`ê = ${cal.eHat != null ? cal.eHat.toFixed(3) : '—'} — THE HEADLINE QC NUMBER. It is the scale fitted from this cohort's own synonymous de novo variants: ê = observed_syn ÷ (2·N·Σp_syn) = ${cal.syn ? cal.syn.obs : 0} ÷ ${cal.syn && cal.syn.exp != null ? cal.syn.exp.toFixed(1) : '—'}${cal.eHatRelSe != null ? ` (±${(100 * cal.eHatRelSe).toFixed(0)}% relative, from √${cal.syn ? cal.syn.obs : 0})` : ''}. Every discovery λ is scaled by it, so the model is FITTED to this cohort rather than asserted. READ IT AS: ê≈1 ⇒ this cohort's de novo yield matches the model; ê≈0.5 ⇒ roughly half the de novo variants were called (or the rate table runs ~2× high here) and λ is scaled to match. ê ABSORBS both the unsettled absolute rate scale (~16% between published tables) and this cohort's ascertainment.`,
+    banner(`MODEL FIT — the QC readout, and a REAL check (not a tautology). Observed vs expected under λ = 2·N·Σp, exome-wide, per class: synonymous ${cal.syn ? cal.syn.obs : 0} vs ${cal.syn && cal.syn.exp != null ? cal.syn.exp.toFixed(1) : '—'} = ${cal.syn ? fmtR(cal.syn.ratio) : '—'}${cal.synRelSe != null ? ` (±${(100 * cal.synRelSe).toFixed(0)}%)` : ''}  ·  missense ${cal.mis ? cal.mis.obs : 0} vs ${cal.mis && cal.mis.exp != null ? cal.mis.exp.toFixed(1) : '—'} = ${cal.mis ? fmtR(cal.mis.ratio) : '—'}  ·  nonsense+splice ${cal.nonSplice ? cal.nonSplice.obs : 0} vs ${cal.nonSplice && cal.nonSplice.exp != null ? cal.nonSplice.exp.toFixed(1) : '—'} = ${cal.nonSplice ? fmtR(cal.nonSplice.ratio) : '—'}. READ THE SYNONYMOUS ONE FIRST: it is ~selection-neutral, so it should sit near 1.0 and it measures how many de novo variants this cohort actually detects and curates. ≈1 ⇒ the rate model fits and the tests below have their full power. Well under 1 ⇒ you are seeing only that fraction of de novo variants, so every test below is CONSERVATIVE and correspondingly under-powered — not wrong, just quiet. Far ABOVE 1 ⇒ the rate model does not fit this data and nothing below should be trusted (this is the check that caught a 4.5× error in an earlier rate source).`,
         {bold: true, italic: true, size: 10, color: {argb: 'FF1F618D'}})
-    banner(`WHAT ê COSTS, stated plainly: the synonymous ratio is now TAUTOLOGICAL — after fitting, observed_syn ÷ expected_syn ≡ 1 BY CONSTRUCTION, so it can no longer detect a broken rate table. ê's own magnitude is the guard that remains, alongside the scale-free test below. ê also ASSUMES detection efficiency is class-independent; synonymous sites are CpG-rich and coverage tracks GC, so a second-order class bias survives — smaller than the scale gap ê removes, but real, and NOT removed by the scale-free test either (both read the same skewed class ratio). Uncalibrated, for reference: nonsense+splice ${cal.nonSplice ? fmtR(cal.nonSplice.ratio) : '—'}, missense ${cal.mis ? fmtR(cal.mis.ratio) : '—'} observed÷expected before ê. Refs: Samocha 2014 Nat Genet 46:944 (model); Kaplanis & Samocha 2020 Nature 586:757 + DeNovoWEST, MIT (rates); Benjamini-Hochberg 1995; Benjamini-Yekutieli 2001 (FDR under positive dependence — the nested tiers).`,
+    banner(`NO SCALE IS FITTED to this cohort, deliberately. An empirical calibration (ê = observed_syn ÷ expected_syn, applied as λ = 2·N·Σp·ê) was built and REMOVED: measured, it made the test 1.4–3.0× too permissive on exactly the categories read first (its noise enters λ un-propagated, worse the larger the category), and it imported curation bias, since a reviewer who passes damaging variants more readily than synonymous ones shrinks every λ. Un-calibrated, λ can only be too LARGE — a cohort can miss de novo variants but cannot invent them — so the tests below are conservative under any ascertainment or curation regime. The price is power when the synonymous ratio is well below 1, and that is exactly what the ratio above tells you. Refs: Samocha 2014 Nat Genet 46:944 (model); Kaplanis & Samocha 2020 Nature 586:757 + DeNovoWEST, MIT (rates); Benjamini-Hochberg 1995; Benjamini-Yekutieli 2001 (FDR under the nested tiers' positive dependence).`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    banner(`THE SCALE-FREE COMPANION — "p/q (scale-free)", one per tier. Condition on the category's OWN total T = k + k_syn: under the null the classes are independent Poissons, so k | T ~ Binomial(T, θ) with θ = Σp ÷ (Σp + Σp_syn). The 2·N and the ê CANCEL — look at the live θ column: neither appears in it. So this test needs NO trio count, NO calibration, and is immune to the absolute rate scale (~16% unsettled between published tables). It asks a subtly different question: not "more than the rate predicts?" but "more SKEWED toward damage, relative to this category's own synonymous variants, than the rate predicts?". READ THE TWO TOGETHER: agreement means the excess is a genuine class skew; significant on the Poisson but NOT here means the category's excess is not skewed — which is what an N, ê or ascertainment artefact looks like. It does NOT escape class-dependent detection (see above). BH family m=${sections.reduce((a, s) => a + (s.mCond || 0), 0)} across all dimensions, corrected per dimension and SEPARATELY from the Poisson.`,
-        {italic: true, size: 10, color: {argb: 'FF1F618D'}})
-    banner(`WHICH TEST DRIVES THE ✓: ${poissonValid ? 'the POISSON — this cohort has both a defensible N and a fitted ê, so the rate-based test is valid and is the primary one. The scale-free q is printed beside it as a robustness read.' : 'the SCALE-FREE test — this cohort ' + (!reliable ? 'has no Sample-QC trio count, so N is a lower bound and λ cannot be trusted' : 'could not fit ê (too few synonymous de novo), so λ would have to assume perfect ascertainment') + '. The Poisson p/q are still printed, but they are NOT the basis of any ✓ here: the scale-free test needs neither N nor ê, so it is the one that still holds.'} On calibration: simulated under the null on this rate table, the Poisson's false-positive rate never exceeds nominal at any cohort size — the fitted ê costs no validity, because ê is unbiased and its residual noise is second-order against Poisson discreteness at de novo counts.`,
+    banner(`CURATION — the assumption that matters most here, stated plainly. Every count above is a CURATION-PASS de novo variant. The tests ask whether damaging de novo exceed the mutation rate; they do NOT know why a variant was passed. If synonymous de novo are reviewed less often than damaging ones (this tool's own impact presets hide LOW from the common review filters, so the default workflow tends that way), the synonymous ratio above reads LOW while the damaging ratio does not — and the gap between the two class ratios is the honest measure of that skew. It does not invalidate the Poisson (λ never uses the synonymous count), but it does mean the synonymous ratio understates your true de novo detection.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    if (!cal.eHatUsable) banner(`⚠ UNCALIBRATED: only ${cal.syn ? cal.syn.obs : 0} synonymous de novo SNVs — below the ${cal.minSyn} needed to fit ê, so the Poisson's λ falls back to 2·N·Σp, which ASSUMES every de novo in this cohort was called. Its p/q are printed but are NOT the basis of any ✓ here. The scale-free test needs no ê, so it is unaffected and carries the ✓ instead.`,
-        {bold: true, italic: true, size: 10, color: {argb: 'FFB03A2E'}})
+
     if (!reliable) banner('⚠ PROVISIONAL N: no Sample-QC trio file, so N counts only probands carrying a variant and is a LOWER BOUND → λ is too small → the Poisson p/q are anti-conservative. They are printed but are NOT the basis of any ✓ here. The scale-free test does not use N at all (it cancels), so it is unaffected and carries the ✓ instead. Load a --sample-qc file to get a defensible N and the rate-based test back.',
         {bold: true, italic: true, size: 10, color: {argb: 'FFB03A2E'}})
     r++; ws.addRow([])
@@ -1915,7 +1890,7 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     const headers = ['Category', ...tiers.map(t => t.label), '# genes', '# probands',
         ...tiers.map(t => `${t.label} p/q`),
         ...tiers.map(t => `${t.label} p/q (scale-free)`),
-        `k (${headTier.label})`, 'k syn', 'Σp', 'Σp syn', 'θ', 'λ = 2·N·Σp·ê', 'P(X≥k)', 'Genes']
+        `k (${headTier.label})`, 'k syn', 'Σp', 'Σp syn', 'θ', 'λ = 2·N·Σp', 'P(X≥k)', 'Genes']
     r++
     const hdr = ws.addRow(headers)
     hdr.eachCell(c => { c.fill = headerFill; c.font = headerFont; c.border = borderThin; c.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true} })
@@ -1938,7 +1913,7 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
         r++
         const hidden = Math.max(0, sec.groups.length - MAX_GROUPS_PER_DIM)
         const shown = sec.groups.slice(0, MAX_GROUPS_PER_DIM)
-        const note = sec.muSource ? '' : '  ·  no gnomAD μ for this dimension\'s genes'
+        const note = sec.muSource ? '' : '  ·  no de novo rate for this dimension\'s genes'
         // BH family m — every (category × tier) cell with a λ, including the no-hit cells
         // and the categories the minCount rule hides. q is family-wide; print m so it can
         // be audited from a single row.
@@ -1961,12 +1936,11 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
             const kA = colLetter(DK) + rowNum, muA = colLetter(DMU) + rowNum, lamA = colLetter(DLAM) + rowNum
             const muSA = colLetter(DMUS) + rowNum
             vals.push(hc.k, hc.kSyn, hc.catMu, hc.catMuSyn)
-            // θ = Σp / (Σp + Σp_syn) — live, so a reader can see that 2·N and ê are simply
-            // not in it. That absence IS the scale-free property, not a claim about it.
+            // θ = Σp / (Σp + Σp_syn) — live, so a reader can see that 2·N is simply not in
+            // it. That absence IS the scale-free property, not a claim about it.
             vals.push(hc.theta != null ? {formula: `${muA}/(${muA}+${muSA})`, result: hc.theta} : '—')
-            // λ carries ê. The formula must show the SAME arithmetic the p-value used —
-            // printing 2*N*Σp here while λ is 2*N*Σp*ê would make the sheet contradict itself.
-            vals.push(hc.lambda != null ? {formula: `2*${N}*${muA}*${eApplied}`, result: hc.lambda} : '—')
+            // λ = 2·N·Σp exactly — no fitted scale, so the formula IS the model.
+            vals.push(hc.lambda != null ? {formula: `2*${N}*${muA}`, result: hc.lambda} : '—')
             vals.push((hc.k > 0 && hc.lambda != null)
                 ? {formula: `1-POISSON(${kA}-1,${lamA},TRUE)`, result: hc.p}
                 : '—')
@@ -1991,7 +1965,7 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
 
 /**
  * "DNM Rate (per-gene)" tab — the de novo mutation-rate enrichment at GENE level.
- * One row per (gene, track) with an observed de novo SNV: k vs Poisson λ = 2·N·p·ê,
+ * One row per (gene, track) with an observed de novo SNV: k vs Poisson λ = 2·N·p,
  * live =1-POISSON(k-1, λ, TRUE). LoF / missense / protein-altering are separate BH
  * discovery families; synonymous is the calibration control (no discovery q). `dnm` =
  * computeModelEnrichment() output (needs dnm.perGene). Wrapped by the caller in try/catch.
@@ -2000,19 +1974,18 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
     const {headerFill, headerFont, borderThin} = styles
     const ws = workbook.addWorksheet('DNM Rate (per-gene)')
     const meta = dnm.meta, pg = dnm.perGene, N = meta.N || 0, reliable = !!meta.nReliable
-    const calibrated = !!(meta.calibration && meta.calibration.eHatUsable)
     const colLetter = (n) => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26) } return s }
     const FMT_PVAL = '[<0.001]0.0E+00;0.000', FMT_MU = '0.00E+00', FMT_LAM = '[<0.05]0.0E+00;0.000'
-    const isSig = (row) => reliable && calibrated && row.discovery && row.q != null && row.q < 0.05   // ✓ withheld when provisional
+    const isSig = (row) => reliable && row.discovery && row.q != null && row.q < 0.05   // ✓ withheld when provisional
     const MAX_PER_TRACK = 100
 
-    const G = 1, K = 2, MU = 3, LAM = 4, P = 5, Q = 6, nCols = 6
+    const G = 1, K = 2, MU = 3, LAM = 4, P = 5, Q = 6, LOEUF = 7, PLI = 8, CONS = 9, nCols = 9
     const mergeAcross = (rr) => ws.mergeCells(rr, 1, rr, nCols)
     let r = 0
     const banner = (text, font) => { r++; const row = ws.addRow([text]); mergeAcross(r); row.getCell(1).font = font; row.getCell(1).alignment = {wrapText: true, vertical: 'top'}; return row }
 
     banner('Gene Analysis — DE NOVO MUTATION-RATE enrichment, PER GENE (Test B)', {bold: true, size: 14, color: {argb: 'FF2C3E50'}})
-    banner(`Per-gene view of the same test as "DNM Rate (gene-set)". One row per (gene, track) with an observed curation-pass de novo SNV: k ~ Poisson(λ = 2·N·p·ê), N = ${N} trios${reliable ? '' : ' (PROVISIONAL — no Sample-QC file)'}, p = the gene's per-transmission de novo rate for that track's classes (Samocha 2014 model, bundled from DeNovoWEST), ê = ${meta.calibration && meta.calibration.eHat != null ? meta.calibration.eHat.toFixed(3) : '—'} = the scale fitted from this cohort's synonymous de novo variants${calibrated ? '' : ' — NOT FITTED (too few synonymous), so λ assumes full ascertainment and ✓ is withheld'}. "P(X≥k)" is a LIVE Excel formula reproducing the q's p-value.`,
+    banner(`Per-gene view of the same test as "DNM Rate (gene-set)". One row per (gene, track) with an observed curation-pass de novo SNV: k ~ Poisson(λ = 2·N·p), N = ${N} trios${reliable ? '' : ' (PROVISIONAL — no Sample-QC file)'}, p = the gene's per-transmission de novo rate for that track's classes (Samocha 2014 model, bundled from DeNovoWEST). No scale is fitted. The LOEUF / pLI columns are the SECOND axis: λ says how SURPRISING the count is (a big, mutable gene expects more by chance), constraint says whether a real variant there would MATTER. They answer different questions and are deliberately not merged — read them together. "P(X≥k)" is a LIVE Excel formula reproducing the q's p-value.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
     banner(`Per-gene λ is tiny, so a single de novo hit rarely survives FDR — power comes from RECURRENCE (≥2 de novos in one gene). The scan is EXOME-WIDE, so each discovery family m counts EVERY autosomal gene with a modelable μ for that track — not just the genes that happened to carry a de novo. A gene with no de novo has the exact p = P(X≥0) = 1 and can never be rejected, but it is still one of the hypotheses the scan asked; correcting only across observed genes would let the data pick the family and put the true FDR far above the nominal 5%. Only genes with k≥1 are listed below (the rest are all p=1). Discovery family m (autosomal genes scanned) — LoF ${pg.familySizes.lof || 0}, missense ${pg.familySizes.mis || 0}, protein-altering ${pg.familySizes.protein_altering || 0}; rows shown with an observed de novo — ${(pg.observedRows && pg.observedRows.lof) || 0} / ${(pg.observedRows && pg.observedRows.mis) || 0} / ${(pg.observedRows && pg.observedRows.protein_altering) || 0}.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
@@ -2024,7 +1997,7 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
     if (!reliable) banner('⚠ PROVISIONAL N: no Sample-QC trio file → N is a lower bound → λ too small → anti-conservative p; ✓ withheld. (Unlike the gene-set tab, there is no scale-free fallback at gene level — see the note above.)', {bold: true, italic: true, size: 10, color: {argb: 'FFB03A2E'}})
     r++; ws.addRow([])
 
-    const headers = ['Gene', 'k (de novo SNVs)', 'p (rate)', 'λ = 2·N·p·ê', 'P(X≥k)', 'q']
+    const headers = ['Gene', 'k (de novo SNVs)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q', 'LOEUF', 'pLI', 'Constrained?']
     r++
     const hdr = ws.addRow(headers)
     hdr.eachCell(c => { c.fill = headerFill; c.font = headerFont; c.border = borderThin; c.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true} })
@@ -2055,20 +2028,31 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
         shown.forEach((row, idx) => {
             const rowNum = r + 1
             const muA = colLetter(MU) + rowNum, kA = colLetter(K) + rowNum, lamA = colLetter(LAM) + rowNum
+            // The SECOND axis, beside the rate. Surprise (λ, p) says a de novo here is
+            // unexpected; constraint says a real one would MATTER. They are independent
+            // questions and are deliberately NOT merged into one score — merging them
+            // would hide which of the two is carrying a row.
+            const con = row.constraint || {}
             const vals = [isSig(row) ? `${row.gene} ✓` : row.gene, row.k, row.mu,
                 {formula: `2*${N}*${muA}`, result: row.lambda},
                 (row.k > 0 && row.lambda != null) ? {formula: `1-POISSON(${kA}-1,${lamA},TRUE)`, result: row.p} : '—',
-                tr.discovery ? (row.q == null ? '—' : row.q) : 'cal']
+                tr.discovery ? (row.q == null ? '—' : row.q) : 'cal',
+                con.loeuf != null ? con.loeuf : '—',
+                con.pli != null ? con.pli : '—',
+                con.loeuf == null && con.pli == null ? '—'
+                    : ((con.loeuf != null && con.loeuf < 0.35) || (con.pli != null && con.pli >= 0.9) ? 'Yes' : 'No')]
             r++
             const xr = ws.addRow(vals)
             xr.eachCell(c => { c.border = borderThin; if (idx % 2 === 1) c.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}} })
-            for (const c of [K, MU, LAM, P, Q]) xr.getCell(c).alignment = {horizontal: 'center'}
+            for (const c of [K, MU, LAM, P, Q, LOEUF, PLI, CONS]) xr.getCell(c).alignment = {horizontal: 'center'}
+            if (typeof vals[LOEUF - 1] === 'number') xr.getCell(LOEUF).numFmt = '0.00'
+            if (typeof vals[PLI - 1] === 'number') xr.getCell(PLI).numFmt = '0.00'
             xr.getCell(MU).numFmt = FMT_MU; xr.getCell(LAM).numFmt = FMT_LAM; xr.getCell(P).numFmt = FMT_PVAL
             if (tr.discovery && typeof vals[Q - 1] === 'number') xr.getCell(Q).numFmt = FMT_PVAL
             if (isSig(row)) { xr.getCell(G).font = {bold: true, color: {argb: 'FF6C3483'}}; xr.getCell(Q).font = {bold: true, color: {argb: 'FF6C3483'}} }
         })
     }
-    if (!any) { r++; ws.addRow(['No gene has an observed de novo SNV with a gnomAD mutation rate in the current export.']); mergeAcross(r) }
+    if (!any) { r++; ws.addRow(['No gene has an observed de novo SNV with a per-gene de novo rate in the current export.']); mergeAcross(r) }
     ws.views = [{state: 'frozen', ySplit: headerRowIdx}]
 }
 
@@ -2540,14 +2524,15 @@ app.post('/api/export/xlsx', async (req, res) => {
                 buildGeneAnalysisTab(workbook, conv, gaStyles, GA_DNM_TRACK)
 
                 // --- Test B: de novo mutation-rate enrichment (separate, gated) ---
-                // A DE-NOVO-ONLY test (λ = 2·N·Σp·ê, Samocha-2014 rates). Suppressed when de novo
+                // A DE-NOVO-ONLY test (λ = 2·N·Σp, Samocha-2014 rates). Suppressed when de novo
                 // status is unknown (no `inheritance` column) or the rate bundle is absent.
                 // Isolated try — never affects Test A.
                 if (gaCfg.dnmRateTest !== false) {
                     try {
                         const inheritanceCol = headerColumns.includes('inheritance') ? 'inheritance' : null
                         // Molecular consequence is STRONGLY preferred over IMPACT severity:
-                        // VEP LOW is not synonymous, and synonymous is what fits ê.
+                        // VEP LOW is not synonymous, and the synonymous class is the model-fit
+                        // diagnostic — contaminating it corrupts the one honest QC readout.
                         const consequenceCol = ['Consequence', 'consequence', 'CONSEQUENCE'].find(c => headerColumns.includes(c)) || null
                         // The rate table is keyed by gene symbol and carries no coordinates, so
                         // it needs no GRCh38 gate — Test B runs on GRCh37 too. (If anything the

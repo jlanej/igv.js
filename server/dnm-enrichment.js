@@ -26,26 +26,21 @@
  *     ~0.168). This bundle sums to 1.074 per trio at a ratio of 0.161 — the numbers
  *     that make the test meaningful rather than an inflated-discovery machine.
  *
- * THE CALIBRATION ê. Absolute rate scale is not settled across published tables (~16%),
- * and a real cohort's de novo ASCERTAINMENT is never 100%: λ = 2·N·p assumes every de
- * novo was called. So the scale is FITTED to this cohort from its own synonymous class,
- * which is (approximately) selection-neutral:
+ * NO FITTED SCALE. λ is 2·N·Σp and nothing else; the rate table is used as published. An
+ * empirical calibration ê = obs_syn/(2·N·Σp_syn) was built and REMOVED — measured, it broke
+ * the test two ways: (1) plugging a fitted ê in as a known constant leaves λ̂ = K_syn·r
+ * (r = Σp_disc/Σp_syn(exome)) carrying K_syn's Poisson noise, so the null rejection rate runs
+ * 1.4-3.0× nominal as r grows — worst on the very categories anyone reads first (ClinVar P/LP
+ * r=0.94, LOEUF<0.6 0.72, GenCC AR 0.64); (2) the curation pass gate applies to the synonymous
+ * calibrator too, so a reviewer favouring damaging variants shrinks every discovery λ (a 25%
+ * class skew → 1.3× over-rejection).
  *
- *   ê = observed_syn / (2 · N · Σ_g p_syn(g))     over the same gene set k is counted on
- *
- * and every discovery class uses λ = 2·N·p·ê. ê IS the headline QC number: ê≈1 means
- * this cohort's de novo yield matches the model; ê≈0.5 means about half the de novo
- * variants were called (or the rate table runs ~2x high for this data), and the
- * discovery λ is scaled to match rather than being asserted.
- *
- * CONSEQUENCE, ALSO ITS COST: the synonymous ratio is no longer an independent guard.
- * Once λ carries ê, observed_syn / expected_syn ≡ 1 BY CONSTRUCTION — it is tautological
- * and cannot detect a broken rate table. The check that survives is ê's own magnitude,
- * and the scale-free conditional binomial (which needs neither N nor ê).
- *
- * ê ASSUMES detection efficiency is CLASS-INDEPENDENT. Synonymous sites are CpG-rich and
- * coverage tracks GC, so a second-order class bias survives — far smaller than the scale
- * gap it removes, but real, and stated rather than hidden.
+ * WITHOUT it the test is CONSERVATIVE under any regime: you can only MISS de novo variants,
+ * never invent them, so E[k] = λ·f with f ≤ 1 and P(X≥k) is if anything too large (measured
+ * 0.81× of nominal at f=1, falling as f falls). It costs power when f is low — which is why
+ * the per-class observed/expected ratios are REPORTED: they tell a reader how much power they
+ * have, and the synonymous one is a real, non-tautological guard. It is the check that caught
+ * the gnomAD-μ defect by reading 4.63; fitting ê would have absorbed that 4.63 and hidden it.
  *
  * References: Samocha et al. Nat Genet 2014;46:944 (framework + rate model);
  * Kaplanis & Samocha et al. Nature 2020;586:757 + HurlesGroupSanger/DeNovoWEST, MIT
@@ -57,7 +52,7 @@
  *  - autosomal-only (2·N assumes two autosomal copies; X/Y needs proband sex);
  *  - inheritance gate = `de_novo` only (suppressed entirely when unknown);
  *  - consequence classes from VEP Consequence when present, IMPACT only as a fallback;
- *  - ê reported loudly, with its tautology and its class-independence assumption stated;
+ *  - per-class observed/expected reported as a DIAGNOSTIC, never folded into λ;
  *  - N from the Sample-QC trio count when available (else provisional).
  *
  * Pure / deterministic (no I/O), so unit-testable in isolation.
@@ -196,19 +191,6 @@ const DOMINANT_INHERITED = {id: 'dominant_inherited', label: 'Dominant inherited
     needs: 'gnomAD allele frequencies (population carrier expectation)'}
 const MODELS = {de_novo: DE_NOVO, x_linked_denovo: X_LINKED_DENOVO, recessive_hom: RECESSIVE_HOM, dominant_inherited: DOMINANT_INHERITED}
 
-// Minimum observed synonymous de novo count before ê is fitted at all. ê's relative
-// standard error is ~1/√(obs_syn), so 10 gives ~32% — imprecise, but far better than the
-// alternative, which is ASSERTING a scale. Below it, ê is not fitted and the test is
-// marked uncalibrated so the tab can withhold its ✓ marks: the failure mode being blocked
-// is obs_syn = 0 ⇒ ê = 0 ⇒ λ = 0 ⇒ p = 0 for every k ≥ 1, i.e. the entire exome
-// "significant". Note ê's noise is NOT propagated into p (the Poisson treats λ as known),
-// which one might expect to make the calibrated p anti-conservative. MEASURED, it does
-// not: simulated under the null on the real rate bundle, the Poisson's rejection rate is
-// at or BELOW nominal at every cohort size (0.49-0.99x of α at N=220...20000). ê is
-// unbiased, its relative noise is 1/sqrt(exome syn count), and the second-order effect of
-// that is swamped by Poisson discreteness at de novo counts. The scale-free conditional
-// binomial is a companion for a different reason: it needs neither N nor ê.
-const MIN_SYN_FOR_EHAT = 10
 
 // Autosomes 1..22 (chr already normalised to bare '1'…'22','X','Y' in the bundle).
 function isAutosome(chr) { return /^(?:[1-9]|1\d|2[0-2])$/.test(String(chr || '')) }
@@ -242,7 +224,7 @@ function categoryRateSums(rates, bundles, geneSetLibs) {
     const byDim = {}
     const total = {nonSplice: 0, mis: 0, syn: 0}
     let nGenes = 0
-    if (!rates || !rates.size) return {byDim, total, nGenes}
+    if (!rates || !rates.size) return {byDim, total, nGenes, constraint: new Map()}
     const b = bundles || {}
     const modelable = (rec) => !!rec && isAutosome(rec.chr) &&
         (rec.pNonSplice != null || rec.pMis != null || rec.pSyn != null)
@@ -280,7 +262,19 @@ function categoryRateSums(rates, bundles, geneSetLibs) {
             if (lib && lib.size) walk(dimId, lib.keys())
         }
     }
-    return {byDim, total, nGenes}
+    // Per-gene CONSTRAINT, carried through for the per-gene tab. This is a SECOND, orthogonal
+    // axis to the rate: λ says how surprising the count is, constraint says whether a real
+    // variant there would matter. They are reported side by side and never merged — a single
+    // blended score would hide which of the two is carrying a gene.
+    const constraint = new Map()
+    if (b.gnomad) for (const [g, rec] of b.gnomad) {
+        if (!rec) continue
+        if (typeof rec.loeuf === 'number' || typeof rec.pli === 'number') {
+            constraint.set(g, {loeuf: typeof rec.loeuf === 'number' ? rec.loeuf : null,
+                pli: typeof rec.pli === 'number' ? rec.pli : null})
+        }
+    }
+    return {byDim, total, nGenes, constraint}
 }
 
 /**
@@ -343,44 +337,45 @@ function computeModelEnrichment(variants, opts) {
     }
     meta.nDistinctProbands = probandSet.size
 
-    // --- ê: the empirical calibration, fitted from this cohort's own synonymous class ---
-    // ê = observed_syn / (2·N·Σ_g p_syn), summed over the SAME autosomal gene set k is
-    // counted on. It absorbs, in one number, both the unsettled absolute rate scale
-    // (~16% between published tables) and this cohort's de novo ASCERTAINMENT — λ = 2·N·p
-    // otherwise assumes every de novo was called, which no real pipeline achieves.
+    // --- MODEL FIT: per-class observed vs expected. A DIAGNOSTIC, never a correction. ---
+    // λ is 2·N·Σp and nothing else. The rate table is used AS PUBLISHED; no scale is fitted
+    // from the data.
     //
-    // Synonymous is the right calibrator because it is ~selection-neutral, so its count
-    // reflects mutation + detection and nothing else. The PRICE, stated here and in the
-    // sheet: after this, observed_syn/expected_syn ≡ 1 by construction — the synonymous
-    // ratio is TAUTOLOGICAL and is no longer a guard. ê's own magnitude is the guard.
+    // WHY NOT FIT A SCALE (this was tried, and removed). λ = 2·N·p assumes every de novo was
+    // called, so a natural instinct is to fit ê = obs_syn/(2·N·Σp_syn) and use λ = 2·N·p·ê.
+    // Measured, that is a bad trade twice over:
+    //  1. It BREAKS THE TEST. Substituting ê gives λ̂ = K_syn·r with r = Σp_disc/Σp_syn(exome),
+    //     so λ̂ inherits K_syn's Poisson noise while the test treats it as a known constant.
+    //     The ignored variance is a fraction r of the total — INDEPENDENT of N. Null rejection
+    //     at α=0.05 measured: r=0.3 → 1.4×, r=0.7 → 2.0×, r=1.5 → 3.0×. The real categories
+    //     with the largest r are the ones anyone reads first (ClinVar P/LP 0.94, LOEUF<0.6
+    //     0.72, GenCC AR 0.64, AD 0.56, pLI≥0.9 0.56), so it over-calls exactly there.
+    //  2. It IMPORTS CURATION BIAS. The pass gate applies to the synonymous calibrator too. If
+    //     a reviewer passes damaging variants more readily than synonymous ones, ê absorbs that
+    //     as if it were sequencing ascertainment and every discovery λ shrinks. Measured: a 25%
+    //     class skew → 1.3× over-rejection; 2× skew → 5×.
     //
-    // ASSUMPTION: detection efficiency is class-independent. Synonymous sites are CpG-rich
-    // and coverage tracks GC, so a second-order class bias survives.
+    // WITHOUT ê the test is CONSERVATIVE under any regime, because you can only ever MISS de
+    // novo variants, never invent them: E[k] = λ·f with f ≤ 1, so P(X≥k) is if anything too
+    // large. Measured at r=0.7: 0.81× of nominal at f=1, falling as f falls. Curation skew
+    // cannot make it over-reject at all — the synonymous count is not in λ. The cost is power
+    // when f is low (at f=0.55 a true 2× effect is found 15% of the time vs ~100% at f=1),
+    // which is why the ratios below are reported: they TELL a reader how much power they have.
+    //
+    // The ratios are now a REAL guard again, not a tautology. syn ≈ 1 means the model fits this
+    // cohort. This is the check that caught the original defect by reading 4.63 when λ came
+    // from gnomAD's mutability covariate; fitting ê would have silently absorbed that 4.63 and
+    // hidden the very bug it exposed.
     const total = (categoryMu && categoryMu.total) || {nonSplice: 0, mis: 0, syn: 0}
-    const expSynRaw = 2 * (N || 0) * (total.syn || 0)
-    const eHat = (expSynRaw > 0 && meta.byClass.syn > 0) ? meta.byClass.syn / expSynRaw : null
-    meta.eHat = eHat
+    const ratio = (obs, sp) => (N > 0 && sp > 0) ? obs / (2 * N * sp) : null
     meta.calibration = {
-        // Uncalibrated per-class observed vs 2·N·Σp — the RAW model, before ê. Reported so
-        // a reader can see what ê is actually correcting, and by how much.
-        syn: {obs: meta.byClass.syn, exp: expSynRaw, ratio: expSynRaw > 0 ? meta.byClass.syn / expSynRaw : null},
-        mis: {obs: meta.byClass.mis, exp: 2 * (N || 0) * (total.mis || 0), ratio: (total.mis > 0 && N > 0) ? meta.byClass.mis / (2 * N * total.mis) : null},
-        nonSplice: {obs: meta.byClass.nonSplice, exp: 2 * (N || 0) * (total.nonSplice || 0), ratio: (total.nonSplice > 0 && N > 0) ? meta.byClass.nonSplice / (2 * N * total.nonSplice) : null},
-        eHat,
-        // ê is a ratio of a Poisson count to a constant, so its relative SE is ~1/√k_syn.
-        // Printed because a reader must be able to see how well-determined the scale is —
-        // ê=0.55 on 72 synonymous variants (±12%) is a finding; on 4 it is noise.
-        eHatRelSe: meta.byClass.syn > 0 ? 1 / Math.sqrt(meta.byClass.syn) : null,
-        // Without enough synonymous variants there is nothing to fit ê from. Say so rather
-        // than defaulting to 1: an unfitted λ silently reverts to "assume every de novo in
-        // this cohort was called", which no pipeline achieves.
-        eHatUsable: eHat != null && meta.byClass.syn >= MIN_SYN_FOR_EHAT,
-        minSyn: MIN_SYN_FOR_EHAT
+        syn: {obs: meta.byClass.syn, exp: 2 * (N || 0) * (total.syn || 0), ratio: ratio(meta.byClass.syn, total.syn)},
+        mis: {obs: meta.byClass.mis, exp: 2 * (N || 0) * (total.mis || 0), ratio: ratio(meta.byClass.mis, total.mis)},
+        nonSplice: {obs: meta.byClass.nonSplice, exp: 2 * (N || 0) * (total.nonSplice || 0), ratio: ratio(meta.byClass.nonSplice, total.nonSplice)},
+        // Relative SE of the synonymous ratio (a Poisson count over a constant), so a reader
+        // can tell a finding from noise: 1.03 on 72 variants is ±12%; on 4 it is meaningless.
+        synRelSe: meta.byClass.syn > 0 ? 1 / Math.sqrt(meta.byClass.syn) : null
     }
-    // The scale actually applied to every discovery λ. Falls back to 1 ONLY when ê cannot
-    // be fitted, and that fallback is flagged so the tab can withhold its ✓ marks.
-    const eApplied = meta.calibration.eHatUsable ? eHat : 1
-    meta.eApplied = eApplied
     // Exome-wide model inputs, published so the sheet can derive statements from the DATA
     // rather than restate constants that quietly rot when the rate bundle is rebuilt.
     meta.rateGenes = (categoryMu && categoryMu.nGenes) || 0
@@ -419,9 +414,8 @@ function computeModelEnrichment(variants, opts) {
             for (const tier of CODING_TIERS) {
                 const k = tier.classes.reduce((s, c) => s + (o[c] || 0), 0)
                 const sumMu = tier.classes.reduce((s, c) => s + (muT[c] || 0), 0)
-                // λ = 2·N·Σp·ê — the fitted scale, not an asserted one. eApplied is 1 only
-                // when ê could not be fitted, and that case is flagged so ✓ is withheld.
-                const lambda = (N > 0 && sumMu > 0) ? 2 * N * sumMu * eApplied : null
+                // λ = 2·N·Σp — the published rate, no fitted scale. See the header for why.
+                const lambda = (N > 0 && sumMu > 0) ? 2 * N * sumMu : null
                 // EVERY modelable cell is a tested hypothesis. k=0 yields the exact
                 // p = P(X≥0) = 1: it can never be rejected, but it must count toward m.
                 // Gating on k>0 would let the observed data define the family and push the
@@ -452,7 +446,7 @@ function computeModelEnrichment(variants, opts) {
                 const T = k + kSyn
                 const pCond = theta == null ? null : (T > 0 ? binomUpperTail(k, T, theta) : 1)
                 cells[tier.key] = {k, kSyn, T, lambda, catMu: sumMu, catMuSyn: sumSyn, theta,
-                    eApplied, p, q: null, pCond, qCond: null}
+                    p, q: null, pCond, qCond: null}
             }
             allGroups.push({term, cells, kTop: cells[TOP].k, probands: o.probands.size,
                 genes: [...o.genes].sort(), refK: cells[TOP].k})
@@ -506,6 +500,8 @@ function computeModelEnrichment(variants, opts) {
     // --- per-gene enrichment: gene × class, λ = 2·N·μ (Stage 2) ---
     const geneK = {}   // gene -> {lof, mis, syn}
     for (const u of used) { const g = geneK[u.gene] || (geneK[u.gene] = {nonSplice: 0, mis: 0, syn: 0}); g[u.cls]++ }
+    const conMap = (categoryMu && categoryMu.constraint) || new Map()
+    const conOf = (g) => conMap.get(g) || null
     const perGeneRows = []
     for (const gene of Object.keys(geneK)) {
         const rec = muByGene ? muByGene.get(gene) : null
@@ -514,10 +510,10 @@ function computeModelEnrichment(variants, opts) {
             const k = tr.classes.reduce((s, c) => s + (geneK[gene][c] || 0), 0)
             if (k <= 0) continue                         // only OBSERVED (gene, track) rows
             const mu = tr.classes.reduce((s, c) => s + (rec[RATE_FIELD[c]] || 0), 0)
-            // Same fitted scale as the category level — one ê for the whole test.
-            const lambda = (N > 0 && mu > 0) ? 2 * N * mu * eApplied : null
+            const lambda = (N > 0 && mu > 0) ? 2 * N * mu : null
             perGeneRows.push({gene, track: tr.key, trackLabel: tr.label, discovery: tr.discovery,
-                k, mu, lambda, eApplied, p: (lambda != null && k > 0) ? poissonUpperTail(k, lambda) : null, q: null})
+                k, mu, lambda, p: (lambda != null && k > 0) ? poissonUpperTail(k, lambda) : null, q: null,
+                constraint: conOf(gene)})
         }
     }
     // BH-FDR per discovery track (nonsense+splice / missense / protein-altering are SEPARATE
@@ -540,7 +536,7 @@ function computeModelEnrichment(variants, opts) {
             for (const rec of muByGene.values()) {
                 if (!isAutosome(rec && rec.chr)) continue
                 const mu = tr.classes.reduce((s, c) => s + (rec[RATE_FIELD[c]] || 0), 0)
-                if (mu > 0) mExome++                          // λ = 2·N·p·ê > 0 ⇒ testable
+                if (mu > 0) mExome++                          // λ = 2·N·p > 0 ⇒ testable
             }
         }
         const m = Math.max(mExome, fam.filter(r => r.p != null).length)
@@ -557,5 +553,5 @@ function computeModelEnrichment(variants, opts) {
 module.exports = {
     computeModelEnrichment, categoryRateSums, poissonUpperTail, classifyConsequence,
     MODELS, DE_NOVO, CONSEQUENCE_CLASS, IMPACT_CLASS, RATE_FIELD,
-    CODING_TIERS, PER_GENE_TRACKS, isAutosome, isSnv, MIN_SYN_FOR_EHAT
+    CODING_TIERS, PER_GENE_TRACKS, isAutosome, isSnv
 }
