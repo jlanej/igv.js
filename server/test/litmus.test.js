@@ -92,6 +92,8 @@ describe('litmus: the de novo RATE bundle is a rate, not a covariate', function 
         expect(tsc2.pSyn, 'TSC2 pSyn').to.be.within(1e-7, 1e-3)
         expect(tsc2.pMis, 'TSC2 pMis').to.be.within(1e-7, 1e-3)
         expect(tsc2.pNonSplice, 'TSC2 pNonSplice').to.be.within(1e-8, 1e-4)
+        expect(tsc2.pLof, 'TSC2 pLof (SNV LoF + frameshift)').to.be.within(1e-8, 1e-4)
+        expect(tsc2.pLof, 'p_lof must EXCEED the SNV-only residual — it is that plus frameshift').to.be.greaterThan(tsc2.pNonSplice)
         expect(tsc2.chr, 'TSC2 chromosome').to.equal('16')
         // The rate table knows X-linked genes even though gnomAD's constraint set cannot
         // score them. Test B still excludes X (2·N assumes two copies) — but by an explicit
@@ -107,11 +109,54 @@ describe('litmus: the de novo RATE bundle is a rate, not a covariate', function 
         expect(perTrio, 'coding de novo SNVs per trio (published ~1.0-1.3)').to.be.within(0.9, 1.3)
         expect(ratio, '(nonsense+splice)/synonymous (expect ~0.16-0.17)').to.be.within(0.14, 0.19)
         expect(cr.nGenes, 'modelable autosomal genes').to.be.within(15000, 19500)
+        // The frameshift-inclusive LoF ratio is a SEPARATE number and must not be confused
+        // with the SNV-only one above: ~0.30 vs ~0.16. Pairing p_lof with an SNV-only count
+        // is the classic error in this framework, and the gap between these two assertions
+        // is exactly its size (1.85x).
+        const crFs = categoryRateSums(rates, {}, {}, true)
+        const lofRatio = (crFs.total.nonSplice + crFs.total.frameshift) / crFs.total.syn
+        expect(lofRatio, 'p_lof/synonymous (expect ~0.30 — the SNV-only LoF PLUS frameshift)').to.be.within(0.27, 0.33)
+        expect(lofRatio / ratio, 'including frameshift multiplies the LoF target ~1.85x').to.be.within(1.75, 1.95)
         // And the contrast that justifies the whole change: gnomAD's covariate fails BOTH.
         let mu = {lof: 0, mis: 0, syn: 0}
         for (const r of gnB.values()) { mu.lof += r.muLof || 0; mu.mis += r.muMis || 0; mu.syn += r.muSyn || 0 }
         expect(2 * (mu.lof + mu.mis + mu.syn), 'gnomAD μ is NOT a de novo rate — far below the published scale').to.be.lessThan(0.5)
         expect(mu.lof / mu.syn, 'gnomAD lof.mu/syn.mu class balance is wrong too').to.be.greaterThan(0.25)
+    })
+
+    it('the frameshift target can never outrun what the data can count', function () {
+        // THE failure mode this design exists to prevent: a LoF target that includes
+        // frameshift while the observed count cannot see it inflates λ by 1.85x and
+        // manufactures findings. Three independent guards, pinned here.
+        const {rateFor, computeModelEnrichment, CODING_TIERS} = require('../dnm-enrichment')
+
+        // 1. frameshift is DERIVED, so the LoF tier's target IS the published p_lof — not a
+        //    number of ours that happens to agree with theirs.
+        let worst = 0, nNeg = 0, n = 0
+        for (const r of rates.values()) {
+            const fs = rateFor(r, 'frameshift')
+            if (fs == null) continue
+            n++
+            if (r.pLof - r.pNonSplice < 0) nNeg++
+            worst = Math.max(worst, Math.abs((rateFor(r, 'nonSplice') + fs) - r.pLof))
+        }
+        expect(n, 'frameshift derivable across the bundle').to.be.greaterThan(15000)
+        expect(nNeg, 'no gene has p_lof < pNonSplice (the derivation would go negative)').to.equal(0)
+        expect(worst, 'LoF tier target === published p_lof, exactly, for every gene').to.be.lessThan(1e-15)
+        expect(CODING_TIERS[0].classes, 'the LoF tier is the two components').to.deep.equal(['nonSplice', 'frameshift'])
+
+        // 2. countFrameshift=false zeroes the frameshift target and leaves the SNV-only
+        //    component untouched — the pairing an IMPACT-only cohort needs.
+        const off = categoryRateSums(rates, {}, {}, false), on = categoryRateSums(rates, {}, {}, true)
+        expect(off.total.frameshift, 'OFF ⇒ no frameshift target at all').to.equal(0)
+        expect(on.total.frameshift, 'ON ⇒ a real frameshift target').to.be.greaterThan(0)
+        expect(off.total.nonSplice, 'the SNV-only component is identical either way').to.be.closeTo(on.total.nonSplice, 1e-15)
+
+        // 3. The dangerous combination THROWS rather than silently inflating λ: a target that
+        //    counts frameshift, wired to a cohort with no Consequence column to find one in.
+        expect(() => computeModelEnrichment([], {categoryMu: on, consequenceCol: null, N: 100,
+            dimensions: [], muByGene: rates, geneCol: 'gene', chromCol: 'chrom', refCol: 'ref',
+            altCol: 'alt', inheritanceCol: 'inheritance'}), 'target/count mismatch must be loud').to.throw(/frameshift target\/count mismatch/)
     })
 
     it('chrX is excluded from Σp — 2·N assumes two copies', function () {

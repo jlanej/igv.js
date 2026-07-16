@@ -6,7 +6,7 @@
  * The de novo model asks: did we observe MORE de novo variants in a gene / category
  * than the germline mutation rate predicts for a cohort of N trios?
  *
- *   λ(gene, class) = 2 · N · p(gene, class) · ê,  observed k ~ Poisson(λ),
+ *   λ(gene, class) = 2 · N · p(gene, class),  observed k ~ Poisson(λ),
  *   P = P(X ≥ k) = 1 − Σ_{i=0}^{k−1} e^−λ λ^i / i!
  *
  * The constant 2 = the two parental transmissions at risk per proband (denovolyzeR:
@@ -14,11 +14,18 @@
  *
  * THE RATE p. Per-gene, per-class, PER-TRANSMISSION de novo probabilities from the
  * Samocha 2014 trinucleotide model, bundled from the DeNovoWEST release
- * (data/annotations/dnm_rates.json.gz). Classes: pSyn, pMis, and pNonSplice =
- * p_all − p_syn − p_mis, i.e. nonsense + essential-splice SNVs.
- *   - NOT the table's own p_lof, which INCLUDES frameshift: pairing it with our
- *     SNV-only observed count would inflate λ's LoF term by ~1.8x.
- *   - NOT gnomAD's lof.mu / mis.mu / syn.mu, which λ was previously built from. Those
+ * (data/annotations/dnm_rates.json.gz). Four classes, each pinned to what it can COUNT:
+ *   - syn        ← pSyn         synonymous SNVs (the model-fit diagnostic, never discovery)
+ *   - mis        ← pMis         missense SNVs
+ *   - nonSplice  ← pNonSplice = p_all − p_syn − p_mis — nonsense + essential-splice SNVs
+ *   - frameshift ← p_lof − pNonSplice — frameshift indels (DERIVED; see rateFor)
+ * The LoF tier is nonSplice + frameshift, so its target sums to the table's published p_lof
+ * by construction. Using p_lof directly against an SNV-ONLY count is the classic error in
+ * this framework — it inflates the LoF λ by 1.85× — which is why the two components are
+ * kept separate and the frameshift half is summed ONLY when a Consequence column makes
+ * frameshift countable (VEP IMPACT cannot separate frameshift from nonsense).
+ *
+ * The rate is NOT gnomAD's lof.mu / mis.mu / syn.mu, which λ was previously built from. Those
  *     are a MUTABILITY COVARIATE, not a rate: gnomAD fits `expected = mu·slope +
  *     intercept` and refits the slope, so mu is identified only up to a proportionality
  *     constant. Summing it predicts 0.276 coding de novo per trio against a published
@@ -48,7 +55,10 @@
  * Benjamini & Hochberg JRSS-B 1995;57:289 (FDR).
  *
  * Scientific guards (all reported in the Methods output):
- *  - SNV-only observed counts (the rates are SNV-only; HIGH/MOD indels have no term);
+ *  - observed counts are SNV-only EXCEPT frameshift, the one class the rate model gives an
+ *    indel term (inframe indels have no term and stay excluded, counted as exclIndel);
+ *  - the frameshift target is summed only when frameshift is countable, so the LoF λ can
+ *    never include a target the counter cannot see;
  *  - autosomal-only (2·N assumes two autosomal copies; X/Y needs proband sex);
  *  - inheritance gate = `de_novo` only (suppressed entirely when unknown);
  *  - consequence classes from VEP Consequence when present, IMPACT only as a fallback;
@@ -105,11 +115,31 @@ function poissonUpperTail(k, lambda) {
 }
 
 // ---- consequence / class model ----
-// The three modelable classes, named for what they ACTUALLY are. 'nonSplice' is
-// nonsense + essential-splice SNVs — deliberately NOT called "LoF", because the rate
-// it pairs with (pNonSplice) excludes frameshift, and calling it LoF is exactly the
-// trap the table's own p_lof column sets.
+// The modelable classes, named for what they ACTUALLY are. 'nonSplice' is nonsense +
+// essential-splice SNVs ONLY — deliberately not called "LoF", because the rate it pairs
+// with (pNonSplice) excludes frameshift. LoF is a TIER that sums nonSplice + frameshift.
 const RATE_FIELD = {nonSplice: 'pNonSplice', mis: 'pMis', syn: 'pSyn'}
+
+// 'frameshift' has NO stored rate field: it is DERIVED as p_lof − pNonSplice, i.e. exactly
+// the part of the table's LoF target that pNonSplice leaves out. Deriving beats storing a
+// fourth column because it makes the LoF tier's target sum to the published p_lof BY
+// CONSTRUCTION (pNonSplice + (p_lof − pNonSplice) ≡ p_lof) rather than by our arithmetic
+// agreeing with theirs. Verified against the table: 0 of 19,587 genes have p_lof <
+// pNonSplice, and the derived frameshift target is 0.851× the SNV-only LoF target
+// (Samocha 2014 models frameshift at ~1.25× the nonsense rate — this is the model's own
+// arithmetic, not an approximation of ours).
+function rateFor(rec, cls) {
+    if (!rec) return null
+    if (cls === 'frameshift') {
+        if (rec.pLof == null || rec.pNonSplice == null) return null
+        // The build script rejects p_lof < pNonSplice, so this clamp should never bind; it
+        // is here so a hand-edited or older bundle degrades to "no frameshift target"
+        // rather than to a NEGATIVE λ contribution that would silently cancel real signal.
+        return Math.max(0, rec.pLof - rec.pNonSplice)
+    }
+    const f = RATE_FIELD[cls]
+    return f && rec[f] != null ? rec[f] : null
+}
 
 // PREFERRED classifier: the molecular consequence (VEP `Consequence`). VEP emits an
 // &-separated list ordered most-severe-first; we take the most severe TERM WE MODEL.
@@ -119,12 +149,15 @@ const CONSEQUENCE_CLASS = {
     stop_gained: 'nonSplice',
     splice_donor_variant: 'nonSplice',
     splice_acceptor_variant: 'nonSplice',
+    frameshift_variant: 'frameshift',
     missense_variant: 'mis',
     synonymous_variant: 'syn',
     // Explicitly NOT modelled, and explicitly listed so the exclusion is a decision:
-    // start_lost / stop_lost / stop_retained have no separate term in the rate model,
-    // and every other splice_* term (region, polypyrimidine tract, 5th base) is an
-    // INTRONIC modifier, not an essential splice-site SNV.
+    // start_lost / stop_lost / stop_retained have no separate term in the rate model;
+    // every other splice_* term (region, polypyrimidine tract, 5th base) is an INTRONIC
+    // modifier, not an essential splice-site SNV; and inframe_insertion/inframe_deletion
+    // are indels with no rate term at all (the model gives frameshift a term, not indels
+    // in general), so they stay excluded even though the frameshift class now admits indels.
 }
 // FALLBACK classifier, used ONLY when the data has no Consequence COLUMN AT ALL: VEP
 // IMPACT severity. This is an approximation and a KNOWN source of error — VEP LOW is NOT
@@ -132,6 +165,13 @@ const CONSEQUENCE_CLASS = {
 // splice_polypyrimidine_tract / splice_donor_5th_base / intronic, none of which are
 // synonymous. That matters more than it looks: the synonymous class is the model-fit
 // DIAGNOSTIC, so contaminating it corrupts the one honest QC readout on the tab.
+//
+// The fallback ALSO cannot see frameshift: VEP HIGH lumps frameshift in with nonsense and
+// essential splice, and no severity label separates them. So under the fallback there is no
+// 'frameshift' class, the LoF tier collapses to nonSplice alone, and — load-bearing — the
+// frameshift TARGET must collapse with it (see countFrameshift). Counting SNV-only LoF
+// against an SNV+frameshift target would inflate the LoF λ by 1.85×, which is the single
+// most dangerous arithmetic error available on this tab.
 const IMPACT_CLASS = {HIGH: 'nonSplice', MODERATE: 'mis', LOW: 'syn'}
 
 /**
@@ -171,18 +211,21 @@ function classifyConsequence(consequence, impact, colPresent) {
 }
 
 // Cumulative PROTEIN-ALTERING discovery tiers. Synonymous is deliberately NOT a
-// discovery tier — it is the CALIBRATOR (it fits ê), so testing it would be circular:
-// its own ratio is 1 by construction. It never enters a category's k / λ / ranking / ✓.
+// discovery tier: it is the MODEL-FIT DIAGNOSTIC. Being ~selection-neutral, its observed÷
+// expected is the honest read on whether the rate model fits this cohort at all (and it is
+// the check that caught a 4.5x error in an earlier rate source). Testing it for DISCOVERY
+// would be asking whether neutral variation is under selection — not a question worth a
+// column. It never enters a category's k / λ / ranking / ✓.
 const CODING_TIERS = [
-    {key: 'HIGH', label: 'nonsense+splice', classes: ['nonSplice']},
-    {key: 'HIGH_MOD', label: 'nonsense+splice+missense', classes: ['nonSplice', 'mis']}
+    {key: 'HIGH', label: 'LoF (nonsense+splice+frameshift)', classes: ['nonSplice', 'frameshift']},
+    {key: 'HIGH_MOD', label: 'LoF+missense', classes: ['nonSplice', 'frameshift', 'mis']}
 ]
 // Per-gene tracks (Stage 2). Separate DISCOVERY families (BH per track across genes).
 // Synonymous is shown for transparency but carries no discovery q — it is the calibrator.
 const PER_GENE_TRACKS = [
-    {key: 'lof', label: 'nonsense+splice (SNV)', classes: ['nonSplice'], discovery: true},
+    {key: 'lof', label: 'LoF (nonsense+splice+frameshift)', classes: ['nonSplice', 'frameshift'], discovery: true},
     {key: 'mis', label: 'missense', classes: ['mis'], discovery: true},
-    {key: 'protein_altering', label: 'protein-altering', classes: ['nonSplice', 'mis'], discovery: true},
+    {key: 'protein_altering', label: 'protein-altering', classes: ['nonSplice', 'frameshift', 'mis'], discovery: true},
     {key: 'syn', label: 'synonymous (calibrator)', classes: ['syn'], discovery: false}
 ]
 
@@ -219,7 +262,7 @@ function isSnv(ref, alt) {
  * Category rate-sums: for each dimension × term, Σ of {nonSplice,mis,syn} per-transmission
  * rates over the genes in that source's universe that are AUTOSOMAL and have a rate — the
  * category's mutational target, i.e. the denominator half of λ. Plus `total`, the same sums
- * exome-wide, which is what ê is fitted against.
+ * exome-wide, which is what the per-class model-fit diagnostic is measured against.
  *
  * Category membership comes from geneTermsFor — the SAME function Test A's numerator and
  * background both route through — so the observed k (which reaches us via geneTerms) and
@@ -231,26 +274,45 @@ function isSnv(ref, alt) {
  * transmissions, which assumes two copies. chrX needs per-proband sex and a copy-aware λ,
  * so X genes are excluded here even though the rate table has 819 of them.
  *
- * @param {Map<string,{pSyn,pMis,pNonSplice,chr}>} rates  per-gene de novo rates, keyed UPPER
+ * FRAMESHIFT IS CONDITIONAL, and this is the load-bearing part. The frameshift target is
+ * summed ONLY when the caller says frameshift de novo can actually be COUNTED — i.e. the
+ * data has a Consequence column, since VEP IMPACT cannot separate frameshift from nonsense.
+ * When it cannot, the frameshift component is 0 everywhere and the LoF tier's target
+ * collapses to pNonSplice, exactly matching an SNV-only count. Getting this wrong in the
+ * unsafe direction (target includes frameshift, count does not) inflates the LoF λ by 1.85×
+ * and manufactures findings.
+ *
+ * The parameter DEFAULTS TO FALSE so a caller that predates frameshift support gets the
+ * SNV-only pairing rather than an inflated λ. It is not a free default, though:
+ * computeModelEnrichment THROWS if this flag disagrees with whether it has a Consequence
+ * column to count frameshift from. The two decisions must be made from the same expression.
+ *
+ * @param {Map<string,{pSyn,pMis,pNonSplice,pLof,chr}>} rates  per-gene de novo rates, keyed UPPER
  * @param {{gnomad?:Map, clinvar?:Map, gencc?:Map}} bundles  for the per-dimension universes
  * @param {Object<string,Map>} [geneSetLibs]  {dimId: Map<UPPER,[terms]>}
- * @returns {{byDim:Object, total:{nonSplice,mis,syn}, nGenes:number}}
+ * @param {boolean} [countFrameshift=false]  can the caller COUNT frameshift de novo?
+ * @returns {{byDim:Object, total:{nonSplice,frameshift,mis,syn}, nGenes:number, countFrameshift:boolean}}
  */
-function categoryRateSums(rates, bundles, geneSetLibs) {
+function categoryRateSums(rates, bundles, geneSetLibs, countFrameshift = false) {
     const byDim = {}
-    const total = {nonSplice: 0, mis: 0, syn: 0}
+    const cf = !!countFrameshift
+    const total = {nonSplice: 0, frameshift: 0, mis: 0, syn: 0}
     let nGenes = 0
-    if (!rates || !rates.size) return {byDim, total, nGenes, constraint: new Map()}
+    if (!rates || !rates.size) return {byDim, total, nGenes, constraint: new Map(), countFrameshift: cf}
     const b = bundles || {}
     const modelable = (rec) => !!rec && isAutosome(rec.chr) &&
         (rec.pNonSplice != null || rec.pMis != null || rec.pSyn != null)
+    // The ONE place the frameshift target is switched on or off. Every sum below routes
+    // through it, so the tier arithmetic cannot disagree with what the counter can see.
+    const fsRate = (rec) => cf ? (rateFor(rec, 'frameshift') || 0) : 0
 
-    // Exome-wide target: every autosomal gene with a rate. This is ê's denominator, and it
-    // must span the same gene set k is counted over — hence the identical `modelable` gate.
+    // Exome-wide target: every autosomal gene with a rate. It must span the same gene set k
+    // is counted over — hence the identical `modelable` gate.
     for (const rec of rates.values()) {
         if (!modelable(rec)) continue
         nGenes++
         total.nonSplice += rec.pNonSplice || 0; total.mis += rec.pMis || 0; total.syn += rec.pSyn || 0
+        total.frameshift += fsRate(rec)
     }
 
     const providerFor = (g) => ({
@@ -264,8 +326,9 @@ function categoryRateSums(rates, bundles, geneSetLibs) {
             const rec = rates.get(g)
             if (!modelable(rec)) continue
             for (const term of (geneTermsFor(g, providerFor(g), null, geneSetLibs)[dimId] || [])) {
-                const t = d[term] || (d[term] = {nonSplice: 0, mis: 0, syn: 0})
+                const t = d[term] || (d[term] = {nonSplice: 0, frameshift: 0, mis: 0, syn: 0})
                 t.nonSplice += rec.pNonSplice || 0; t.mis += rec.pMis || 0; t.syn += rec.pSyn || 0
+                t.frameshift += fsRate(rec)
             }
         }
     }
@@ -290,7 +353,7 @@ function categoryRateSums(rates, bundles, geneSetLibs) {
                 pli: typeof rec.pli === 'number' ? rec.pli : null})
         }
     }
-    return {byDim, total, nGenes, constraint}
+    return {byDim, total, nGenes, constraint, countFrameshift: cf}
 }
 
 /**
@@ -314,12 +377,27 @@ function computeModelEnrichment(variants, opts) {
 
     const geneRec = (gene) => (muByGene ? muByGene.get(gene) : null)
 
-    // --- gate + classify (pass, de novo, SNV, autosomal, coding class, gene with μ FOR THIS CLASS) ---
+    // Can frameshift de novo be COUNTED? Only with a Consequence column — VEP IMPACT lumps
+    // frameshift in with nonsense under HIGH and no severity label separates them.
+    const countFrameshift = !!consequenceCol
+    // The count and the target must agree, or the LoF λ is wrong by 1.85×. categoryRateSums
+    // decided the target; this decides the count. If they disagree, THROW — the caller wraps
+    // this in try/catch and drops the tab, and a missing tab is strictly better than a tab
+    // whose λ silently manufactures findings. This is a programming error, not a data
+    // condition: it can only fire if a caller passes a different flag than it passes columns.
+    if (categoryMu && typeof categoryMu.countFrameshift === 'boolean' && categoryMu.countFrameshift !== countFrameshift) {
+        throw new Error(`dnm-enrichment: frameshift target/count mismatch — categoryRateSums(countFrameshift=${categoryMu.countFrameshift}) ` +
+            `but consequenceCol is ${consequenceCol ? 'present' : 'absent'} (countable=${countFrameshift}). ` +
+            `Pass the SAME flag to both, or the LoF λ is wrong by ~1.85x.`)
+    }
+
+    // --- gate + classify (pass, de novo, autosomal, coding class, SNV-unless-frameshift,
+    //     gene with a rate FOR THIS CLASS) ---
     const used = []                 // {gene, cls, sample, terms}
     const probandSet = new Set()
-    const meta = {model: model.id, N: N || 0, nReliable: !!nReliable,
+    const meta = {model: model.id, N: N || 0, nReliable: !!nReliable, countFrameshift,
         nPass: 0, nPassDeNovo: 0, exclIndel: 0, exclXY: 0, exclNonCoding: 0, exclNoMu: 0, exclNoClassMu: 0,
-        nUsed: 0, byClass: {nonSplice: 0, mis: 0, syn: 0},
+        nUsed: 0, byClass: {nonSplice: 0, frameshift: 0, mis: 0, syn: 0},
         // consequenceColPresent distinguishes "no column" (IMPACT fallback, an approximation)
         // from "blank cells in a column that exists" (excluded) — the tab must not print the
         // former's warning when the latter is what happened.
@@ -331,10 +409,11 @@ function computeModelEnrichment(variants, opts) {
         meta.nPass++
         if (!model.gate(v, cols)) continue            // inheritance gate (de novo)
         meta.nPassDeNovo++
-        if (!isSnv(v[refCol], v[altCol])) { meta.exclIndel++; continue }
         const chr = String(v[chromCol] || '').replace(/^chr/i, '').toUpperCase()
         if (!isAutosome(chr)) { meta.exclXY++; continue }
         // Molecular consequence first; IMPACT only when the data has no Consequence column.
+        // CLASSIFY BEFORE THE SNV GATE: frameshift is the one class whose rate term covers
+        // indels, so it is the one class allowed past that gate.
         const {cls, via, term} = classifyConsequence(consequenceCol ? v[consequenceCol] : null, v[impactCol], !!consequenceCol)
         if (!cls) {
             meta.exclNonCoding++
@@ -343,13 +422,18 @@ function computeModelEnrichment(variants, opts) {
             if (term) meta.unmodelledTerms[term] = (meta.unmodelledTerms[term] || 0) + 1
             continue
         }
+        // SNV gate, per class. The rate model gives frameshift its own term (p_lof −
+        // pNonSplice), so frameshift de novo indels are MODELLED and admitted. Every other
+        // class pairs with an SNV-only rate, so a stop_gained or missense called on an indel
+        // has no target and is excluded — counted as exclIndel, never silently dropped.
+        if (cls !== 'frameshift' && !isSnv(v[refCol], v[altCol])) { meta.exclIndel++; continue }
         const gene = String(v[geneCol] || '').toUpperCase()
         const rec = gene ? geneRec(gene) : null
         if (!rec || !isAutosome(rec.chr)) { meta.exclNoMu++; continue }        // no rate for the gene / non-autosomal
         // Per-class rate REQUIRED: a variant whose gene has no rate for its OWN class has
         // no modelable target (it would be in k but contribute 0 to λ) — exclude it so the
         // numerator and the λ denominator stay consistent per class.
-        if (rec[RATE_FIELD[cls]] == null) { meta.exclNoClassMu++; continue }
+        if (rateFor(rec, cls) == null) { meta.exclNoClassMu++; continue }
         const sample = sampleCol ? (v[sampleCol] || 'unknown') : 'all'
         used.push({gene, cls, sample, terms: geneTerms ? geneTerms.get(gene) : null})
         meta.nUsed++; meta.byClass[cls]++; probandSet.add(sample)
@@ -386,12 +470,21 @@ function computeModelEnrichment(variants, opts) {
     // cohort. This is the check that caught the original defect by reading 4.63 when λ came
     // from gnomAD's mutability covariate; fitting ê would have silently absorbed that 4.63 and
     // hidden the very bug it exposed.
-    const total = (categoryMu && categoryMu.total) || {nonSplice: 0, mis: 0, syn: 0}
+    const total = (categoryMu && categoryMu.total) || {nonSplice: 0, frameshift: 0, mis: 0, syn: 0}
     const ratio = (obs, sp) => (N > 0 && sp > 0) ? obs / (2 * N * sp) : null
     meta.calibration = {
         syn: {obs: meta.byClass.syn, exp: 2 * (N || 0) * (total.syn || 0), ratio: ratio(meta.byClass.syn, total.syn)},
         mis: {obs: meta.byClass.mis, exp: 2 * (N || 0) * (total.mis || 0), ratio: ratio(meta.byClass.mis, total.mis)},
         nonSplice: {obs: meta.byClass.nonSplice, exp: 2 * (N || 0) * (total.nonSplice || 0), ratio: ratio(meta.byClass.nonSplice, total.nonSplice)},
+        // Reported SEPARATELY from nonSplice, never merged into it. Frameshift is the only
+        // class counted from INDELS, and de novo indel calling is materially less sensitive
+        // than SNV calling — so this ratio is the reader's direct measurement of that gap
+        // (expect it BELOW the synonymous ratio). Merging it into a single LoF ratio would
+        // average an SNV detection rate with an indel one and hide the very number that
+        // says how much of the frameshift target was actually reachable.
+        frameshift: countFrameshift
+            ? {obs: meta.byClass.frameshift, exp: 2 * (N || 0) * (total.frameshift || 0), ratio: ratio(meta.byClass.frameshift, total.frameshift)}
+            : null,
         // Relative SE of the synonymous ratio (a Poisson count over a constant), so a reader
         // can tell a finding from noise: 1.03 on 72 variants is ±12%; on 4 it is meaningless.
         synRelSe: meta.byClass.syn > 0 ? 1 / Math.sqrt(meta.byClass.syn) : null
@@ -399,13 +492,14 @@ function computeModelEnrichment(variants, opts) {
     // Exome-wide model inputs, published so the sheet can derive statements from the DATA
     // rather than restate constants that quietly rot when the rate bundle is rebuilt.
     meta.rateGenes = (categoryMu && categoryMu.nGenes) || 0
-    meta.totalP = {nonSplice: total.nonSplice || 0, mis: total.mis || 0, syn: total.syn || 0}
+    meta.totalP = {nonSplice: total.nonSplice || 0, frameshift: total.frameshift || 0,
+        mis: total.mis || 0, syn: total.syn || 0}
 
     // --- per category × coding tier: k, λ = 2N·Σμ, p ---
     const sections = (dimensions || []).map(d => {
         const dimMu = catMu[d.id] || {}
         // observed k per term per class, from the used variants that carry the term
-        const obs = {}   // term -> {nonSplice, mis, probands:Set, genes:Set}  (syn excluded — it is the calibrator)
+        const obs = {}   // term -> {nonSplice, frameshift, mis, probands:Set, genes:Set}  (syn excluded — it is the calibrator)
         // A category's OWN synonymous count. Not a discovery quantity: it is the
         // conditioning statistic of the scale-free test below, which asks whether a
         // category is skewed toward damage RELATIVE to its own synonymous variants.
@@ -415,12 +509,12 @@ function computeModelEnrichment(variants, opts) {
         const synObs = {}
         for (const u of used) {
             const tlist = (u.terms && u.terms[d.id]) || []
-            if (u.cls === 'syn') {                   // synonymous FITS ê; testing it directly would be circular (its ratio is 1 by construction)
+            if (u.cls === 'syn') {                   // synonymous is the model-fit diagnostic, never a discovery class
                 for (const term of tlist) synObs[term] = (synObs[term] || 0) + 1
                 continue
             }
             for (const term of tlist) {
-                const o = obs[term] || (obs[term] = {nonSplice: 0, mis: 0, probands: new Set(), genes: new Set()})
+                const o = obs[term] || (obs[term] = {nonSplice: 0, frameshift: 0, mis: 0, probands: new Set(), genes: new Set()})
                 o[u.cls]++; o.probands.add(u.sample); o.genes.add(u.gene)
             }
         }
@@ -428,7 +522,7 @@ function computeModelEnrichment(variants, opts) {
         const allGroups = []
         for (const term of Object.keys(obs)) {
             const o = obs[term]
-            const muT = dimMu[term] || {nonSplice: 0, mis: 0, syn: 0}
+            const muT = dimMu[term] || {nonSplice: 0, frameshift: 0, mis: 0, syn: 0}
             const cells = {}
             const kSyn = synObs[term] || 0
             for (const tier of CODING_TIERS) {
@@ -446,18 +540,28 @@ function computeModelEnrichment(variants, opts) {
                 // Condition on this category's own total T = k_disc + k_syn. Under the null
                 // the classes are independent Poissons, so
                 //     k_disc | T  ~  Binomial(T, θ),   θ = λ_disc / (λ_disc + λ_syn)
-                // and since λ_c = 2·N·Σp_c·ê, the 2·N and the ê CANCEL IDENTICALLY:
+                // and since λ_c = 2·N·Σp_c, the 2·N CANCELS IDENTICALLY:
                 //     θ = Σp_disc / (Σp_disc + Σp_syn)
-                // — a pure property of the rate table. So this test needs NO trio count, NO
-                // calibration, and is immune to the absolute rate scale (~16% unsettled
-                // between published tables). It is exactly the test to read when N is
-                // provisional or ê could not be fitted, which is when the Poisson's inputs
-                // are least trustworthy.
+                // — a pure property of the rate table. So this test needs NO trio count and
+                // is immune to the absolute rate scale (~16% unsettled between published
+                // tables). It is exactly the test to read when N is provisional, which is
+                // when the Poisson's inputs are least trustworthy.
                 //
-                // It does NOT escape everything: if detection efficiency differs BY CLASS
-                // (synonymous sites are CpG-rich and coverage tracks GC), the observed ratio
-                // is skewed and this test inherits that bias exactly as ê does. It removes
-                // the class-INDEPENDENT part of ascertainment, not the class-dependent part.
+                // It does NOT escape everything: it removes the class-INDEPENDENT part of
+                // ascertainment, not the class-dependent part. Two known class-dependent
+                // terms survive, BOTH conservative here:
+                //  1. Synonymous sites are CpG-rich and coverage tracks GC, so syn detection
+                //     may run slightly ahead of the discovery classes.
+                //  2. FRAMESHIFT. Once the LoF tier admits frameshift, its numerator mixes
+                //     indel-called and SNV-called variants while the synonymous denominator
+                //     stays SNV-only — so f_disc is a MIXTURE and de novo indel calling is
+                //     materially less sensitive than SNV calling. The exact cancellation the
+                //     test is prized for therefore holds only for the SNV part. The bias runs
+                //     DOWN (fewer frameshifts observed than targeted ⇒ p too large ⇒ we
+                //     under-call), so it costs power and cannot manufacture a finding; the
+                //     frameshift row of the model-fit diagnostic measures its size directly.
+                //     This is a deliberate trade: one k per row that both tests share beats a
+                //     purer companion testing a different count than the Poisson beside it.
                 //
                 // T=0 ⇒ p=1 exactly (X=0 with certainty), not "no test": it is unrejectable
                 // but it is still a question asked, so it belongs in the family.
@@ -518,8 +622,11 @@ function computeModelEnrichment(variants, opts) {
     })
 
     // --- per-gene enrichment: gene × class, λ = 2·N·μ (Stage 2) ---
-    const geneK = {}   // gene -> {lof, mis, syn}
-    for (const u of used) { const g = geneK[u.gene] || (geneK[u.gene] = {nonSplice: 0, mis: 0, syn: 0}); g[u.cls]++ }
+    const geneK = {}   // gene -> {nonSplice, frameshift, mis, syn}
+    for (const u of used) { const g = geneK[u.gene] || (geneK[u.gene] = {nonSplice: 0, frameshift: 0, mis: 0, syn: 0}); g[u.cls]++ }
+    // The per-gene mirror of categoryRateSums' fsRate: the SAME switch, so a gene's λ and its
+    // category's λ cannot disagree about whether the frameshift target is in play.
+    const rateOf = (rec, c) => (c === 'frameshift' && !countFrameshift) ? 0 : (rateFor(rec, c) || 0)
     const conMap = (categoryMu && categoryMu.constraint) || new Map()
     const conOf = (g) => conMap.get(g) || null
     const perGeneRows = []
@@ -529,7 +636,7 @@ function computeModelEnrichment(variants, opts) {
         for (const tr of PER_GENE_TRACKS) {
             const k = tr.classes.reduce((s, c) => s + (geneK[gene][c] || 0), 0)
             if (k <= 0) continue                         // only OBSERVED (gene, track) rows
-            const mu = tr.classes.reduce((s, c) => s + (rec[RATE_FIELD[c]] || 0), 0)
+            const mu = tr.classes.reduce((s, c) => s + rateOf(rec, c), 0)
             const lambda = (N > 0 && mu > 0) ? 2 * N * mu : null
             perGeneRows.push({gene, track: tr.key, trackLabel: tr.label, discovery: tr.discovery,
                 k, mu, lambda, p: (lambda != null && k > 0) ? poissonUpperTail(k, lambda) : null, q: null,
@@ -555,7 +662,7 @@ function computeModelEnrichment(variants, opts) {
         if (muByGene && N > 0) {
             for (const rec of muByGene.values()) {
                 if (!isAutosome(rec && rec.chr)) continue
-                const mu = tr.classes.reduce((s, c) => s + (rec[RATE_FIELD[c]] || 0), 0)
+                const mu = tr.classes.reduce((s, c) => s + rateOf(rec, c), 0)
                 if (mu > 0) mExome++                          // λ = 2·N·p > 0 ⇒ testable
             }
         }
@@ -572,6 +679,6 @@ function computeModelEnrichment(variants, opts) {
 
 module.exports = {
     computeModelEnrichment, categoryRateSums, poissonUpperTail, classifyConsequence,
-    MODELS, DE_NOVO, CONSEQUENCE_CLASS, IMPACT_CLASS, RATE_FIELD,
+    MODELS, DE_NOVO, CONSEQUENCE_CLASS, IMPACT_CLASS, RATE_FIELD, rateFor,
     CODING_TIERS, PER_GENE_TRACKS, isAutosome, isSnv
 }

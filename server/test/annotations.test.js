@@ -686,7 +686,10 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(m.exclXY).to.equal(1)
         expect(m.exclNonCoding).to.equal(1)
         expect(m.nUsed).to.equal(2)
-        expect(m.byClass).to.deep.equal({nonSplice: 1, mis: 1, syn: 0})
+        // frameshift is 0 here BY CONSTRUCTION: these fixtures have no Consequence column, so
+        // the IMPACT fallback cannot see frameshift and the LoF tier is SNV-only on both sides.
+        expect(m.byClass).to.deep.equal({nonSplice: 1, frameshift: 0, mis: 1, syn: 0})
+        expect(m.countFrameshift, 'no Consequence column ⇒ frameshift not countable').to.equal(false)
         // NO fitted scale exists at all — λ is 2·N·Σp, full stop. Pin that nothing named ê
         // survives: a reintroduced calibration is what made this test 1.4–3.0x too permissive
         // on the largest categories, and it must not come back by accident.
@@ -756,9 +759,13 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(classifyConsequence('', 'LOW').cls, 'omitted flag ⇒ the SAFE branch').to.equal(null)
 
         // end-to-end: 30 blank LOW rows must not become 30 synonymous
+        // A Consequence column makes frameshift countable, so categoryMu must be built with
+        // countFrameshift=true to match — the engine throws if the target and the count
+        // disagree about frameshift (a 1.85x λ error).
         const blanks = computeModelEnrichment(
             Array.from({length: 30}, (_, i) => V({gene: 'G1', Consequence: '', impact: 'LOW', s: 'P' + i})),
-            Object.assign(opts(), {consequenceCol: 'Consequence'}))
+            Object.assign(opts(), {consequenceCol: 'Consequence',
+                categoryMu: categoryRateSums(rates, {gnomad}, {fam}, true)}))
         expect(blanks.meta.byClass.syn, 'blank cells are not synonymous').to.equal(0)
         expect(blanks.meta.exclNonCoding).to.equal(30)
         expect(blanks.meta.unmodelledTerms['(blank Consequence cell)']).to.equal(30)
@@ -847,7 +854,7 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         ]
         const pg = computeModelEnrichment(variants, opts()).perGene
         const row = (g, t) => pg.rows.find(r => r.gene === g && r.track === t)
-        // G1 nonsense: k=1, p=pNonSplice, λ=2·N·p·ê
+        // G1 nonsense: k=1, p=pNonSplice, λ=2·N·p (no fitted scale)
         expect(row('G1', 'lof').k).to.equal(1)
         expect(row('G1', 'lof').lambda).to.be.closeTo(2 * 100 * 1e-6, 1e-12)
         expect(row('G1', 'lof').p).to.be.closeTo(poissonUpperTail(1, 2 * 100 * 1e-6), 1e-12)

@@ -4,8 +4,10 @@
  *
  * Currently builds:
  *   data/annotations/clinvar_gene_summary.json.gz
- *     — slimmed from NCBI ClinVar's gene_specific_summary.txt (public domain),
- *       keyed by UPPERCASE gene symbol → {plp, vus, conflicts, total}.
+ *     — aggregated BY GENE from NCBI ClinVar's variant_summary.txt.gz (GRCh38
+ *       rows; public domain), keyed by UPPERCASE gene symbol → {plp, vus,
+ *       conflicts, total}. The per-gene totals are computed here from the
+ *       variant-level table, NOT taken from ClinVar's gene_specific_summary.txt.
  *
  * These bundled files let the ClinVar provider annotate genes offline (no
  * network at export time). Re-run this script to refresh the snapshot; ClinVar
@@ -185,10 +187,34 @@ async function buildGnomad() {
 // per-gene mu aggregation, not the context model.) The mu columns stay in the constraint
 // bundle as a labelled mutability covariate; they are not used for λ.
 //
-// P_LOF IS A TRAP: DeNovoWEST's p_lof INCLUDES frameshift (p_lof/p_syn = 0.298 — as
-// broken as gnomAD's for our purpose). We count SNVs only, so the correct SNV-only
-// nonsense+essential-splice rate is the residual  p_all − p_syn − p_mis  (verified:
-// 0/19,587 negative; residual/p_syn = 0.161 global, 0.167 per-gene median).
+// TWO LoF RATES, because they pair with different observed counts — the choice is not
+// cosmetic, it is a 1.85× difference in the expectation:
+//   pNonSplice = p_all − p_syn − p_mis — nonsense + essential-splice SNVs ONLY (verified:
+//     0/19,587 negative; pNonSplice/p_syn = 0.161 global, 0.167 per-gene median).
+//   pLof       = the table's p_lof — that PLUS frameshift (p_lof/p_syn = 0.298).
+// Frameshift is recoverable exactly, as p_lof − pNonSplice.
+//
+// VERIFIED AGAINST AN INDEPENDENT IMPLEMENTATION, because this derivation rests on p_all
+// being SNV-only — if p_all already included frameshift, then p_all − p_syn − p_mis would
+// equal p_lof and the derived frameshift term would be zero. Two checks say it does not:
+//   (a) p_all = p_syn + p_mis + p_lof holds for 0 of 19,587 genes (aggregate off by 4.1%).
+//   (b) denovolyzeR (Ware 2015) ships the SAME Samocha model with the classes broken out
+//       separately — a different codebase, gene set and transcript build. Its per-class sums
+//       reproduce ours to ~1%:
+//                             ours (derived)   denovolyzeR (explicit)
+//         (non+splice)/syn        0.1608            0.1681
+//         frameshift/syn          0.1421            0.1437
+//         frameshift/(non+splice) 0.851             0.855
+//       and denovolyzeR's frameshift/non = 1.2500 exactly — Samocha 2014 models frameshift at
+//       1.25× the nonsense rate, so the recovered term IS the model's own frameshift rate.
+// NB denovolyzeR's own "all" class DOES include frameshift (all = syn+mis+lof there), whereas
+// DeNovoWEST's p_all does not. The two tables define "all" differently; do not carry an
+// intuition from one to the other. Note also splice/non = 0.46 in this model — essential
+// splice sites are a far larger share of the LoF target than a back-of-envelope guess suggests.
+// Pair pNonSplice with an SNV-only count; pair pLof with a count that admits frameshift
+// de novo indels. Mixing them is the classic error in both directions: pLof against an
+// SNV-only count inflates λ 1.85×; pNonSplice against a frameshift-inclusive count
+// deflates it. Both rates ship so the server can state which one it used.
 // ---------------------------------------------------------------------------
 const DNM_RATES_URL = 'https://raw.githubusercontent.com/HurlesGroupSanger/DeNovoWEST/master/input/extended_denovoWEST_results.tab'
 const DNM_RATES_OUT = path.join(OUT_DIR, 'dnm_rates.json.gz')
@@ -201,33 +227,43 @@ async function buildDnmRates() {
     const h = lines[0].split('\t')
     const ix = (n) => { const i = h.indexOf(n); if (i < 0) throw new Error(`DeNovoWEST column "${n}" missing`); return i }
     const cSym = ix('symbol'), cHgnc = ix('num_hgnc_id'), cChr = ix('chr')
-    const cAll = ix('p_all'), cSyn = ix('p_syn'), cMis = ix('p_mis')
+    const cAll = ix('p_all'), cSyn = ix('p_syn'), cMis = ix('p_mis'), cLof = ix('p_lof')
 
     const genes = {}
-    let nNa = 0, nNeg = 0, nRows = 0, nDup = 0
+    let nNa = 0, nNeg = 0, nRows = 0, nDup = 0, nLofLt = 0
     for (let i = 1; i < lines.length; i++) {
         const c = lines[i].split('\t')
         const sym = (c[cSym] || '').trim().toUpperCase()
         if (!sym) continue
         nRows++
-        const pAll = ffloat(c[cAll]), pSyn = ffloat(c[cSyn]), pMis = ffloat(c[cMis])
+        const pAll = ffloat(c[cAll]), pSyn = ffloat(c[cSyn]), pMis = ffloat(c[cMis]), pLof = ffloat(c[cLof])
         // 67 genes (MYC among them) carry no rates. Skip them EXPLICITLY and count them —
         // silently dropping a gene removes it from λ while its variants may still be
         // counted, which would deflate the expectation.
-        if (pAll == null || pSyn == null || pMis == null) { nNa++; continue }
+        if (pAll == null || pSyn == null || pMis == null || pLof == null) { nNa++; continue }
         const pNonSplice = pAll - pSyn - pMis          // SNV-only nonsense + essential splice
         if (!(pNonSplice >= 0)) { nNeg++; continue }   // guard: never emit a negative rate
+        // p_lof = nonsense + essential-splice + FRAMESHIFT. Both are stored, because they
+        // answer different questions and pairing the wrong one with an observed count is the
+        // classic error here:
+        //   pNonSplice — pair with an SNV-ONLY count.
+        //   pLof       — pair with a count that INCLUDES frameshift de novo indels.
+        // Storing only pNonSplice (the previous build) forced the SNV-only choice and silently
+        // discarded frameshift — the most consequential LoF class — into the excluded pile.
+        // Sanity: p_lof must exceed the SNV-only residual, since it is that plus frameshift.
+        // Measured on the real table: 0 of 19,587 genes violate this.
+        if (!(pLof >= pNonSplice - 1e-12)) { nLofLt++; continue }
         // The table carries 2 duplicate symbols (C2ORF15, C1ORF220 — separate loci sharing
         // a name). Keep the FIRST deterministically and count it, rather than letting the
         // last row silently win.
         if (genes[sym]) { nDup++; continue }
         genes[sym] = {
-            pSyn, pMis, pNonSplice,
+            pSyn, pMis, pNonSplice, pLof,
             chr: (c[cChr] || '').trim(),
             hgnc: (c[cHgnc] || '').trim() || null
         }
     }
-    process.stdout.write(`  ${nRows} rows → ${Object.keys(genes).length} genes with rates (${nNa} no-rate, ${nNeg} negative-residual, ${nDup} duplicate-symbol rows skipped)\n`)
+    process.stdout.write(`  ${nRows} rows → ${Object.keys(genes).length} genes with rates (${nNa} no-rate, ${nNeg} negative-residual, ${nLofLt} p_lof<residual, ${nDup} duplicate-symbol rows skipped)\n`)
 
     // --- modern-symbol resolution -------------------------------------------
     // The table's symbols are 2020-vintage; our variant `gene` column is modern. Add
@@ -273,10 +309,10 @@ async function buildDnmRates() {
         const hit = gnAuto.filter(g => genes[g]).length
         process.stdout.write(`  JOIN: ${hit}/${gnAuto.length} (${(100 * hit / gnAuto.length).toFixed(2)}%) of autosomal MANE genes have a rate\n`)
     }
-    let sSyn = 0, sMis = 0, sNs = 0
+    let sSyn = 0, sMis = 0, sNs = 0, sLof = 0
     for (const [g, r] of Object.entries(genes)) {
         if (!auto(r.chr)) continue
-        sSyn += r.pSyn; sMis += r.pMis; sNs += r.pNonSplice
+        sSyn += r.pSyn; sMis += r.pMis; sNs += r.pNonSplice; sLof += r.pLof
     }
     process.stdout.write(`  autosomal Σp: syn=${sSyn.toFixed(6)} mis=${sMis.toFixed(6)} non+splice=${sNs.toFixed(6)}\n`)
     // NB: "genetic-code cap" was a claim of mine that does not hold — a codon-level bound
@@ -286,6 +322,8 @@ async function buildDnmRates() {
     // exp_lof/exp_syn = 0.187. gnomAD's lof.mu/syn.mu = 0.319 is the outlier, which is why
     // λ must not be built from it.
     process.stdout.write(`  sanity: (non+splice)/syn = ${(sNs / sSyn).toFixed(4)} (expect ~0.16–0.17; Samocha 2014 model)\n`)
+    process.stdout.write(`  sanity: p_lof/syn        = ${(sLof / sSyn).toFixed(4)} (expect ~0.30 — the same plus frameshift)\n`)
+    process.stdout.write(`  sanity: frameshift/(non+splice) = ${((sLof - sNs) / sNs).toFixed(3)} (expect ~0.85; Samocha sets frameshift ~1.25x nonsense)\n`)
     process.stdout.write(`  sanity: 2·Σ(syn+mis+non+splice) = ${(2 * (sSyn + sMis + sNs)).toFixed(3)} coding de novo/trio (published ~1.0–1.3)\n`)
 
     const payload = {
@@ -298,10 +336,11 @@ async function buildDnmRates() {
             _fields: {
                 pSyn: 'p_syn — per-transmission synonymous de novo probability',
                 pMis: 'p_mis — per-transmission missense de novo probability',
-                pNonSplice: 'p_all − p_syn − p_mis — SNV-only nonsense + essential splice. NOT p_lof, which includes frameshift (p_lof/p_syn = 0.298 vs the correct 0.161).',
+                pNonSplice: 'p_all − p_syn − p_mis — per-transmission nonsense + essential-splice de novo probability, SNV ONLY (pNonSplice/p_syn = 0.161)',
+                pLof: 'p_lof — per-transmission loss-of-function de novo probability INCLUDING frameshift (p_lof/p_syn = 0.298; frameshift = p_lof − pNonSplice)',
                 chr: 'chromosome', hgnc: 'num_hgnc_id'
             },
-            _note: 'Rates carry NO depth adjustment; the server fits an empirical calibration (ê) from the cohort\'s own synonymous count. λ = 2·N·p·ê.',
+            _note: 'Rates carry NO depth adjustment and NO fitted scale: λ = 2·N·p, where 2 = the two parental transmissions at risk per proband. TWO LoF rates ship because they pair with different observed counts — pair pNonSplice with an SNV-only count, pLof with a count that admits frameshift de novo indels. Mixing them moves λ by 1.85×.',
             _builtWith: 'build-annotation-data.js buildDnmRates',
             geneCount: Object.keys(genes).length, noRateGenes: nNa, aliasResolved: nAlias, aliasRejected: nRejected
         },

@@ -3887,7 +3887,7 @@ describe('Gene Summary impact counts and annotations', function () {
         ws.eachRow(r => { const f = r.getCell(1).value
             if (f === 'Gene') r.eachCell(c => hdr.push(String(c.value)))
             if (/^TSC2/.test(String(f))) row = r })
-        expect(hdr).to.deep.equal(['Gene', 'k (de novo SNVs)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q', 'LOEUF', 'pLI', 'Constrained?'])
+        expect(hdr).to.deep.equal(['Gene', 'k (de novo variants)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q', 'LOEUF', 'pLI', 'Constrained?'])
         // The second axis lands in the right cells: surprise (λ, p) and constraint, side by side.
         expect(row.getCell(hdr.indexOf('LOEUF') + 1).value).to.equal(0.21)
         expect(row.getCell(hdr.indexOf('pLI') + 1).value).to.equal(0.99)
@@ -3915,7 +3915,7 @@ describe('Gene Summary impact counts and annotations', function () {
         const dnm = computeModelEnrichment(variants, {model: DE_NOVO, geneCol: 'gene', impactCol: 'impact',
             consequenceCol: 'Consequence', sampleCol: 'sample', chromCol: 'chrom', refCol: 'ref', altCol: 'alt',
             inheritanceCol: 'inheritance', geneTerms, dimensions: [{id: 'fam', label: 'Fam'}], muByGene: rates,
-            categoryMu: categoryRateSums(rates, {gnomad: gnB}, {fam}), N: 100, nReliable: true, minCount: 1})
+            categoryMu: categoryRateSums(rates, {gnomad: gnB}, {fam}, true), N: 100, nReliable: true, minCount: 1})
         // λ = 2·N·Σp with NO fitted scale — pin that ê has not come back.
         expect(dnm.meta.eApplied, 'no fitted scale').to.equal(undefined)
         expect(dnm.meta.nUsed).to.equal(2)
@@ -3925,10 +3925,10 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(ws, 'DNM Rate tab created').to.not.be.undefined
         const hdr = []; let dataRow = null
         ws.eachRow(r => { const f = r.getCell(1).value; if (f === 'Category') r.eachCell(c => hdr.push(String(c.value))); if (f === 'TSC complex') dataRow = r })
-        expect(hdr).to.include.members(['Category', 'nonsense+splice', 'nonsense+splice+missense', 'k (nonsense+splice+missense)', 'λ = 2·N·Σp', 'P(X≥k)'])
+        expect(hdr).to.include.members(['Category', 'LoF (nonsense+splice+frameshift)', 'LoF+missense', 'k (LoF+missense)', 'λ = 2·N·Σp', 'P(X≥k)'])
         expect(hdr).to.not.include('HIGH+MOD+LOW')                      // synonymous is the calibrator, never a discovery tier
         expect(dataRow, 'TSC complex row').to.not.be.null
-        const kCell = dataRow.getCell(hdr.indexOf('k (nonsense+splice+missense)') + 1).value
+        const kCell = dataRow.getCell(hdr.indexOf('k (LoF+missense)') + 1).value
         const lamCell = dataRow.getCell(hdr.indexOf('λ = 2·N·Σp') + 1).value
         const pCell = dataRow.getCell(hdr.indexOf('P(X≥k)') + 1).value
         expect(kCell).to.equal(2)
@@ -3944,7 +3944,7 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(pgws, 'per-gene tab created').to.not.be.undefined
         const phdr = []; let tscRow = null
         pgws.eachRow(r => { const f = r.getCell(1).value; if (f === 'Gene') r.eachCell(c => phdr.push(String(c.value))); if (/^TSC2/.test(String(f))) tscRow = r })
-        expect(phdr).to.deep.equal(['Gene', 'k (de novo SNVs)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q', 'LOEUF', 'pLI', 'Constrained?'])
+        expect(phdr).to.deep.equal(['Gene', 'k (de novo variants)', 'p (rate)', 'λ = 2·N·p', 'P(X≥k)', 'q', 'LOEUF', 'pLI', 'Constrained?'])
         expect(tscRow, 'TSC2 row').to.not.be.null
         const pgP = tscRow.getCell(phdr.indexOf('P(X≥k)') + 1).value
         const pgLam = tscRow.getCell(phdr.indexOf('λ = 2·N·p') + 1).value
@@ -4130,7 +4130,14 @@ describe('Gene Summary impact counts and annotations', function () {
         let withheldRow = null
         readme.eachRow(r => { if (String(r.getCell(1).value || '').includes('Mutation-rate test (withheld)')) withheldRow = r })
         expect(withheldRow, 'Read Me must document the withheld test').to.not.be.null
-        // The note must say it is a DELIBERATE suppression, not an accidental absence.
-        expect(String(withheldRow.getCell(2).value)).to.include('deliberately withheld')
+        const note = String(withheldRow.getCell(2).value)
+        // The note must say the absence is a DECISION, not an accident, and must say what
+        // is missing. It must NOT still promise the empirical calibration that was measured,
+        // found harmful, and deleted — that promise shipped for two commits.
+        expect(note, 'says what is absent').to.include('NO de novo mutation-rate test')
+        expect(note, 'says the absence is a decision').to.match(/withheld pending review|deliberately withheld/)
+        expect(note, 'must not promise the deleted ê').to.not.include('applies an empirical calibration')
+        // …and it must not blame a defect that has since been fixed.
+        expect(note, 'the gnomAD-μ defect is named as HISTORY, not as the current reason').to.include('That defect is FIXED')
     })
 })

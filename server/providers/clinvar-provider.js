@@ -2,8 +2,11 @@
  * ClinVar Gene-Level Provider
  *
  * Surfaces per-gene ClinVar aggregate counts (Pathogenic / Likely-pathogenic
- * allele count and a Has-P/LP flag) from a bundled, slimmed snapshot of NCBI's
- * `gene_specific_summary.txt`.
+ * allele count and a Has-P/LP flag) from a bundled snapshot AGGREGATED BY GENE
+ * from NCBI's `variant_summary.txt.gz` (GRCh38 rows). NOT ClinVar's own
+ * `gene_specific_summary.txt`: that file exists, but its per-gene totals are
+ * built to a different definition, so the counts here are ours — derived from
+ * the variant-level table by scripts/build-annotation-data.js.
  *
  * Data licence: ClinVar is US-government public domain; NCBI imposes no
  * distribution restrictions on the aggregate counts, so they are safe to embed

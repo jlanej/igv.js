@@ -55,47 +55,44 @@ const DEFAULT_EXPORT_CONFIG = {
         // predicted 0.276 coding de novo per trio vs a published ~1.0–1.3, at a class balance
         // of 0.319 vs ~0.168 — which dragged ~200 genes to q<0.05 off a single variant at
         // N=220 where correct rates give 32). It is now
-        //     λ = 2·N·Σp·ê
+        //     λ = 2·N·Σp
         // with p from data/annotations/dnm_rates.json.gz (Samocha 2014 model via DeNovoWEST,
-        // MIT — sums to 1.074 per trio at ratio 0.161) and ê fitted from each cohort's own
-        // synonymous class. Classes come from VEP Consequence, so the calibrator is no longer
-        // contaminated by LOW-impact splice/intronic calls. ✓ is withheld unless N is
-        // defensible AND ê was actually fitted.
+        // MIT — sums to 1.074 per trio at ratio 0.161). Classes come from VEP Consequence, so
+        // the synonymous diagnostic is no longer contaminated by LOW-impact splice/intronic
+        // calls. The LoF tier counts nonsense + essential splice + FRAMESHIFT against the
+        // table's published p_lof; without a Consequence column both the count and the target
+        // drop frameshift together, so the tier is never inflated, only less powerful.
         //
-        // The scale-free conditional binomial now ships alongside it (n ~ Binomial(k+k_syn,
-        // Σp/(Σp+Σp_syn)), where 2·N and ê cancel identically), reported per tier and
-        // carrying the ✓ when N is provisional or ê could not be fitted.
+        // THE SECOND DEFECT IS ALSO FIXED, BY SUBTRACTION. A fitted ê = obs_syn/(2·N·Σp_syn)
+        // was built (λ = 2·N·Σp·ê) and has been DELETED. It plugged a FITTED quantity in as if
+        // it were a known constant: substituting gives λ̂ = K_syn·r with r = Σp_disc/Σp_syn,
+        // so λ̂ carried K_syn's Poisson noise and the ignored variance was a fraction r of the
+        // total — INDEPENDENT OF N. Measured null rejection at α=0.05: r=0.30 → 1.4×,
+        // r=0.70 → 2.0×, r=1.5 → 3.0×, worst on the categories anyone reads first (ClinVar
+        // P/LP r=0.94, LOEUF<0.6 0.72, GenCC AR 0.64). The oracle-λ control stayed at
+        // 0.54–1.00×, which isolated the fitted ê as the sole cause — and is exactly the
+        // regime λ = 2·N·Σp now sits in. Deleting ê also killed the curation-skew channel:
+        // the pass gate still applies to the synonymous class, but the synonymous count is no
+        // longer in λ, so a class-skewed reviewer can no longer shrink a discovery λ.
         //
-        // STILL WITHHELD, and now for MEASURED reasons. Adversarial review (plus independent
-        // re-measurement) found the Poisson is ANTI-CONSERVATIVE exactly where it matters:
+        // Without ê the test is CONSERVATIVE under any regime: a cohort can MISS de novo
+        // variants but never invent them, so E[k] = λ·f with f ≤ 1 and P(X≥k) is if anything
+        // too large. It costs power when f is low, which is why the per-class observed/expected
+        // ratios are REPORTED — they tell a reader how much power they have, and the synonymous
+        // one is a real, non-tautological guard (it is the check that caught the gnomAD-μ defect
+        // by reading 4.63; a fitted ê would have absorbed that and hidden it).
         //
-        //   λ = 2·N·Σp·ê plugs the FITTED ê in as if it were a known constant. Substituting
-        //   ê = K_syn/(2·N·Σp_syn) gives λ̂ = K_syn · r, with r = Σp_disc / Σp_syn(exome).
-        //   So λ̂ carries the Poisson noise of K_syn, and the ignored variance is a fraction
-        //   r of the total — INDEPENDENT OF N and of ê. Measured null rejection at α=0.05:
-        //   r=0.02 → 0.63×, r=0.10 → 0.99×, r=0.30 → 1.4×, r=0.70 → 2.0×, r=1.5 → 3.0×
-        //   (identical at N=220 and N=1000; the oracle-λ control stays at 0.54–1.00×, which
-        //   isolates the fitted ê as the sole cause).
-        //   The five REAL categories with the largest r are the ones a clinician reads first:
-        //   ClinVar P/LP 0.94, LOEUF<0.6 0.72, GenCC AR 0.64, GenCC AD 0.56, pLI≥0.9 0.56
-        //   (all at the missense-inclusive tier) — i.e. ~2× too many false ✓ on the headline
-        //   rows, and their BH families (m=2/4/12) are far too small to dilute it.
+        // TWICE I claimed this test was well calibrated after measuring only the low-r stratum
+        // (pNonSplice, r≈0.04, where the predicted inflation is ~1.04× — arithmetically
+        // undetectable) and then generalising along N, the one axis the effect does not depend
+        // on. Any future calibration claim about this test must be measured on the HIGH-r
+        // stratum before it is written down, let alone printed in the workbook.
         //
-        // TWICE NOW I claimed this test was well calibrated after measuring only the low-r
-        // stratum (pNonSplice, r≈0.04, where the predicted inflation is ~1.04× — arithmetically
-        // undetectable) and then generalising along N. Any future calibration claim about this
-        // test must be measured on the HIGH-r stratum before it is written down, let alone
-        // printed in the workbook.
-        //
-        // Also open: class-dependent curation feeds straight into ê (the pass gate applies to
-        // the synonymous calibrator too, and this tool's own impact presets hide LOW from the
-        // common review filters, so the default workflow PRODUCES the skew); the per-gene tab's
-        // live λ formula omits ê; several Read Me rows still describe the retired gnomAD-μ model.
-        //
-        // The route to enabling: drive the ✓ from the exact conditional test (which needs no ê),
-        // delete the false calibration banner, fix the per-gene formula, and expose per-class
-        // curation counts. See the review for the full list.
-        dnmRateTest: false        // ⚠ Poisson ~2× anti-conservative on high-r categories — see above
+        // Left OFF pending an explicit decision to enable, not pending a known defect: the
+        // measured blockers above are resolved and the Read Me / banner prose now matches the
+        // shipped model. Enabling is a judgement call about whether a Poisson at this cohort
+        // size earns its space, which is a separate question from whether it is correct.
+        dnmRateTest: false        // off by decision, not by defect — see above
     },
 
     // Per-gene impact counts on the Gene Summary tab (curation-derived, not
