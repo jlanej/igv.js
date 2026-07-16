@@ -3832,23 +3832,32 @@ describe('Gene Summary impact counts and annotations', function () {
         }
     })
 
-    it('the DNM Rate tab builds with a live POISSON formula reproducing the Poisson engine (real μ)', function () {
-        const {computeModelEnrichment, categoryMuSums, DE_NOVO, poissonUpperTail} = require('../dnm-enrichment')
+    it('the DNM Rate tab builds with a live POISSON formula reproducing the Poisson engine (real rates)', function () {
+        const {computeModelEnrichment, categoryRateSums, DE_NOVO, poissonUpperTail} = require('../dnm-enrichment')
         const {buildDnmRateCategoryTab} = require('../server')
         const gnomad = require('../providers/gnomad-provider')
+        const dnmRates = require('../dnm-rates')
         const gnB = gnomad.getBundle()
-        expect(gnB.get('TSC2') && gnB.get('TSC2').muLof, 'real μ present').to.be.a('number')
-        // Two real pass de novo SNVs in TSC2 (autosomal, has μ).
+        const rates = dnmRates.getRates()
+        // The REAL rate table — per-transmission de novo probabilities, not gnomAD's
+        // mutability covariate. TSC2 is autosomal and carries a rate for every class.
+        expect(rates.size, 'rate bundle loaded').to.be.greaterThan(15000)
+        expect(rates.get('TSC2') && rates.get('TSC2').pNonSplice, 'real rate present').to.be.a('number')
+        // Two real pass de novo SNVs in TSC2, classified by molecular consequence.
         const fam = new Map([['TSC2', ['TSC complex']]])
         const geneTerms = new Map([['TSC2', {fam: ['TSC complex']}]])
         const variants = [
-            {gene: 'TSC2', impact: 'HIGH', curation_status: 'pass', inheritance: 'de_novo', ref: 'C', alt: 'T', chrom: 'chr16', sample: 'P1'},
-            {gene: 'TSC2', impact: 'HIGH', curation_status: 'pass', inheritance: 'de_novo', ref: 'G', alt: 'A', chrom: 'chr16', sample: 'P2'}
+            {gene: 'TSC2', Consequence: 'stop_gained', impact: 'HIGH', curation_status: 'pass', inheritance: 'de_novo', ref: 'C', alt: 'T', chrom: 'chr16', sample: 'P1'},
+            {gene: 'TSC2', Consequence: 'stop_gained', impact: 'HIGH', curation_status: 'pass', inheritance: 'de_novo', ref: 'G', alt: 'A', chrom: 'chr16', sample: 'P2'}
         ]
         const dnm = computeModelEnrichment(variants, {model: DE_NOVO, geneCol: 'gene', impactCol: 'impact',
-            sampleCol: 'sample', chromCol: 'chrom', refCol: 'ref', altCol: 'alt', inheritanceCol: 'inheritance',
-            geneTerms, dimensions: [{id: 'fam', label: 'Fam'}], muByGene: gnB,
-            categoryMu: categoryMuSums({gnomad: gnB}, {fam}), N: 100, nReliable: true, minCount: 1})
+            consequenceCol: 'Consequence', sampleCol: 'sample', chromCol: 'chrom', refCol: 'ref', altCol: 'alt',
+            inheritanceCol: 'inheritance', geneTerms, dimensions: [{id: 'fam', label: 'Fam'}], muByGene: rates,
+            categoryMu: categoryRateSums(rates, {gnomad: gnB}, {fam}), N: 100, nReliable: true, minCount: 1})
+        // No synonymous variants here ⇒ ê cannot be fitted ⇒ λ falls back to 2·N·Σp and
+        // the tab must withhold ✓. That fallback is the point of the guard, so pin it.
+        expect(dnm.meta.calibration.eHatUsable, 'no syn ⇒ ê not fitted').to.equal(false)
+        expect(dnm.meta.eApplied, 'uncalibrated ⇒ scale 1').to.equal(1)
         expect(dnm.meta.nUsed).to.equal(2)
         const wb = new ExcelJS.Workbook()
         buildDnmRateCategoryTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
@@ -3856,11 +3865,11 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(ws, 'DNM Rate tab created').to.not.be.undefined
         const hdr = []; let dataRow = null
         ws.eachRow(r => { const f = r.getCell(1).value; if (f === 'Category') r.eachCell(c => hdr.push(String(c.value))); if (f === 'TSC complex') dataRow = r })
-        expect(hdr).to.include.members(['Category', 'HIGH', 'HIGH+MOD', 'k (HIGH+MOD)', 'λ = 2·N·μ', 'P(X≥k)'])
-        expect(hdr).to.not.include('HIGH+MOD+LOW')                      // synonymous is calibration-only
+        expect(hdr).to.include.members(['Category', 'nonsense+splice', 'nonsense+splice+missense', 'k (nonsense+splice+missense)', 'λ = 2·N·Σp·ê', 'P(X≥k)'])
+        expect(hdr).to.not.include('HIGH+MOD+LOW')                      // synonymous is the calibrator, never a discovery tier
         expect(dataRow, 'TSC complex row').to.not.be.null
-        const kCell = dataRow.getCell(hdr.indexOf('k (HIGH+MOD)') + 1).value
-        const lamCell = dataRow.getCell(hdr.indexOf('λ = 2·N·μ') + 1).value
+        const kCell = dataRow.getCell(hdr.indexOf('k (nonsense+splice+missense)') + 1).value
+        const lamCell = dataRow.getCell(hdr.indexOf('λ = 2·N·Σp·ê') + 1).value
         const pCell = dataRow.getCell(hdr.indexOf('P(X≥k)') + 1).value
         expect(kCell).to.equal(2)
         expect(lamCell.formula).to.match(/^2\*100\*/)                    // λ = 2·N·Σμ live formula
@@ -3888,8 +3897,10 @@ describe('Gene Summary impact counts and annotations', function () {
         // Hand-built dnm result with a significant q but nReliable:false.
         const dnm = {meta: {model: 'de_novo', N: 5, nReliable: false, nUsed: 3, nDistinctProbands: 3,
                 exclIndel: 0, exclXY: 0, exclNonCoding: 0, exclNoMu: 0, exclNoClassMu: 0,
-                byClass: {lof: 3, mis: 0, syn: 0}, calibration: {syn: {obs: 0, exp: 0, ratio: null}, mis: {}, lof: {}}},
-            perCategory: {tiers: [{key: 'HIGH', label: 'HIGH', classes: ['lof']}, {key: 'HIGH_MOD', label: 'HIGH+MOD', classes: ['lof', 'mis']}],
+                byClass: {nonSplice: 3, mis: 0, syn: 20},
+                eApplied: 1, calibration: {syn: {obs: 20, exp: 20, ratio: 1}, mis: {}, nonSplice: {},
+                    eHat: 1, eHatRelSe: 0.22, eHatUsable: true, minSyn: 10}},
+            perCategory: {tiers: [{key: 'HIGH', label: 'HIGH', classes: ['nonSplice']}, {key: 'HIGH_MOD', label: 'HIGH+MOD', classes: ['nonSplice', 'mis']}],
                 sections: [{id: 'fam', label: 'Fam', muSource: true, groups: [
                     {term: 'T', probands: 3, genes: ['A', 'B', 'C'], kTop: 3,
                         cells: {HIGH: {k: 3, lambda: 0.01, catMu: 5e-5, p: 1e-6, q: 1e-5}, HIGH_MOD: {k: 3, lambda: 0.02, catMu: 1e-4, p: 2e-6, q: 2e-5}}}]}]}}

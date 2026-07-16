@@ -616,7 +616,7 @@ describe('gene-set libraries (convergence dimensions)', function () {
 })
 
 describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
-    const {computeModelEnrichment, categoryMuSums, poissonUpperTail, DE_NOVO, MODELS} = require('../dnm-enrichment')
+    const {computeModelEnrichment, categoryRateSums, poissonUpperTail, DE_NOVO, MODELS} = require('../dnm-enrichment')
     const {computeConvergence} = require('../gene-analysis')
 
     it('poissonUpperTail is exact for small λ and keeps precision for tiny p', function () {
@@ -634,29 +634,41 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(tiny).to.be.closeTo(lead, lead * 2e-3)
     })
 
-    // Synthetic gnomAD-shaped bundle: G1/G2/G3 autosomal with μ; GX on chrX.
+    // Two maps with genuinely different shapes, because they are different things:
+    //  - `rates`  = per-gene per-transmission de novo probabilities (the λ input).
+    //  - `gnomad` = the constraint bundle, used ONLY for the constraint dimension's gene
+    //    universe + its LOEUF/pLI terms. Its lof.mu/mis.mu/syn.mu are a mutability
+    //    COVARIATE and must never be mistaken for a rate again.
+    // G1/G2/G3 autosomal; GX on chrX (must be excluded — 2·N assumes two copies).
+    const rates = new Map([
+        ['G1', {pNonSplice: 1e-6, pMis: 5e-6, pSyn: 3e-6, chr: '1'}],
+        ['G2', {pNonSplice: 2e-6, pMis: 4e-6, pSyn: 2e-6, chr: '2'}],
+        ['G3', {pNonSplice: 1e-6, pMis: 1e-6, pSyn: 1e-6, chr: '3'}],
+        ['GX', {pNonSplice: 1e-6, pMis: 1e-6, pSyn: 1e-6, chr: 'X'}]
+    ])
     const gnomad = new Map([
-        ['G1', {muLof: 1e-6, muMis: 5e-6, muSyn: 3e-6, chr: '1', pli: 0.95, loeuf: 0.3}],
-        ['G2', {muLof: 2e-6, muMis: 4e-6, muSyn: 2e-6, chr: '2'}],
-        ['G3', {muLof: 1e-6, muMis: 1e-6, muSyn: 1e-6, chr: '3'}],
-        ['GX', {muLof: 1e-6, muMis: 1e-6, muSyn: 1e-6, chr: 'X'}]
+        ['G1', {chr: '1', pli: 0.95, loeuf: 0.3}],
+        ['G2', {chr: '2'}], ['G3', {chr: '3'}], ['GX', {chr: 'X'}]
     ])
     const fam = new Map([['G1', ['T']], ['G2', ['T']], ['G3', []]])
 
-    it('categoryMuSums excludes non-autosomal genes and sums per class', function () {
-        const cmu = categoryMuSums({gnomad}, {fam})
-        expect(cmu.total.lof).to.be.closeTo(4e-6, 1e-18)     // G1+G2+G3 (not GX)
-        expect(cmu.byDim.fam.T.lof).to.be.closeTo(3e-6, 1e-18)   // G1+G2
+    it('categoryRateSums excludes non-autosomal genes and sums per class', function () {
+        // GX is chrX: λ = 2·N·p counts two parental transmissions, which assumes two
+        // copies, so X must never enter Σp — even though the real table carries 819 X genes.
+        const cmu = categoryRateSums(rates, {gnomad}, {fam})
+        expect(cmu.total.nonSplice).to.be.closeTo(4e-6, 1e-18)     // G1+G2+G3 (not GX)
+        expect(cmu.byDim.fam.T.nonSplice).to.be.closeTo(3e-6, 1e-18)   // G1+G2
         expect(cmu.byDim.fam.T.mis).to.be.closeTo(9e-6, 1e-18)
-        expect(cmu.byDim.constraint['pLI ≥ 0.9'].lof).to.be.closeTo(1e-6, 1e-18)   // G1 only
+        expect(cmu.byDim.constraint['pLI ≥ 0.9'].nonSplice).to.be.closeTo(1e-6, 1e-18)   // G1 only
+        expect(cmu.nGenes, 'modelable autosomal genes').to.equal(3)
     })
 
     const geneTerms = new Map([['G1', {fam: ['T']}], ['G2', {fam: ['T']}], ['G3', {fam: []}]])
     const V = (o) => Object.assign({curation_status: 'pass', inh: 'de_novo', ref: 'A', alt: 'G', chrom: '1', s: 'P?'}, o)
     const opts = (extra) => Object.assign({model: DE_NOVO, geneCol: 'gene', impactCol: 'impact', sampleCol: 's',
         chromCol: 'chrom', refCol: 'ref', altCol: 'alt', inheritanceCol: 'inh', geneTerms,
-        dimensions: [{id: 'fam', label: 'Fam'}], muByGene: gnomad,
-        categoryMu: categoryMuSums({gnomad}, {fam}), N: 100, nReliable: true, minCount: 1}, extra)
+        dimensions: [{id: 'fam', label: 'Fam'}], muByGene: rates,
+        categoryMu: categoryRateSums(rates, {gnomad}, {fam}), N: 100, nReliable: true, minCount: 1}, extra)
 
     it('gates to pass de novo SNV autosomal coding, and λ = 2·N·μ', function () {
         const variants = [
@@ -684,17 +696,17 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(T.cells.HIGH.q).to.be.a('number')                            // BH applied
     })
 
-    it('per-class μ gate: a LoF de novo in a gene with null lof.mu is excluded (k↔λ stay consistent)', function () {
-        const gp = new Map([['GP', {muLof: null, muMis: 5e-6, muSyn: 3e-6, chr: '1'}]])
+    it('per-class rate gate: a nonsense de novo in a gene with no pNonSplice is excluded (k↔λ stay consistent)', function () {
+        const gp = new Map([['GP', {pNonSplice: null, pMis: 5e-6, pSyn: 3e-6, chr: '1'}]])
         const res = computeModelEnrichment([V({gene: 'GP', impact: 'HIGH', s: 'PA'})], Object.assign(opts(), {
-            muByGene: gp, categoryMu: categoryMuSums({gnomad: gp}, {fam: new Map([['GP', ['T']]])}),
+            muByGene: gp, categoryMu: categoryRateSums(gp, {gnomad: gp}, {fam: new Map([['GP', ['T']]])}),
             geneTerms: new Map([['GP', {fam: ['T']}]])
         }))
-        expect(res.meta.exclNoClassMu).to.equal(1)   // LoF variant, but gene has no lof.mu → no modelable target
+        expect(res.meta.exclNoClassMu).to.equal(1)   // nonsense variant, but no pNonSplice → no modelable target
         expect(res.meta.nUsed).to.equal(0)
         // a missense de novo in the SAME gene IS counted (it has mis.mu)
         const res2 = computeModelEnrichment([V({gene: 'GP', impact: 'MODERATE', s: 'PB'})], Object.assign(opts(), {
-            muByGene: gp, categoryMu: categoryMuSums({gnomad: gp}, {fam: new Map([['GP', ['T']]])}),
+            muByGene: gp, categoryMu: categoryRateSums(gp, {gnomad: gp}, {fam: new Map([['GP', ['T']]])}),
             geneTerms: new Map([['GP', {fam: ['T']}]])
         }))
         expect(res2.meta.nUsed).to.equal(1)
@@ -707,7 +719,7 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         const fam2 = new Map([['G1', ['T']], ['G2', ['T2']]])
         const res = computeModelEnrichment([V({gene: 'G2', impact: 'MODERATE', chrom: '2', s: 'P2'})],
             Object.assign(opts(), {geneTerms: new Map([['G1', {fam: ['T']}], ['G2', {fam: ['T2']}]]),
-                categoryMu: categoryMuSums({gnomad}, {fam: fam2})}))
+                categoryMu: categoryRateSums(rates, {gnomad}, {fam: fam2})}))
         const sec = res.perCategory.sections.find(s => s.id === 'fam')
         const t2 = sec.groups.find(g => g.term === 'T2')
         expect(t2.cells.HIGH.k).to.equal(0)
@@ -730,7 +742,7 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
             V({gene: 'G1', impact: 'HIGH', s: 'P2'})               // lof (not synonymous)
         ]
         const res = computeModelEnrichment(variants, opts())
-        const cmu = categoryMuSums({gnomad}, {fam})
+        const cmu = categoryRateSums(rates, {gnomad}, {fam})
         expect(res.meta.byClass.syn).to.equal(1)
         expect(res.meta.calibration.syn.exp).to.be.closeTo(2 * 100 * cmu.total.syn, 1e-12)
         expect(res.meta.calibration.syn.ratio).to.be.closeTo(1 / (2 * 100 * cmu.total.syn), 1e-6)

@@ -50,22 +50,25 @@ const DEFAULT_EXPORT_CONFIG = {
         mitoPathways: true,       // MitoPathways3.0 functional hierarchy
         // Test B: de novo mutation-rate enrichment (separate "DNM Rate" tabs).
         //
-        // WITHHELD (default false) pending a rate-source correction. It is OFF because it is
-        // ACTIVELY WRONG, not merely unvalidated: λ is built from gnomAD's lof.mu/mis.mu/syn.mu,
-        // which are NOT per-transmission de novo rates. gnomAD fits `expected = mu·slope +
-        // intercept` and refits the slope, so mu is identified only up to a proportionality
-        // constant — summing it predicts 0.276 coding de novo per trio against a published
-        // ~1.0–1.3, i.e. λ ≈ 3.9× too small. Deflated λ drags small-μ genes across the FDR
-        // threshold on a SINGLE de novo: measured against the shipped bundle, ~200 genes earn
-        // q<0.05 off one variant at N=220 (530 at N=50) where correct rates give 32. Its class
-        // balance is separately wrong (lof.mu/syn.mu = 0.319 vs 0.168 from three independent
-        // implementations), which no scale constant can repair.
+        // The ORIGINAL defect is FIXED. λ no longer comes from gnomAD's lof.mu/mis.mu/syn.mu
+        // (a mutability covariate identified only up to a proportionality constant: summed it
+        // predicted 0.276 coding de novo per trio vs a published ~1.0–1.3, at a class balance
+        // of 0.319 vs ~0.168 — which dragged ~200 genes to q<0.05 off a single variant at
+        // N=220 where correct rates give 32). It is now
+        //     λ = 2·N·Σp·ê
+        // with p from data/annotations/dnm_rates.json.gz (Samocha 2014 model via DeNovoWEST,
+        // MIT — sums to 1.074 per trio at ratio 0.161) and ê fitted from each cohort's own
+        // synonymous class. Classes come from VEP Consequence, so the calibrator is no longer
+        // contaminated by LOW-impact splice/intronic calls. ✓ is withheld unless N is
+        // defensible AND ê was actually fitted.
         //
-        // The replacement is built and validated — data/annotations/dnm_rates.json.gz
-        // (`build-annotation-data.js dnmRates`): SNV-only per-transmission probabilities from
-        // the Samocha 2014 model. Re-enable once the engine reads it and applies the empirical
-        // calibration ê (λ = 2·N·p·ê). Setting this true today re-ships the false ✓ marks.
-        dnmRateTest: false        // ⚠ see above — do not enable until λ reads dnm_rates.json.gz
+        // STILL false, for ONE remaining reason: ê's own uncertainty is not propagated into
+        // P(X≥k) — the Poisson treats λ as known — which leaves these p-values mildly
+        // ANTI-CONSERVATIVE. The fix is the scale-free conditional binomial (n_ns ~
+        // Binomial(n_ns+n_syn, p_ns/(p_ns+p_syn))), where N and ê cancel identically, so it
+        // integrates that noise out instead of ignoring it. Once that ships alongside the
+        // Poisson, flip this to true.
+        dnmRateTest: false        // ⚠ λ is correct now; awaiting the scale-free companion test
     },
 
     // Per-gene impact counts on the Gene Summary tab (curation-derived, not

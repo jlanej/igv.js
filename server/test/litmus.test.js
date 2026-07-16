@@ -69,6 +69,59 @@ describe('litmus: bundled data loads with expected magnitudes', function () {
     })
 })
 
+describe('litmus: the de novo RATE bundle is a rate, not a covariate', function () {
+    // This is the guard that would have caught the bug that withheld Test B: λ was built
+    // from gnomAD's lof.mu/mis.mu/syn.mu, a mutability COVARIATE identified only up to a
+    // proportionality constant. It predicted 0.276 coding de novo per trio (~3.9x too
+    // small) at a class ratio of 0.319 (~2x too high), which drags small-rate genes past
+    // the FDR threshold on a single variant. A rate table must reproduce the PUBLISHED
+    // scale; assert that against the real bundle, so a regenerated/wrong table fails here
+    // rather than in a reviewer's inbox.
+    const dnmRates = require('../dnm-rates')
+    const {categoryRateSums} = require('../dnm-enrichment')
+    const rates = dnmRates.getRates()
+
+    it('the bundle loads with per-gene, per-class rates + chromosome', function () {
+        expect(rates.size, 'rate records').to.be.greaterThan(15000)
+        const tsc2 = rates.get('TSC2')
+        expect(tsc2, 'TSC2 in the rate bundle').to.exist
+        expect(tsc2.pSyn, 'TSC2 pSyn').to.be.within(1e-7, 1e-3)
+        expect(tsc2.pMis, 'TSC2 pMis').to.be.within(1e-7, 1e-3)
+        expect(tsc2.pNonSplice, 'TSC2 pNonSplice').to.be.within(1e-8, 1e-4)
+        expect(tsc2.chr, 'TSC2 chromosome').to.equal('16')
+        // The rate table knows X-linked genes even though gnomAD's constraint set cannot
+        // score them. Test B still excludes X (2·N assumes two copies) — but by an explicit
+        // gate on chr, not by an accident of which genes another bundle happens to contain.
+        expect(rates.get('DDX3X'), 'DDX3X (X-linked) present in rates').to.exist
+        expect(rates.get('DDX3X').chr).to.equal('X')
+    })
+
+    it('summed rates reproduce the PUBLISHED de novo scale (gnomAD μ does not)', function () {
+        const cr = categoryRateSums(rates, {}, {})
+        const perTrio = 2 * (cr.total.syn + cr.total.mis + cr.total.nonSplice)
+        const ratio = cr.total.nonSplice / cr.total.syn
+        expect(perTrio, 'coding de novo SNVs per trio (published ~1.0-1.3)').to.be.within(0.9, 1.3)
+        expect(ratio, '(nonsense+splice)/synonymous (expect ~0.16-0.17)').to.be.within(0.14, 0.19)
+        expect(cr.nGenes, 'modelable autosomal genes').to.be.within(15000, 19500)
+        // And the contrast that justifies the whole change: gnomAD's covariate fails BOTH.
+        let mu = {lof: 0, mis: 0, syn: 0}
+        for (const r of gnB.values()) { mu.lof += r.muLof || 0; mu.mis += r.muMis || 0; mu.syn += r.muSyn || 0 }
+        expect(2 * (mu.lof + mu.mis + mu.syn), 'gnomAD μ is NOT a de novo rate — far below the published scale').to.be.lessThan(0.5)
+        expect(mu.lof / mu.syn, 'gnomAD lof.mu/syn.mu class balance is wrong too').to.be.greaterThan(0.25)
+    })
+
+    it('chrX is excluded from Σp — 2·N assumes two copies', function () {
+        const cr = categoryRateSums(rates, {}, {})
+        let xSyn = 0
+        for (const r of rates.values()) if (r && r.chr === 'X') xSyn += r.pSyn || 0
+        expect(xSyn, 'the bundle really does carry X rates').to.be.greaterThan(0)
+        let allSyn = 0
+        for (const r of rates.values()) allSyn += (r && r.pSyn) || 0
+        expect(cr.total.syn, 'Σp excludes X').to.be.lessThan(allSyn)
+        expect(cr.total.syn + xSyn, 'X is the (main) difference').to.be.at.most(allSyn + 1e-12)
+    })
+})
+
 describe('litmus: per-source prevalences are in sane ranges', function () {
     // Guards against a build that produces degenerate (0% / 100%) prevalences.
     it('constraint / ClinVar / GenCC prevalences match known magnitudes', function () {
