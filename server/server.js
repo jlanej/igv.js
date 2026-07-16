@@ -1993,7 +1993,7 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
             vals.push(hc.pi != null ? hc.pi : '—')
             const kcA = colLetter(SK) + rowNum, piA = colLetter(SPI) + rowNum
             vals.push(hc.expShare != null ? {formula: `${kcA}*${piA}`, result: hc.expShare} : '—')
-            vals.push(hc.pShare != null ? {formula: `1-BINOM.DIST(${kA}-1,${kcA},${piA},TRUE)`, result: hc.pShare} : '—')
+            vals.push(hc.pShare != null ? {formula: `1-BINOMDIST(${kA}-1,${kcA},${piA},TRUE)`, result: hc.pShare} : '—')
             // The cross-check λ for the same k under the OTHER rate table, and the ratio. Near 1
             // ⇒ the rate source is not carrying this row. No p — see the cross-check banner.
             if (meta.altTable) {
@@ -2130,7 +2130,7 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
                 row.kCohort == null ? '—' : row.kCohort,
                 row.pi == null ? '—' : row.pi,
                 row.pShare == null ? '—'
-                    : {formula: `1-BINOM.DIST(${kA}-1,${colLetter(SK)}${rowNum},${colLetter(SPI)}${rowNum},TRUE)`, result: row.pShare},
+                    : {formula: `1-BINOMDIST(${kA}-1,${colLetter(SK)}${rowNum},${colLetter(SPI)}${rowNum},TRUE)`, result: row.pShare},
                 tr.discovery ? (row.qShare == null ? '—' : row.qShare) : 'cal',
                 ...(altT ? [row.lambdaAlt == null ? '—' : row.lambdaAlt,
                     row.lambdaRatio == null ? '—' : row.lambdaRatio] : []),
