@@ -4187,36 +4187,57 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(names, names.join(',')).to.include.members(['DNM Rate (gene-set)', 'DNM Rate (per-gene)'])   // both tabs wired (placeholder genes ⇒ empty, but present)
     })
 
-    // Test B ships WITHHELD: its λ comes from gnomAD's lof/mis/syn.mu, which are mutability
-    // covariates, not per-transmission de novo rates (λ ≈ 3.9x too small ⇒ ~200 false q<0.05
-    // genes off a single variant at N=220). Guards the default so it cannot be re-enabled by
-    // accident — only a deliberate dnmRateTest:true brings it back.
-    it('Test B is withheld by DEFAULT — no DNM Rate tab unless explicitly opted in', async function () {
-        this.timeout(10000)
+    // Test B is ON by default as of 2026-07-16. This guards the CONTRACT that turning it on
+    // created: the tabs must appear, and the opt-OUT must still document itself rather than
+    // leaving a reader to notice an absence. The old version of this test pinned the default to
+    // false and justified it with the gnomAD-μ defect — a defect fixed long before the switch
+    // flipped, which is exactly how a guard outlives its reason and starts asserting history.
+    it('Test B is ON by default, and opting OUT still documents itself', async function () {
+        this.timeout(20000)
         const {DEFAULT_EXPORT_CONFIG} = require('../export-config')
-        expect(DEFAULT_EXPORT_CONFIG.geneAnalysis.dnmRateTest, 'default must stay false pending the rate-source fix').to.equal(false)
-        const exportConfig = {geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false},
-            geneAnalysis: {enabled: true, domain: false}}   // no dnmRateTest ⇒ default applies
-        const res = await request(app).post('/api/export/xlsx')
-            .send({variantIds: [0, 1, 2, 3, 4], exportConfig})
+        expect(DEFAULT_EXPORT_CONFIG.geneAnalysis.dnmRateTest, 'default is ON').to.equal(true)
+        const base = {geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false},
+            geneAnalysis: {enabled: true, domain: false}}
+
+        // ON (the default): the tabs are there.
+        const on = await request(app).post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4], exportConfig: base})
             .buffer(true).parse(binaryParser).expect(200)
-        const wb = new ExcelJS.Workbook()
-        await wb.xlsx.load(res.body)
-        const names = wb.worksheets.map(w => w.name)
-        expect(names, names.join(',')).to.not.include.members(['DNM Rate (gene-set)', 'DNM Rate (per-gene)'])
-        // ...and the Read Me says so, rather than leaving the reader to notice an absence.
-        const readme = wb.getWorksheet('Read Me')
+        const wbOn = new ExcelJS.Workbook()
+        await wbOn.xlsx.load(on.body)
+        const namesOn = wbOn.worksheets.map(w => w.name)
+        expect(namesOn, namesOn.join(',')).to.include.members(['DNM Rate (gene-set)', 'DNM Rate (per-gene)'])
+        // …and the Read Me documents all THREE tests, not just the Poisson. A row naming only
+        // one of them would leave two families of q-values on the sheet unexplained.
+        const rmOn = wbOn.getWorksheet('Read Me')
+        let threeRow = null
+        rmOn.eachRow(r => { if (String(r.getCell(1).value || '').includes('Three tests')) threeRow = r })
+        expect(threeRow, 'Read Me documents the three tests').to.not.be.null
+        const tn = String(threeRow.getCell(2).value)
+        for (const frag of ['Poisson', 'scale-free', 'share', 'SEPARATE Benjamini-Hochberg families']) {
+            expect(tn, `three-tests row names ${frag}`).to.include(frag)
+        }
+
+        // OFF (explicit opt-out): no tabs, and the Read Me says why rather than going silent.
+        const off = await request(app).post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4],
+                exportConfig: Object.assign({}, base, {geneAnalysis: Object.assign({}, base.geneAnalysis, {dnmRateTest: false})})})
+            .buffer(true).parse(binaryParser).expect(200)
+        const wbOff = new ExcelJS.Workbook()
+        await wbOff.xlsx.load(off.body)
+        const namesOff = wbOff.worksheets.map(w => w.name)
+        expect(namesOff, namesOff.join(',')).to.not.include.members(['DNM Rate (gene-set)', 'DNM Rate (per-gene)'])
+        const rmOff = wbOff.getWorksheet('Read Me')
         let withheldRow = null
-        readme.eachRow(r => { if (String(r.getCell(1).value || '').includes('Mutation-rate test (withheld)')) withheldRow = r })
-        expect(withheldRow, 'Read Me must document the withheld test').to.not.be.null
+        rmOff.eachRow(r => { if (String(r.getCell(1).value || '').includes('Mutation-rate test (turned OFF for this export)')) withheldRow = r })
+        expect(withheldRow, 'opting out must be documented, not silent').to.not.be.null
         const note = String(withheldRow.getCell(2).value)
-        // The note must say the absence is a DECISION, not an accident, and must say what
-        // is missing. It must NOT still promise the empirical calibration that was measured,
-        // found harmful, and deleted — that promise shipped for two commits.
         expect(note, 'says what is absent').to.include('NO de novo mutation-rate test')
-        expect(note, 'says the absence is a decision').to.match(/withheld pending review|deliberately withheld/)
+        expect(note, 'names the opt-out as a SETTING, not a defect').to.include('this is a setting, not a defect')
+        expect(note, 'says how to re-enable').to.include('dnmRateTest: true')
+        // It must NOT still promise the ê that was measured, found harmful and deleted, and must
+        // not blame a defect that has since been fixed.
         expect(note, 'must not promise the deleted ê').to.not.include('applies an empirical calibration')
-        // …and it must not blame a defect that has since been fixed.
-        expect(note, 'the gnomAD-μ defect is named as HISTORY, not as the current reason').to.include('That defect is FIXED')
+        expect(note, 'the gnomAD-μ defect is named as HISTORY, not the current reason').to.include('That defect is FIXED')
     })
 })

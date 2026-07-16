@@ -88,11 +88,22 @@ const DEFAULT_EXPORT_CONFIG = {
         // on. Any future calibration claim about this test must be measured on the HIGH-r
         // stratum before it is written down, let alone printed in the workbook.
         //
-        // Left OFF pending an explicit decision to enable, not pending a known defect: the
-        // measured blockers above are resolved and the Read Me / banner prose now matches the
-        // shipped model. Enabling is a judgement call about whether a Poisson at this cohort
-        // size earns its space, which is a separate question from whether it is correct.
-        dnmRateTest: false,       // off by decision, not by defect — see above
+        // NOW ON (2026-07-16), by explicit decision, with every measured blocker above resolved
+        // and the Read Me / banner prose matching the shipped model. Three tests ship per row,
+        // each with its OWN BH family, because they answer three different questions:
+        //   Poisson    k ~ Poisson(2·N·Σp)          — more than the germline rate predicts? The
+        //              only one that sees an ABSOLUTE excess. Needs N and the absolute scale, and
+        //              its obs/exp is corrupted in proportion by any cohort-wide artefact.
+        //   scale-free k ~ Binom(k+k_syn, θ)        — skewed toward damage vs its OWN synonymous?
+        //              2·N cancels. Gene-set only (a gene has ~0.004 expected synonymous de novo).
+        //   share      k | K ~ Binom(K, π)          — over-represented among the de novo actually
+        //              SEEN? Needs no N and no absolute scale; obs/exp invariant to a cohort-wide
+        //              multiplier. Cannot see a genuine exome-wide excess — that divides out too.
+        // The ✓ remains Poisson-gated and is withheld entirely while N is provisional.
+        //
+        // If this ever needs turning off again, say WHICH of those is wrong and show the
+        // measurement — "it feels uncertain" is what kept it off long after the defects were gone.
+        dnmRateTest: true,
 
         // Which bundled rate table drives Test B. BOTH ship and BOTH are reported: they are the
         // SAME Samocha-2014 model on DIFFERENT transcripts and agree to 0.6% per gene (median
