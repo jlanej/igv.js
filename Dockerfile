@@ -20,9 +20,13 @@ WORKDIR /app/server
 COPY server/package.json ./
 RUN npm install --omit=dev
 
-# Copy server source. Glob all top-level modules (not an explicit list) so a
-# newly added module can't be silently left out of the image.
+# Copy server source. The *.js glob covers new TOP-LEVEL modules automatically, but it
+# stops there: every SUBDIRECTORY needs its own line below, and forgetting one leaves the
+# image missing a module that resolves fine in the repo. That is not hypothetical — adding
+# server/export/ and not adding it here is precisely how this build broke. The RUN guard at
+# the end is what catches it, so keep them together: a new subdirectory means a new COPY.
 COPY server/*.js ./
+COPY server/export/ ./export/
 COPY server/providers/ ./providers/
 COPY server/data/ ./data/
 COPY server/public/ ./public/

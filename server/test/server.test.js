@@ -4192,49 +4192,59 @@ describe('Gene Summary impact counts and annotations', function () {
     // leaving a reader to notice an absence. The old version of this test pinned the default to
     // false and justified it with the gnomAD-μ defect — a defect fixed long before the switch
     // flipped, which is exactly how a guard outlives its reason and starts asserting history.
-    it('every live formula uses a LEGACY Excel function name (no silent #NAME? column)', async function () {
+    it('every live formula uses a LEGACY Excel function name (no silent #NAME? column)', function () {
         // This shipped: BINOM.DIST wrote 264 live #NAME? cells — the entire share column — while
         // the POISSON column beside it worked, because POISSON is the pre-2007 name and needs no
         // prefix. Any function introduced after Excel 2007 must carry an `_xlfn.` prefix in the
         // OOXML, and ExcelJS does not add it. A workbook is a publication supplement: a column of
         // errors is worse than a missing column, because it looks like the data is broken.
-        this.timeout(20000)
-        const res = await request(app).post('/api/export/xlsx')
-            .send({variantIds: [0, 1, 2, 3, 4],
-                exportConfig: {geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false},
-                    geneAnalysis: {enabled: true, domain: false}}})
-            .buffer(true).parse(binaryParser).expect(200)
+        //
+        // Drive the BUILDERS, not the HTTP export: the fixture has no sample column and its first
+        // rows carry no modelable de novo, so an export produces no formula-bearing tab at all and
+        // the scan would pass by finding nothing. (The first version of this test did exactly that
+        // — its own non-vacuity assertion caught it.)
+        const {computeModelEnrichment, categoryRateSums, DE_NOVO} = require('../dnm-enrichment')
+        const {buildDnmRateCategoryTab, buildDnmRatePerGeneTab} = require('../server')
+        const dnmRates = require('../dnm-rates')
+        const dnw = dnmRates.getRates('denovowest')
+        const fam = new Map([['TSC2', ['TSC complex']]])
+        const V = (o) => Object.assign({gene: 'TSC2', curation_status: 'pass', inheritance: 'de_novo', chrom: 'chr16'}, o)
+        const dnm = computeModelEnrichment([
+            V({Consequence: 'stop_gained', impact: 'HIGH', ref: 'C', alt: 'T', sample: 'P1'}),
+            V({Consequence: 'frameshift_variant', impact: 'HIGH', ref: 'AT', alt: 'A', sample: 'P2'}),
+            V({Consequence: 'synonymous_variant', impact: 'LOW', ref: 'G', alt: 'A', sample: 'P3'})
+        ], {model: DE_NOVO, geneCol: 'gene', impactCol: 'impact', consequenceCol: 'Consequence',
+            sampleCol: 'sample', chromCol: 'chrom', refCol: 'ref', altCol: 'alt', inheritanceCol: 'inheritance',
+            geneTerms: new Map([['TSC2', {fam: ['TSC complex']}]]), dimensions: [{id: 'fam', label: 'Fam'}],
+            muByGene: dnw, categoryMu: categoryRateSums(dnw, {}, {fam}, true),
+            rateTable: dnmRates.describe('denovowest'), N: 220, nReliable: true, minCount: 1})
+
         const wb = new ExcelJS.Workbook()
-        await wb.xlsx.load(res.body)
+        buildDnmRateCategoryTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
+        buildDnmRatePerGeneTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
+
         // Pre-2007 names only. Extend deliberately — and if a modern name is ever genuinely
         // needed, it must be written WITH the _xlfn. prefix, not added to this list.
         const LEGACY = new Set(['SUM', 'SUMPRODUCT', 'POISSON', 'BINOMDIST', 'IF', 'ROUND', 'MIN', 'MAX', 'ABS', 'EXP', 'LN', 'LOG'])
         const seen = new Set(); const bad = []
         for (const ws of wb.worksheets) {
-            ws.eachRow(row => {
-                row.eachCell({includeEmpty: false}, cell => {
-                    const f = cell.formula || (cell.value && cell.value.formula)
-                    if (!f) return
-                    for (const m of String(f).matchAll(/([A-Za-z_][A-Za-z0-9_.]*)\s*\(/g)) {
-                        const fn = m[1]
-                        seen.add(fn)
-                        // A dotted name is post-2007 unless already _xlfn.-prefixed.
-                        if (!LEGACY.has(fn) && !fn.startsWith('_xlfn.')) bad.push(`${ws.name}!${cell.address} -> ${fn}()`)
-                    }
-                })
-            })
-        }
-        expect(seen.size, 'the export really does emit live formulas (else this test is vacuous)').to.be.greaterThan(0)
-        expect(bad, `non-legacy function names ship as #NAME? in Excel: ${bad.slice(0, 6).join(', ')}`).to.deep.equal([])
-        // …and no cell may carry a cached error value.
-        const errs = []
-        for (const ws of wb.worksheets) {
             ws.eachRow(row => row.eachCell({includeEmpty: false}, cell => {
                 const v = cell.value
-                if (v && typeof v === 'object' && v.error) errs.push(`${ws.name}!${cell.address} -> ${v.error}`)
+                const f = (v && typeof v === 'object' && v.formula) ? v.formula : null
+                if (!f) return
+                for (const m of String(f).matchAll(/([A-Za-z_][A-Za-z0-9_.]*)\s*\(/g)) {
+                    seen.add(m[1])
+                    if (!LEGACY.has(m[1]) && !m[1].startsWith('_xlfn.')) bad.push(`${ws.name}!${cell.address} -> ${m[1]}()`)
+                }
             }))
         }
-        expect(errs, `cells carrying an error value: ${errs.slice(0, 6).join(', ')}`).to.deep.equal([])
+        // Non-vacuity: the tabs really do emit the live formulas this rule governs.
+        expect(seen.size, 'live formulas were emitted').to.be.greaterThan(0)
+        expect([...seen], 'both tails are live: the Poisson AND the share binomial').to.include.members(['POISSON', 'BINOMDIST'])
+        expect(bad, `non-legacy function names ship as #NAME? in Excel: ${bad.slice(0, 6).join(', ')}`).to.deep.equal([])
+        // The specific regression: the dotted 2010 name must never come back.
+        expect([...seen].filter(f => f.includes('.') && !f.startsWith('_xlfn.')),
+            'a dotted (post-2007) name with no _xlfn. prefix').to.deep.equal([])
     })
 
     it('Test B is ON by default, and opting OUT still documents itself', async function () {
