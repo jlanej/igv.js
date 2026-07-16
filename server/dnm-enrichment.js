@@ -609,6 +609,58 @@ function computeModelEnrichment(variants, opts) {
                 const theta = (sumMu + sumSyn) > 0 ? sumMu / (sumMu + sumSyn) : null
                 const T = k + kSyn
                 const pCond = theta == null ? null : (T > 0 ? binomUpperTail(k, T, theta) : 1)
+
+                // ---- the COHORT-CONDITIONED test (share-of-observed) -------------------
+                // Kobren/Moldovan et al., Nat Commun 2025 (RaMeDiES) — the method, not their
+                // code (GPL-3; this is written from the published description).
+                //
+                // Condition on the cohort's OWN total de novo count K for these classes, rather
+                // than on the category's synonymous count. Under the null that de novo variants
+                // fall across the exome in proportion to mutational target,
+                //     k | K  ~  Binomial(K, π),   π = Σp(category) / Σp(exome), same classes
+                // Every absolute-scale factor divides out of π — 2, N, and the per-transmission
+                // scale itself — so this asks "is this category over-represented among the de
+                // novo we ACTUALLY SAW?" using nothing but the rate table's RELATIVE shape.
+                //
+                // WHY IT EARNS A THIRD COLUMN rather than duplicating the two above:
+                //  - vs the Poisson: needs no N and no absolute scale. The ~16% disagreement
+                //    between published rate tables cannot touch it, and it stays valid when N is
+                //    provisional.
+                //  - vs the synonymous-conditioned test: conditions on a LARGE number (the whole
+                //    cohort's de novo count) instead of one category's synonymous handful, so it
+                //    has real power where that one is starved — and it is not confined to
+                //    class skew, which is a different question.
+                //
+                // THE PROPERTY THAT EARNS IT, stated precisely, because the loose version is
+                // wrong. Measure a uniform cohort-wide inflation — lenient curation, a
+                // hypermutator, a batch artefact — that multiplies EVERY gene's count by c:
+                //     Poisson  obs/exp = k/λ        scales by c   (measured: 867→1733→2600→4333
+                //                                                  at c=1,2,3,5 — a fabricated
+                //                                                  effect, linear in the artefact)
+                //     share    obs/exp = k/(K·π)    INVARIANT     (measured: 465.0 at every c)
+                // The share test's EFFECT ESTIMATE cannot be moved by any cohort-wide multiplier,
+                // because the multiplier lands in k and K alike and divides out. The Poisson's is
+                // corrupted in exact proportion. That is the whole point of the column.
+                //
+                // NB the p-values of BOTH shrink as c grows, and that is correct, not a defect:
+                // c×more observations measure the same share with more precision. The robustness
+                // lives in the ESTIMATE, not in the p-value. Do not read a small pShare as "the
+                // artefact was handled" — read the obs/exp beside it.
+                //
+                // THE MIRROR-IMAGE COST, and it is real: the same division that makes a spurious
+                // cohort-wide excess invisible makes a GENUINE one invisible too. This test can
+                // only ever say "over-represented RELATIVE to the rest of the exome". If every
+                // gene truly carried twice its expected de novo, it would report nothing. The
+                // Poisson beside it is the only test here that can see an absolute excess — which
+                // is why both ship, and why the synonymous model-fit ratio above is what tells a
+                // reader which regime they are in.
+                //
+                // K=0 ⇒ k=0 ⇒ P(X≥0)=1 exactly: unrejectable, but still a question asked.
+                const exomeMu = tier.classes.reduce((s, c) => s + (total[c] || 0), 0)
+                const kCohort = tier.classes.reduce((s, c) => s + (meta.byClass[c] || 0), 0)
+                const pi = exomeMu > 0 ? sumMu / exomeMu : null
+                const pShare = pi == null ? null : binomUpperTail(k, kCohort, pi)
+
                 // The cross-check λ: the SAME k against the other table's target. Reported as a
                 // λ and a ratio, never as a rival p-value.
                 const altT = altDimMu[term] || null
@@ -616,6 +668,7 @@ function computeModelEnrichment(variants, opts) {
                 const lambdaAlt = (altSumMu != null && N > 0 && altSumMu > 0) ? 2 * N * altSumMu : null
                 cells[tier.key] = {k, kSyn, T, lambda, catMu: sumMu, catMuSyn: sumSyn, theta,
                     p, q: null, pCond, qCond: null,
+                    kCohort, pi, expShare: pi != null ? kCohort * pi : null, pShare, qShare: null,
                     lambdaAlt, catMuAlt: altSumMu,
                     lambdaRatio: (lambdaAlt != null && lambda > 0) ? lambdaAlt / lambda : null}
             }
@@ -660,12 +713,28 @@ function computeModelEnrichment(variants, opts) {
         const mC = Math.max(mCond, tests.filter(c => c.pCond != null).length)
         benjaminiHochberg(tests.map(c => c.pCond), mC).forEach((q, i) => { tests[i].qCond = q })
 
+        // And the cohort-conditioned test gets its OWN family too — a THIRD question over the
+        // same a-priori grid. Three tests sharing one correction would be three chances at the
+        // same α. Its family is every (category × tier) with a target: π is defined wherever the
+        // rate table gives the category a target for that tier, so — like the θ test and unlike
+        // the Poisson — it needs no N.
+        let mShare = 0
+        for (const tier of CODING_TIERS) {
+            for (const term of Object.keys(dimMu)) {
+                const sumMu = tier.classes.reduce((s, c) => s + ((dimMu[term] || {})[c] || 0), 0)
+                if (sumMu > 0) mShare++
+            }
+        }
+        const mS = Math.max(mShare, tests.filter(c => c.pShare != null).length)
+        benjaminiHochberg(tests.map(c => c.pShare), mS).forEach((q, i) => { tests[i].qShare = q })
+
         // DISPLAY filter, applied after the correction (q's above are already final).
         const groups = allGroups.filter(g => g.kTop >= minCount)
         // rank by strongest (smallest) top-tier p, then k, then term
         const pTop = g => (g.cells[TOP].p == null ? 1 : g.cells[TOP].p)
         groups.sort((a, b) => pTop(a) - pTop(b) || b.kTop - a.kTop || a.term.localeCompare(b.term))
-        return {id: d.id, label: d.label, groups, muSource: !!catMu[d.id], m, mCond: mC, nCategories: allGroups.length}
+        return {id: d.id, label: d.label, groups, muSource: !!catMu[d.id], m, mCond: mC, mShare: mS,
+            nCategories: allGroups.length}
     })
 
     // --- per-gene enrichment: gene × class, λ = 2·N·μ (Stage 2) ---
@@ -691,8 +760,20 @@ function computeModelEnrichment(variants, opts) {
             const altRec = altMuByGene ? altMuByGene.get(gene) : null
             const muAlt = altRec ? tr.classes.reduce((s, c) => s + rateOf(altRec, c), 0) : null
             const lambdaAlt = (muAlt != null && N > 0 && muAlt > 0) ? 2 * N * muAlt : null
+            // The cohort-conditioned test, PER GENE — and here it is not a luxury. The
+            // synonymous-conditioned test collapses at gene level (a gene expects ~0.004
+            // synonymous de novo at N=220, so T = k and the test degenerates to θ^k, which uses
+            // nothing about gene size). This one conditions on the COHORT's total instead, which
+            // is a real number, so gene size re-enters through π = p_gene / Σp(exome) and a big
+            // gene and a small one with the same k are correctly told apart. It needs no N and no
+            // absolute scale — exactly the per-gene scale-free test the tab has been missing.
+            const exomeMuT = tr.classes.reduce((s, c) => s + (total[c] || 0), 0)
+            const kCohortT = tr.classes.reduce((s, c) => s + (meta.byClass[c] || 0), 0)
+            const piG = exomeMuT > 0 ? mu / exomeMuT : null
             perGeneRows.push({gene, track: tr.key, trackLabel: tr.label, discovery: tr.discovery,
                 k, mu, lambda, p: (lambda != null && k > 0) ? poissonUpperTail(k, lambda) : null, q: null,
+                kCohort: kCohortT, pi: piG, expShare: piG != null ? kCohortT * piG : null,
+                pShare: piG == null ? null : binomUpperTail(k, kCohortT, piG), qShare: null,
                 muAlt, lambdaAlt, lambdaRatio: (lambdaAlt != null && lambda > 0) ? lambdaAlt / lambda : null,
                 constraint: conOf(gene)})
         }
@@ -709,26 +790,33 @@ function computeModelEnrichment(variants, opts) {
     // pick the family and inflate the real FDR far above nominal. Only the observed rows
     // are materialised; the untested remainder enter via benjaminiHochberg's m argument
     // (provably identical to padding the vector with p=1).
-    const familySizes = {}, observedRows = {}
+    const familySizes = {}, shareFamilySizes = {}, observedRows = {}
     for (const tr of PER_GENE_TRACKS) {
         const fam = perGeneRows.filter(r => r.track === tr.key)
-        let mExome = 0
-        if (muByGene && N > 0) {
+        // Two exome-wide family sizes, because the two tests are testable on different
+        // conditions. The Poisson needs N>0 (λ = 2·N·p); the share test does not — π is defined
+        // from the rate table alone. Reusing one m would understate the share family whenever N
+        // is missing, i.e. exactly when the share test is the only one left standing.
+        let mExome = 0, mExomeShare = 0
+        if (muByGene) {
             for (const rec of muByGene.values()) {
                 if (!isAutosome(rec && rec.chr)) continue
                 const mu = tr.classes.reduce((s, c) => s + rateOf(rec, c), 0)
-                if (mu > 0) mExome++                          // λ = 2·N·p > 0 ⇒ testable
+                if (mu > 0) { mExomeShare++; if (N > 0) mExome++ }
             }
         }
         const m = Math.max(mExome, fam.filter(r => r.p != null).length)
         if (tr.discovery) benjaminiHochberg(fam.map(r => r.p), m).forEach((q, i) => { fam[i].q = q })
+        const mSh = Math.max(mExomeShare, fam.filter(r => r.pShare != null).length)
+        if (tr.discovery) benjaminiHochberg(fam.map(r => r.pShare), mSh).forEach((q, i) => { fam[i].qShare = q })
         familySizes[tr.key] = m                                // the BH family m (genes scanned)
+        shareFamilySizes[tr.key] = mSh
         observedRows[tr.key] = fam.filter(r => r.p != null).length
     }
     perGeneRows.sort((a, b) => (a.p == null ? 1 : a.p) - (b.p == null ? 1 : b.p) || b.k - a.k || a.gene.localeCompare(b.gene))
 
     return {perCategory: {sections, tiers: CODING_TIERS},
-        perGene: {tracks: PER_GENE_TRACKS, rows: perGeneRows, familySizes, observedRows}, meta}
+        perGene: {tracks: PER_GENE_TRACKS, rows: perGeneRows, familySizes, shareFamilySizes, observedRows}, meta}
 }
 
 module.exports = {
