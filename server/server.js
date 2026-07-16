@@ -1888,6 +1888,8 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     banner(`CURATION — the assumption behind every count here, stated plainly. Every variant counted above is a CURATION-PASS de novo. The tests ask whether damaging de novo exceed the mutation rate; they cannot know WHY a variant was passed. The assumption is that review is CLASS-BLIND — that synonymous de novo are examined as readily as damaging ones. Nothing in this tool filters review by impact, so that holds by default; it can be broken only by a reviewing habit, and the model-fit ratios above are how you would see it. Read them together: if synonymous were reviewed less than damaging, the synonymous ratio would sit BELOW the damaging ratios, and the gap between the class ratios is the measure of it. Note this cannot make the Poisson over-reject — λ never uses the synonymous count — it would only mean the synonymous ratio understates true detection, i.e. the tests are even more conservative than it suggests.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
 
+    banner(`CONVERGENCE vs RECURRENCE — read the "# genes" column before you read the ✓. A category is CONVERGENCE only if SEVERAL DIFFERENT genes in it carry de novo variants. One recurrent gene belongs to many categories at once and lights up every one: measured on these very libraries, a single gene with 3 nonsense de novo produces 22 category rows and 11 ✓ marks, each reading "# genes = 1". Those are not 11 findings — they are ONE gene seen 11 times, and its honest home is the "DNM Rate (per-gene)" tab. Category names are bolded only when ≥2 distinct genes carry them, for exactly this reason: a ✓ on a 1-gene row is the per-gene result restated, not a gene set converging.`,
+        {bold: true, italic: true, size: 10, color: {argb: 'FFB9770E'}})
     if (!reliable) banner('⚠ PROVISIONAL N: no Sample-QC trio file, so N counts only probands carrying a variant and is a LOWER BOUND → λ is too small → the Poisson p/q are anti-conservative. They are printed but are NOT the basis of any ✓ here. The scale-free test does not use N at all (it cancels), so it is unaffected and carries the ✓ instead. Load a --sample-qc file to get a defensible N and the rate-based test back.',
         {bold: true, italic: true, size: 10, color: {argb: 'FFB03A2E'}})
     r++; ws.addRow([])
@@ -1960,7 +1962,13 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
             row.getCell(DTH).numFmt = '0.0000'
             row.getCell(DLAM).numFmt = FMT_LAM; row.getCell(DP).numFmt = FMT_PVAL
             tiers.forEach((t, i) => { if (isSig(g.cells[t.key])) { row.getCell(T0 + i).font = {bold: true, color: {argb: 'FF6C3483'}}; row.getCell(PQ0 + i).font = {bold: true, color: {argb: 'FF6C3483'}} } })
-            if (hc.k >= 2) row.getCell(1).font = {bold: true}
+            // Bold the category ONLY when >=2 DISTINCT GENES carry it. That is the whole
+            // difference between convergence and recurrence: a category lit up by a single
+            // recurrent gene is the per-gene finding restated, not a gene set converging.
+            // Measured: SCN1A with 3 nonsense de novo lights 22 category rows across the
+            // dimensions, 11 of them q<0.05 — every one reading "# genes = 1". Bolding on k
+            // alone would have put 11 emphatic marks on ONE finding.
+            if (hc.k >= 2 && g.genes.length >= 2) row.getCell(1).font = {bold: true}
         })
         if (hidden) { r++; const nr = ws.addRow([`… ${hidden} more categor${hidden === 1 ? 'y' : 'ies'} not shown (ranked below the top ${MAX_GROUPS_PER_DIM} by p-value).`]); mergeAcross(r); nr.getCell(1).font = {italic: true, size: 9, color: {argb: 'FF6B7D8D'}} }
     }
