@@ -62,13 +62,22 @@ const DEFAULT_EXPORT_CONFIG = {
         // contaminated by LOW-impact splice/intronic calls. ✓ is withheld unless N is
         // defensible AND ê was actually fitted.
         //
-        // STILL false, for ONE remaining reason: ê's own uncertainty is not propagated into
-        // P(X≥k) — the Poisson treats λ as known — which leaves these p-values mildly
-        // ANTI-CONSERVATIVE. The fix is the scale-free conditional binomial (n_ns ~
-        // Binomial(n_ns+n_syn, p_ns/(p_ns+p_syn))), where N and ê cancel identically, so it
-        // integrates that noise out instead of ignoring it. Once that ships alongside the
-        // Poisson, flip this to true.
-        dnmRateTest: false        // ⚠ λ is correct now; awaiting the scale-free companion test
+        // The scale-free conditional binomial now ships alongside it (n ~ Binomial(k+k_syn,
+        // Σp/(Σp+Σp_syn)), where 2·N and ê cancel identically), reported per tier and
+        // carrying the ✓ when N is provisional or ê could not be fitted.
+        //
+        // CORRECTION to what this comment previously claimed: I asserted the Poisson was
+        // "mildly anti-conservative" because ê's uncertainty is not propagated into P(X≥k),
+        // and named that as the blocker. That was never measured, and it is FALSE. Simulated
+        // under the null on the real rate bundle, the Poisson's rejection rate is at or below
+        // nominal at every cohort size tested (0.49–0.99× of α from N=220 to N=20,000, at
+        // both small and large category sizes). ê is unbiased and its residual noise is
+        // second-order against Poisson discreteness at de novo counts.
+        //
+        // So no known defect blocks this. It stays false only pending an adversarial review
+        // of the rebuilt Test B and a look at real output — the same bar the rest of this
+        // workbook is held to, not a specific doubt.
+        dnmRateTest: false        // λ correct + scale-free companion shipped; awaiting review on real data
     },
 
     // Per-gene impact counts on the Gene Summary tab (curation-derived, not

@@ -1834,17 +1834,46 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     const FMT_PVAL = '[<0.001]0.0E+00;0.000', FMT_MU = '0.00E+00', FMT_LAM = '[<0.05]0.0E+00;0.000'
     const fmtP = (p) => p == null ? '—' : (p < 0.001 ? p.toExponential(1) : p.toFixed(3))
     const fmtR = (x) => x == null ? '—' : x.toFixed(2)
-    // ✓ requires BOTH a defensible N and a fitted ê. An unfitted ê means λ assumes
-    // perfect ascertainment, which is optimistic ⇒ anti-conservative p ⇒ no ✓.
-    const isSig = (cc) => reliable && calibrated && cc && cc.q != null && cc.q < 0.05       // ✓ withheld when N provisional
+    // ✓ = "significant under the strongest test that is VALID for this cohort".
+    //
+    // The Poisson needs a defensible N and a fitted ê. When it has both, it is the
+    // primary test — and it is well calibrated: simulated on the real rate bundle under
+    // the null, its rejection rate never exceeds nominal at any cohort size (0.49-0.99x
+    // of α; the fitted ê costs nothing measurable, because ê is unbiased and its residual
+    // noise is second-order against Poisson discreteness).
+    //
+    // When N is provisional or ê could not be fitted, the Poisson's inputs are not
+    // trustworthy, and the OLD behaviour was to withhold ✓ entirely. That threw away a
+    // valid answer: the conditional binomial needs NEITHER N NOR ê (both cancel out of θ),
+    // so it still holds. ✓ then follows it instead.
+    //
+    // Selecting on WHICH TEST is valid uses metadata (is there a Sample-QC file? are there
+    // ≥10 synonymous de novo?), never a p-value, so this is not test-shopping.
+    const poissonValid = reliable && calibrated
+    // The exact scale λ was built with. Emitted into the live λ formula at full precision,
+    // so the formula reproduces the printed λ rather than approximating it.
+    const eApplied = meta.eApplied != null ? meta.eApplied : 1
+    const isSig = (cc) => {
+        if (!cc) return false
+        if (poissonValid) return cc.q != null && cc.q < 0.05
+        return cc.qCond != null && cc.qCond < 0.05
+    }
     const kStr = (cc) => { if (!cc || !cc.k) return ''; return isSig(cc) ? `${cc.k} ✓` : `${cc.k}` }
     const pqStr = (cc) => { if (!cc || cc.p == null) return '—'; return `${fmtP(cc.p)} / ${fmtP(cc.q)}` }
+    // The scale-free companion, printed for EVERY row regardless of which test drives ✓ —
+    // a reader must be able to see both, and disagreement between them is informative:
+    // significant on the Poisson but not here means the category's excess is not a class
+    // SKEW, i.e. it may be an artefact of N, ê, or uneven ascertainment rather than selection.
+    const condStr = (cc) => { if (!cc || cc.pCond == null) return '—'; return `${fmtP(cc.pCond)} / ${fmtP(cc.qCond)}` }
     const MAX_GROUPS_PER_DIM = 25
 
-    // Columns: Category | 3 tier "k ✓" | # genes | # probands | 3 tier "p/q" | k | Σp | λ | P(X≥k) | Genes
+    // Columns: Category | tier "k ✓" | # genes | # probands | tier "p/q" (Poisson) |
+    //          tier "p/q" (scale-free) | k | k_syn | Σp | Σp_syn | θ | λ | P(X≥k) | Genes
     const T0 = 2, nT = tiers.length
     const CG = 1 + nT + 1, CP = CG + 1, PQ0 = CP + 1
-    const DK = PQ0 + nT, DMU = DK + 1, DLAM = DMU + 1, DP = DLAM + 1, GENES = DP + 1
+    const CQ0 = PQ0 + nT                                   // scale-free p/q, one per tier
+    const DK = CQ0 + nT, DKS = DK + 1, DMU = DKS + 1, DMUS = DMU + 1, DTH = DMUS + 1
+    const DLAM = DTH + 1, DP = DLAM + 1, GENES = DP + 1
     const nCols = GENES
     const headTier = tiers[nT - 1]           // the broadest coding tier = the derivation worked example
 
@@ -1871,16 +1900,22 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     const cal = meta.calibration || {}
     banner(`ê = ${cal.eHat != null ? cal.eHat.toFixed(3) : '—'} — THE HEADLINE QC NUMBER. It is the scale fitted from this cohort's own synonymous de novo variants: ê = observed_syn ÷ (2·N·Σp_syn) = ${cal.syn ? cal.syn.obs : 0} ÷ ${cal.syn && cal.syn.exp != null ? cal.syn.exp.toFixed(1) : '—'}${cal.eHatRelSe != null ? ` (±${(100 * cal.eHatRelSe).toFixed(0)}% relative, from √${cal.syn ? cal.syn.obs : 0})` : ''}. Every discovery λ is scaled by it, so the model is FITTED to this cohort rather than asserted. READ IT AS: ê≈1 ⇒ this cohort's de novo yield matches the model; ê≈0.5 ⇒ roughly half the de novo variants were called (or the rate table runs ~2× high here) and λ is scaled to match. ê ABSORBS both the unsettled absolute rate scale (~16% between published tables) and this cohort's ascertainment.`,
         {bold: true, italic: true, size: 10, color: {argb: 'FF1F618D'}})
-    banner(`WHAT ê COSTS, stated plainly: the synonymous ratio is now TAUTOLOGICAL — after fitting, observed_syn ÷ expected_syn ≡ 1 BY CONSTRUCTION, so it can no longer detect a broken rate table. ê's own magnitude is the guard that remains. ê also ASSUMES detection efficiency is class-independent; synonymous sites are CpG-rich and coverage tracks GC, so a second-order class bias survives — smaller than the scale gap ê removes, but real. And ê's own uncertainty is NOT propagated into P(X≥k) (the Poisson treats λ as known), which makes these p-values mildly anti-conservative. Uncalibrated, for reference: nonsense+splice ${cal.nonSplice ? fmtR(cal.nonSplice.ratio) : '—'}, missense ${cal.mis ? fmtR(cal.mis.ratio) : '—'} observed÷expected before ê. Refs: Samocha 2014 Nat Genet 46:944 (model); Kaplanis & Samocha 2020 Nature 586:757 + DeNovoWEST, MIT (rates); Benjamini-Hochberg 1995.`,
+    banner(`WHAT ê COSTS, stated plainly: the synonymous ratio is now TAUTOLOGICAL — after fitting, observed_syn ÷ expected_syn ≡ 1 BY CONSTRUCTION, so it can no longer detect a broken rate table. ê's own magnitude is the guard that remains, alongside the scale-free test below. ê also ASSUMES detection efficiency is class-independent; synonymous sites are CpG-rich and coverage tracks GC, so a second-order class bias survives — smaller than the scale gap ê removes, but real, and NOT removed by the scale-free test either (both read the same skewed class ratio). Uncalibrated, for reference: nonsense+splice ${cal.nonSplice ? fmtR(cal.nonSplice.ratio) : '—'}, missense ${cal.mis ? fmtR(cal.mis.ratio) : '—'} observed÷expected before ê. Refs: Samocha 2014 Nat Genet 46:944 (model); Kaplanis & Samocha 2020 Nature 586:757 + DeNovoWEST, MIT (rates); Benjamini-Hochberg 1995; Benjamini-Yekutieli 2001 (FDR under positive dependence — the nested tiers).`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    if (!cal.eHatUsable) banner(`⚠ UNCALIBRATED: only ${cal.syn ? cal.syn.obs : 0} synonymous de novo SNVs — below the ${cal.minSyn} needed to fit ê, so λ falls back to 2·N·Σp, i.e. it ASSUMES every de novo was called. That assumption is optimistic, so p-values are ANTI-CONSERVATIVE; the ✓ flag is withheld.`,
+    banner(`THE SCALE-FREE COMPANION — "p/q (scale-free)", one per tier. Condition on the category's OWN total T = k + k_syn: under the null the classes are independent Poissons, so k | T ~ Binomial(T, θ) with θ = Σp ÷ (Σp + Σp_syn). The 2·N and the ê CANCEL — look at the live θ column: neither appears in it. So this test needs NO trio count, NO calibration, and is immune to the absolute rate scale (~16% unsettled between published tables). It asks a subtly different question: not "more than the rate predicts?" but "more SKEWED toward damage, relative to this category's own synonymous variants, than the rate predicts?". READ THE TWO TOGETHER: agreement means the excess is a genuine class skew; significant on the Poisson but NOT here means the category's excess is not skewed — which is what an N, ê or ascertainment artefact looks like. It does NOT escape class-dependent detection (see above). BH family m=${sections.reduce((a, s) => a + (s.mCond || 0), 0)} across all dimensions, corrected per dimension and SEPARATELY from the Poisson.`,
+        {italic: true, size: 10, color: {argb: 'FF1F618D'}})
+    banner(`WHICH TEST DRIVES THE ✓: ${poissonValid ? 'the POISSON — this cohort has both a defensible N and a fitted ê, so the rate-based test is valid and is the primary one. The scale-free q is printed beside it as a robustness read.' : 'the SCALE-FREE test — this cohort ' + (!reliable ? 'has no Sample-QC trio count, so N is a lower bound and λ cannot be trusted' : 'could not fit ê (too few synonymous de novo), so λ would have to assume perfect ascertainment') + '. The Poisson p/q are still printed, but they are NOT the basis of any ✓ here: the scale-free test needs neither N nor ê, so it is the one that still holds.'} On calibration: simulated under the null on this rate table, the Poisson's false-positive rate never exceeds nominal at any cohort size — the fitted ê costs no validity, because ê is unbiased and its residual noise is second-order against Poisson discreteness at de novo counts.`,
+        {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    if (!cal.eHatUsable) banner(`⚠ UNCALIBRATED: only ${cal.syn ? cal.syn.obs : 0} synonymous de novo SNVs — below the ${cal.minSyn} needed to fit ê, so the Poisson's λ falls back to 2·N·Σp, which ASSUMES every de novo in this cohort was called. Its p/q are printed but are NOT the basis of any ✓ here. The scale-free test needs no ê, so it is unaffected and carries the ✓ instead.`,
         {bold: true, italic: true, size: 10, color: {argb: 'FFB03A2E'}})
-    if (!reliable) banner('⚠ PROVISIONAL: no Sample-QC trio file, so N excludes 0-DNM trios and is a lower bound → λ is too small → p-values are ANTI-CONSERVATIVE. The ✓ significance flag is withheld. Load a --sample-qc file for a defensible N.',
+    if (!reliable) banner('⚠ PROVISIONAL N: no Sample-QC trio file, so N counts only probands carrying a variant and is a LOWER BOUND → λ is too small → the Poisson p/q are anti-conservative. They are printed but are NOT the basis of any ✓ here. The scale-free test does not use N at all (it cancels), so it is unaffected and carries the ✓ instead. Load a --sample-qc file to get a defensible N and the rate-based test back.',
         {bold: true, italic: true, size: 10, color: {argb: 'FFB03A2E'}})
     r++; ws.addRow([])
 
-    const headers = ['Category', ...tiers.map(t => t.label), '# genes', '# probands', ...tiers.map(t => `${t.label} p/q`),
-        `k (${headTier.label})`, 'Σp', 'λ = 2·N·Σp·ê', 'P(X≥k)', 'Genes']
+    const headers = ['Category', ...tiers.map(t => t.label), '# genes', '# probands',
+        ...tiers.map(t => `${t.label} p/q`),
+        ...tiers.map(t => `${t.label} p/q (scale-free)`),
+        `k (${headTier.label})`, 'k syn', 'Σp', 'Σp syn', 'θ', 'λ = 2·N·Σp·ê', 'P(X≥k)', 'Genes']
     r++
     const hdr = ws.addRow(headers)
     hdr.eachCell(c => { c.fill = headerFill; c.font = headerFont; c.border = borderThin; c.alignment = {vertical: 'middle', horizontal: 'center', wrapText: true} })
@@ -1890,7 +1925,10 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     for (let i = 0; i < nT; i++) ws.getColumn(T0 + i).width = 13
     ws.getColumn(CG).width = 8; ws.getColumn(CP).width = 10
     for (let i = 0; i < nT; i++) ws.getColumn(PQ0 + i).width = 14
-    ws.getColumn(DK).width = 8; ws.getColumn(DMU).width = 11; ws.getColumn(DLAM).width = 11; ws.getColumn(DP).width = 11
+    for (let i = 0; i < nT; i++) ws.getColumn(CQ0 + i).width = 16
+    ws.getColumn(DK).width = 8; ws.getColumn(DKS).width = 8; ws.getColumn(DMU).width = 11
+    ws.getColumn(DMUS).width = 11; ws.getColumn(DTH).width = 8
+    ws.getColumn(DLAM).width = 11; ws.getColumn(DP).width = 11
     ws.getColumn(GENES).width = 48
 
     let any = false
@@ -1918,10 +1956,17 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
             for (const t of tiers) vals.push(kStr(g.cells[t.key]))
             vals.push(g.genes.length, g.probands)
             for (const t of tiers) vals.push(pqStr(g.cells[t.key]))
+            for (const t of tiers) vals.push(condStr(g.cells[t.key]))
             // derivation (headTier), with live Excel formulas
             const kA = colLetter(DK) + rowNum, muA = colLetter(DMU) + rowNum, lamA = colLetter(DLAM) + rowNum
-            vals.push(hc.k, hc.catMu)
-            vals.push({formula: `2*${N}*${muA}`, result: hc.lambda})
+            const muSA = colLetter(DMUS) + rowNum
+            vals.push(hc.k, hc.kSyn, hc.catMu, hc.catMuSyn)
+            // θ = Σp / (Σp + Σp_syn) — live, so a reader can see that 2·N and ê are simply
+            // not in it. That absence IS the scale-free property, not a claim about it.
+            vals.push(hc.theta != null ? {formula: `${muA}/(${muA}+${muSA})`, result: hc.theta} : '—')
+            // λ carries ê. The formula must show the SAME arithmetic the p-value used —
+            // printing 2*N*Σp here while λ is 2*N*Σp*ê would make the sheet contradict itself.
+            vals.push(hc.lambda != null ? {formula: `2*${N}*${muA}*${eApplied}`, result: hc.lambda} : '—')
             vals.push((hc.k > 0 && hc.lambda != null)
                 ? {formula: `1-POISSON(${kA}-1,${lamA},TRUE)`, result: hc.p}
                 : '—')
@@ -1930,9 +1975,11 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
             const row = ws.addRow(vals)
             row.eachCell(c => { c.border = borderThin; if (idx % 2 === 1) c.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}} })
             for (let i = 0; i < nT; i++) row.getCell(T0 + i).alignment = {horizontal: 'center'}
-            for (const c of [CG, CP, DK, DMU, DLAM, DP]) row.getCell(c).alignment = {horizontal: 'center'}
-            for (let i = 0; i < nT; i++) row.getCell(PQ0 + i).alignment = {horizontal: 'center'}
-            row.getCell(DMU).numFmt = FMT_MU; row.getCell(DLAM).numFmt = FMT_LAM; row.getCell(DP).numFmt = FMT_PVAL
+            for (const c of [CG, CP, DK, DKS, DMU, DMUS, DTH, DLAM, DP]) row.getCell(c).alignment = {horizontal: 'center'}
+            for (let i = 0; i < nT; i++) { row.getCell(PQ0 + i).alignment = {horizontal: 'center'}; row.getCell(CQ0 + i).alignment = {horizontal: 'center'} }
+            row.getCell(DMU).numFmt = FMT_MU; row.getCell(DMUS).numFmt = FMT_MU
+            row.getCell(DTH).numFmt = '0.0000'
+            row.getCell(DLAM).numFmt = FMT_LAM; row.getCell(DP).numFmt = FMT_PVAL
             tiers.forEach((t, i) => { if (isSig(g.cells[t.key])) { row.getCell(T0 + i).font = {bold: true, color: {argb: 'FF6C3483'}}; row.getCell(PQ0 + i).font = {bold: true, color: {argb: 'FF6C3483'}} } })
             if (hc.k >= 2) row.getCell(1).font = {bold: true}
         })
@@ -1969,7 +2016,12 @@ function buildDnmRatePerGeneTab(workbook, dnm, styles) {
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
     banner(`Per-gene λ is tiny, so a single de novo hit rarely survives FDR — power comes from RECURRENCE (≥2 de novos in one gene). The scan is EXOME-WIDE, so each discovery family m counts EVERY autosomal gene with a modelable μ for that track — not just the genes that happened to carry a de novo. A gene with no de novo has the exact p = P(X≥0) = 1 and can never be rejected, but it is still one of the hypotheses the scan asked; correcting only across observed genes would let the data pick the family and put the true FDR far above the nominal 5%. Only genes with k≥1 are listed below (the rest are all p=1). Discovery family m (autosomal genes scanned) — LoF ${pg.familySizes.lof || 0}, missense ${pg.familySizes.mis || 0}, protein-altering ${pg.familySizes.protein_altering || 0}; rows shown with an observed de novo — ${(pg.observedRows && pg.observedRows.lof) || 0} / ${(pg.observedRows && pg.observedRows.mis) || 0} / ${(pg.observedRows && pg.observedRows.protein_altering) || 0}.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
-    if (!reliable) banner('⚠ PROVISIONAL: N excludes 0-DNM trios (no Sample-QC file) → λ too small → anti-conservative p; ✓ withheld.', {bold: true, italic: true, size: 10, color: {argb: 'FFB03A2E'}})
+    // The scale-free test is deliberately NOT offered here. It is not an oversight and it
+    // is not laziness: it is measurably vacuous at gene level, and shipping it would invite
+    // a reader to trust a number that carries no information about the gene.
+    banner(`WHY THERE IS NO "scale-free" COLUMN HERE (there is one on the gene-set tab): that test conditions on a row's OWN total T = k + k_syn, which needs the row to actually contain synonymous de novo variants. A gene does not. At N=${N} the AVERAGE gene expects ${meta.rateGenes > 0 ? (2 * N * meta.totalP.syn / meta.rateGenes).toFixed(4) : '≈0.004'} synonymous de novo variants (2·N·Σp_syn ÷ ${meta.rateGenes ? meta.rateGenes.toLocaleString() : '~18.5k'} genes) — well under a 1% chance of even one — so T = k almost always, and the test collapses to p = θ^k. That uses NOTHING about the gene's mutational target size: a huge gene and a tiny one, each with 2 nonsense de novo, would receive an IDENTICAL p-value. Gene size is precisely the information that makes a per-gene rate test meaningful, so the Poisson λ = 2·N·p·ê is the only test offered at this level. A gene set aggregates hundreds of genes, so its synonymous count is real and the scale-free test is informative there.`,
+        {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    if (!reliable) banner('⚠ PROVISIONAL N: no Sample-QC trio file → N is a lower bound → λ too small → anti-conservative p; ✓ withheld. (Unlike the gene-set tab, there is no scale-free fallback at gene level — see the note above.)', {bold: true, italic: true, size: 10, color: {argb: 'FFB03A2E'}})
     r++; ws.addRow([])
 
     const headers = ['Gene', 'k (de novo SNVs)', 'p (rate)', 'λ = 2·N·p·ê', 'P(X≥k)', 'q']

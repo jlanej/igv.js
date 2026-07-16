@@ -69,7 +69,7 @@
 // engine stays pristine). geneTermsFor is imported deliberately: category membership must
 // have ONE definition, or a category's observed k and its λ silently describe different
 // gene sets.
-const {benjaminiHochberg, geneTermsFor} = require('./gene-analysis')
+const {benjaminiHochberg, geneTermsFor, binomUpperTail} = require('./gene-analysis')
 
 // ---- pure stats (self-contained; own lgamma so the module stands alone) ----
 const LGAMMA_C = [
@@ -202,8 +202,12 @@ const MODELS = {de_novo: DE_NOVO, x_linked_denovo: X_LINKED_DENOVO, recessive_ho
 // marked uncalibrated so the tab can withhold its ✓ marks: the failure mode being blocked
 // is obs_syn = 0 ⇒ ê = 0 ⇒ λ = 0 ⇒ p = 0 for every k ≥ 1, i.e. the entire exome
 // "significant". Note ê's noise is NOT propagated into p (the Poisson treats λ as known),
-// which makes the calibrated p mildly anti-conservative; the scale-free conditional
-// binomial is the companion that integrates that noise out instead of ignoring it.
+// which one might expect to make the calibrated p anti-conservative. MEASURED, it does
+// not: simulated under the null on the real rate bundle, the Poisson's rejection rate is
+// at or BELOW nominal at every cohort size (0.49-0.99x of α at N=220...20000). ê is
+// unbiased, its relative noise is 1/sqrt(exome syn count), and the second-order effect of
+// that is swamped by Poisson discreteness at de novo counts. The scale-free conditional
+// binomial is a companion for a different reason: it needs neither N nor ê.
 const MIN_SYN_FOR_EHAT = 10
 
 // Autosomes 1..22 (chr already normalised to bare '1'…'22','X','Y' in the bundle).
@@ -377,15 +381,29 @@ function computeModelEnrichment(variants, opts) {
     // be fitted, and that fallback is flagged so the tab can withhold its ✓ marks.
     const eApplied = meta.calibration.eHatUsable ? eHat : 1
     meta.eApplied = eApplied
+    // Exome-wide model inputs, published so the sheet can derive statements from the DATA
+    // rather than restate constants that quietly rot when the rate bundle is rebuilt.
+    meta.rateGenes = (categoryMu && categoryMu.nGenes) || 0
+    meta.totalP = {nonSplice: total.nonSplice || 0, mis: total.mis || 0, syn: total.syn || 0}
 
     // --- per category × coding tier: k, λ = 2N·Σμ, p ---
     const sections = (dimensions || []).map(d => {
         const dimMu = catMu[d.id] || {}
         // observed k per term per class, from the used variants that carry the term
         const obs = {}   // term -> {nonSplice, mis, probands:Set, genes:Set}  (syn excluded — it is the calibrator)
+        // A category's OWN synonymous count. Not a discovery quantity: it is the
+        // conditioning statistic of the scale-free test below, which asks whether a
+        // category is skewed toward damage RELATIVE to its own synonymous variants.
+        // Kept in a separate map on purpose — folding it into `obs` would add categories
+        // hit only by synonymous variants to the group set, which are unrejectable by
+        // construction (k_disc = 0) and would only pad the sheet.
+        const synObs = {}
         for (const u of used) {
-            if (u.cls === 'syn') continue            // synonymous FITS ê; testing it would be circular (its ratio is 1 by construction)
             const tlist = (u.terms && u.terms[d.id]) || []
+            if (u.cls === 'syn') {                   // synonymous FITS ê; testing it directly would be circular (its ratio is 1 by construction)
+                for (const term of tlist) synObs[term] = (synObs[term] || 0) + 1
+                continue
+            }
             for (const term of tlist) {
                 const o = obs[term] || (obs[term] = {nonSplice: 0, mis: 0, probands: new Set(), genes: new Set()})
                 o[u.cls]++; o.probands.add(u.sample); o.genes.add(u.gene)
@@ -397,6 +415,7 @@ function computeModelEnrichment(variants, opts) {
             const o = obs[term]
             const muT = dimMu[term] || {nonSplice: 0, mis: 0, syn: 0}
             const cells = {}
+            const kSyn = synObs[term] || 0
             for (const tier of CODING_TIERS) {
                 const k = tier.classes.reduce((s, c) => s + (o[c] || 0), 0)
                 const sumMu = tier.classes.reduce((s, c) => s + (muT[c] || 0), 0)
@@ -408,7 +427,32 @@ function computeModelEnrichment(variants, opts) {
                 // Gating on k>0 would let the observed data define the family and push the
                 // real FDR far above nominal (see gene-analysis.js's BH note).
                 const p = lambda != null ? poissonUpperTail(k, lambda) : null
-                cells[tier.key] = {k, lambda, catMu: sumMu, eApplied, p, q: null}
+
+                // ---- the SCALE-FREE companion: conditional exact binomial -------------
+                // Condition on this category's own total T = k_disc + k_syn. Under the null
+                // the classes are independent Poissons, so
+                //     k_disc | T  ~  Binomial(T, θ),   θ = λ_disc / (λ_disc + λ_syn)
+                // and since λ_c = 2·N·Σp_c·ê, the 2·N and the ê CANCEL IDENTICALLY:
+                //     θ = Σp_disc / (Σp_disc + Σp_syn)
+                // — a pure property of the rate table. So this test needs NO trio count, NO
+                // calibration, and is immune to the absolute rate scale (~16% unsettled
+                // between published tables). It is exactly the test to read when N is
+                // provisional or ê could not be fitted, which is when the Poisson's inputs
+                // are least trustworthy.
+                //
+                // It does NOT escape everything: if detection efficiency differs BY CLASS
+                // (synonymous sites are CpG-rich and coverage tracks GC), the observed ratio
+                // is skewed and this test inherits that bias exactly as ê does. It removes
+                // the class-INDEPENDENT part of ascertainment, not the class-dependent part.
+                //
+                // T=0 ⇒ p=1 exactly (X=0 with certainty), not "no test": it is unrejectable
+                // but it is still a question asked, so it belongs in the family.
+                const sumSyn = muT.syn || 0
+                const theta = (sumMu + sumSyn) > 0 ? sumMu / (sumMu + sumSyn) : null
+                const T = k + kSyn
+                const pCond = theta == null ? null : (T > 0 ? binomUpperTail(k, T, theta) : 1)
+                cells[tier.key] = {k, kSyn, T, lambda, catMu: sumMu, catMuSyn: sumSyn, theta,
+                    eApplied, p, q: null, pCond, qCond: null}
             }
             allGroups.push({term, cells, kTop: cells[TOP].k, probands: o.probands.size,
                 genes: [...o.genes].sort(), refK: cells[TOP].k})
@@ -434,12 +478,29 @@ function computeModelEnrichment(variants, opts) {
         }
         const m = Math.max(mFam, tests.filter(c => c.p != null).length)
         benjaminiHochberg(tests.map(c => c.p), m).forEach((q, i) => { tests[i].q = q })
+
+        // The scale-free test gets its OWN BH family. It is a different question over the
+        // same a-priori grid, so it must not share the Poisson's correction. Its family
+        // needs no N: θ is defined wherever the rate table gives the category both a
+        // discovery and a synonymous target — which is exactly why this test survives a
+        // cohort with no trio count at all.
+        let mCond = 0
+        for (const tier of CODING_TIERS) {
+            for (const term of Object.keys(dimMu)) {
+                const t = dimMu[term] || {}
+                const sumMu = tier.classes.reduce((s, c) => s + (t[c] || 0), 0)
+                if (sumMu > 0 && (t.syn || 0) > 0) mCond++
+            }
+        }
+        const mC = Math.max(mCond, tests.filter(c => c.pCond != null).length)
+        benjaminiHochberg(tests.map(c => c.pCond), mC).forEach((q, i) => { tests[i].qCond = q })
+
         // DISPLAY filter, applied after the correction (q's above are already final).
         const groups = allGroups.filter(g => g.kTop >= minCount)
         // rank by strongest (smallest) top-tier p, then k, then term
         const pTop = g => (g.cells[TOP].p == null ? 1 : g.cells[TOP].p)
         groups.sort((a, b) => pTop(a) - pTop(b) || b.kTop - a.kTop || a.term.localeCompare(b.term))
-        return {id: d.id, label: d.label, groups, muSource: !!catMu[d.id], m, nCategories: allGroups.length}
+        return {id: d.id, label: d.label, groups, muSource: !!catMu[d.id], m, mCond: mC, nCategories: allGroups.length}
     })
 
     // --- per-gene enrichment: gene × class, λ = 2·N·μ (Stage 2) ---

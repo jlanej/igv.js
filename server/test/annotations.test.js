@@ -741,6 +741,43 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(t2.cells.HIGH_MOD.q).to.be.closeTo(t2.cells.HIGH_MOD.p * 4, 1e-9)   // rank 1 of m=4
     })
 
+    it('scale-free conditional binomial: 2·N and ê CANCEL — the whole point of it', function () {
+        // θ = Σp_disc/(Σp_disc+Σp_syn) contains neither N nor ê, so the same counts must
+        // give the SAME p at any cohort size and any calibration. If this ever fails, the
+        // test has stopped being scale-free and its reason for existing is gone.
+        const mk = (N) => computeModelEnrichment([
+            V({gene: 'G1', impact: 'HIGH', s: 'P1'}), V({gene: 'G1', impact: 'HIGH', s: 'P2'}),
+            V({gene: 'G2', impact: 'LOW', chrom: '2', s: 'P3'})            // a synonymous, to make T > k
+        ], Object.assign(opts(), {N}))
+        const at = (res) => res.perCategory.sections[0].groups.find(g => g.term === 'T').cells.HIGH
+        const a = at(mk(100)), b = at(mk(9999))
+        expect(a.pCond, 'pCond is identical across N').to.equal(b.pCond)
+        expect(a.theta).to.equal(b.theta)
+        expect(a.p, 'the Poisson p, by contrast, moves with N').to.not.equal(b.p)
+        // and it is the exact conditional binomial on the published inputs
+        expect(a.k).to.equal(2); expect(a.kSyn).to.equal(1); expect(a.T).to.equal(3)
+        expect(a.theta).to.be.closeTo(3e-6 / (3e-6 + 5e-6), 1e-15)   // Σp_ns(T)=3e-6, Σp_syn(T)=5e-6
+        expect(a.pCond).to.be.closeTo(binomUpperTail(2, 3, a.theta), 1e-15)
+        expect(a.qCond, 'the scale-free test gets its own BH q').to.not.be.null
+    })
+
+    it('scale-free test has its OWN BH family, separate from the Poisson', function () {
+        const res = computeModelEnrichment([V({gene: 'G1', impact: 'HIGH', s: 'P1'})], opts())
+        const sec = res.perCategory.sections[0]
+        expect(sec.m, 'Poisson family').to.be.greaterThan(0)
+        expect(sec.mCond, 'scale-free family (needs a syn target too)').to.be.greaterThan(0)
+    })
+
+    it('T=0 ⇒ pCond = 1 exactly — unrejectable, but still a question asked', function () {
+        // A category hit only at a tier it has no variants for. p=1 is the exact conditional
+        // answer (X=0 with certainty); it must not be null, or the family would shrink.
+        const res = computeModelEnrichment([V({gene: 'G2', impact: 'MODERATE', chrom: '2', s: 'P1'})], opts())
+        const cells = res.perCategory.sections[0].groups.find(g => g.term === 'T').cells
+        expect(cells.HIGH.k, 'no nonsense variants at the HIGH tier').to.equal(0)
+        expect(cells.HIGH.T, 'and no synonymous either ⇒ T=0').to.equal(0)
+        expect(cells.HIGH.pCond, 'T=0 ⇒ exact p=1').to.equal(1)
+    })
+
     it('synonymous calibration control is computed genome-wide (obs ÷ 2N·Σsyn.μ)', function () {
         const variants = [
             V({gene: 'G3', impact: 'LOW', chrom: '3', s: 'P1'}),   // syn de novo (G3 has syn.mu, no fam term)
