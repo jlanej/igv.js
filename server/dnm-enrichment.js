@@ -126,21 +126,37 @@ const CONSEQUENCE_CLASS = {
     // and every other splice_* term (region, polypyrimidine tract, 5th base) is an
     // INTRONIC modifier, not an essential splice-site SNV.
 }
-// FALLBACK classifier, used only when there is no Consequence column: VEP IMPACT
-// severity. This is an approximation and a KNOWN source of error — VEP LOW is NOT
+// FALLBACK classifier, used ONLY when the data has no Consequence COLUMN AT ALL: VEP
+// IMPACT severity. This is an approximation and a KNOWN source of error — VEP LOW is NOT
 // synonymous. Measured on a real cohort, 34% of LOW rows were splice_region /
 // splice_polypyrimidine_tract / splice_donor_5th_base / intronic, none of which are
-// synonymous. That matters more than it looks: the synonymous class is the CALIBRATOR,
-// so contaminating it inflates ê and rescales every discovery λ.
+// synonymous. That matters more than it looks: the synonymous class is the model-fit
+// DIAGNOSTIC, so contaminating it corrupts the one honest QC readout on the tab.
 const IMPACT_CLASS = {HIGH: 'nonSplice', MODERATE: 'mis', LOW: 'syn'}
 
 /**
- * Classify one variant into a rate class, preferring molecular consequence.
+ * Classify one variant into a rate class.
+ *
+ * The fallback is chosen PER COLUMN, never per row. If the data HAS a Consequence column,
+ * a blank cell in it means "this variant has no molecular consequence annotation" — it is
+ * excluded and counted, NOT quietly re-classified by IMPACT severity. Mixing the two
+ * classifiers row-by-row is how a blank LOW row would enter the synonymous class it does
+ * not belong to (measured: 30 such rows moved the synonymous diagnostic from 0.57 to
+ * 1.00), and a blank HIGH row would enter the discovery numerator on the strength of a
+ * severity label alone.
+ *
+ * @param {string|null} consequence  the row's Consequence cell (may be blank)
+ * @param {string|null} impact       the row's IMPACT cell
+ * @param {boolean} colPresent       does the DATA have a Consequence column at all?
  * @returns {{cls:string|null, via:'consequence'|'impact'|null, term:string|null}}
  */
-function classifyConsequence(consequence, impact) {
-    const raw = String(consequence || '').trim()
-    if (raw) {
+function classifyConsequence(consequence, impact, colPresent) {
+    // Default true keeps the safer branch when a caller omits the flag: prefer the
+    // molecular consequence and exclude blanks, rather than silently guessing from severity.
+    const hasCol = colPresent !== false
+    if (hasCol) {
+        const raw = String(consequence || '').trim()
+        if (!raw) return {cls: null, via: 'consequence', term: '(blank Consequence cell)'}
         // VEP orders the &-separated list most-severe-first; honour that order and take
         // the first term we model, so `splice_donor_variant&intron_variant` is a splice
         // SNV, not an intron variant.
@@ -304,6 +320,10 @@ function computeModelEnrichment(variants, opts) {
     const meta = {model: model.id, N: N || 0, nReliable: !!nReliable,
         nPass: 0, nPassDeNovo: 0, exclIndel: 0, exclXY: 0, exclNonCoding: 0, exclNoMu: 0, exclNoClassMu: 0,
         nUsed: 0, byClass: {nonSplice: 0, mis: 0, syn: 0},
+        // consequenceColPresent distinguishes "no column" (IMPACT fallback, an approximation)
+        // from "blank cells in a column that exists" (excluded) — the tab must not print the
+        // former's warning when the latter is what happened.
+        consequenceColPresent: !!consequenceCol,
         classifiedVia: {consequence: 0, impact: 0}, unmodelledTerms: {}}
     const catMu = (categoryMu && categoryMu.byDim) || {}
     for (const v of variants) {
@@ -315,7 +335,7 @@ function computeModelEnrichment(variants, opts) {
         const chr = String(v[chromCol] || '').replace(/^chr/i, '').toUpperCase()
         if (!isAutosome(chr)) { meta.exclXY++; continue }
         // Molecular consequence first; IMPACT only when the data has no Consequence column.
-        const {cls, via, term} = classifyConsequence(consequenceCol ? v[consequenceCol] : null, v[impactCol])
+        const {cls, via, term} = classifyConsequence(consequenceCol ? v[consequenceCol] : null, v[impactCol], !!consequenceCol)
         if (!cls) {
             meta.exclNonCoding++
             // Record WHAT was excluded: "34% of LOW is not synonymous" is only knowable

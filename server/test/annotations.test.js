@@ -742,6 +742,36 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(t2.cells.HIGH_MOD.q).to.be.closeTo(t2.cells.HIGH_MOD.p * 4, 1e-9)   // rank 1 of m=4
     })
 
+    it('IMPACT fallback is chosen per-COLUMN, never per-row', function () {
+        // The bug this pins: guarding on the CELL value meant a blank Consequence cell fell
+        // back to IMPACT severity even though the column existed — silently mixing two
+        // classifiers. Measured, 30 blank LOW rows moved the synonymous diagnostic from
+        // 0.57 to 1.00, and blank HIGH rows entered the discovery numerator on a severity
+        // label alone. A blank cell in a column that EXISTS means "not annotated" ⇒ exclude.
+        const {classifyConsequence} = require('../dnm-enrichment')
+        expect(classifyConsequence('', 'LOW', true).cls, 'blank cell + column ⇒ excluded').to.equal(null)
+        expect(classifyConsequence('', 'LOW', true).term).to.equal('(blank Consequence cell)')
+        expect(classifyConsequence('', 'HIGH', true).cls, 'blank HIGH cannot enter the numerator').to.equal(null)
+        expect(classifyConsequence(null, 'LOW', false).cls, 'NO column ⇒ fallback still works').to.equal('syn')
+        expect(classifyConsequence('', 'LOW').cls, 'omitted flag ⇒ the SAFE branch').to.equal(null)
+
+        // end-to-end: 30 blank LOW rows must not become 30 synonymous
+        const blanks = computeModelEnrichment(
+            Array.from({length: 30}, (_, i) => V({gene: 'G1', Consequence: '', impact: 'LOW', s: 'P' + i})),
+            Object.assign(opts(), {consequenceCol: 'Consequence'}))
+        expect(blanks.meta.byClass.syn, 'blank cells are not synonymous').to.equal(0)
+        expect(blanks.meta.exclNonCoding).to.equal(30)
+        expect(blanks.meta.unmodelledTerms['(blank Consequence cell)']).to.equal(30)
+        expect(blanks.meta.consequenceColPresent, 'the tab must not claim "no column"').to.equal(true)
+
+        // …and with NO column at all, the fallback still classifies them.
+        const noCol = computeModelEnrichment(
+            Array.from({length: 30}, (_, i) => V({gene: 'G1', impact: 'LOW', s: 'P' + i})), opts())
+        expect(noCol.meta.byClass.syn, 'no column ⇒ IMPACT fallback').to.equal(30)
+        expect(noCol.meta.consequenceColPresent).to.equal(false)
+        expect(noCol.meta.classifiedVia.impact).to.equal(30)
+    })
+
     it('scale-free conditional binomial: N cancels out of θ — its reason for existing', function () {
         // θ = Σp_disc/(Σp_disc+Σp_syn) contains no N, so the same counts must give the SAME
         // p at any cohort size. If this fails the test is no longer scale-free.
