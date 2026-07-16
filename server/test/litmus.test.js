@@ -46,8 +46,12 @@ describe('litmus: bundled data loads with expected magnitudes', function () {
         expect(cvB.size, 'ClinVar').to.be.greaterThan(25000)    // ~31k
         expect(gcB.size, 'GenCC').to.be.greaterThan(5000)       // ~6.1k
     })
-    it('gnomAD bundle carries per-gene mutation rates (μ) in a sane magnitude band', function () {
-        // Guards the fnum rounding regression (μ≈1e-6 must NOT collapse to 0) and the μ merge.
+    it('gnomAD bundle carries its per-gene mutability COVARIATE (μ) in a sane magnitude band', function () {
+        // μ is NOT a de novo rate — it is a mutability covariate identified only up to a
+        // proportionality constant (see the rate-bundle litmus above, where it fails the
+        // published scale by ~3.9x). It is kept as an informational column, and these
+        // assertions guard the fnum rounding regression (μ≈1e-6 must NOT collapse to 0)
+        // and the μ merge — not any claim that μ can carry λ.
         const tsc2 = gnB.get('TSC2')
         expect(tsc2, 'TSC2 in gnomAD bundle').to.exist
         expect(tsc2.muLof, 'TSC2 lof.mu').to.be.within(1e-8, 1e-4)

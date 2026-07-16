@@ -3876,7 +3876,7 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(pCell.formula).to.match(/^1-POISSON\(.*TRUE\)$/)          // live, reproducible
         expect(pCell.result).to.be.closeTo(poissonUpperTail(kCell, lamCell.result), 1e-12)
 
-        // per-gene tab: same test at gene level (TSC2 LoF), live POISSON reproduces the engine
+        // per-gene tab: same test at gene level (TSC2 nonsense), live POISSON reproduces the engine
         const {buildDnmRatePerGeneTab} = require('../server')
         const wb2 = new ExcelJS.Workbook()
         buildDnmRatePerGeneTab(wb2, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
@@ -3884,10 +3884,10 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(pgws, 'per-gene tab created').to.not.be.undefined
         const phdr = []; let tscRow = null
         pgws.eachRow(r => { const f = r.getCell(1).value; if (f === 'Gene') r.eachCell(c => phdr.push(String(c.value))); if (/^TSC2/.test(String(f))) tscRow = r })
-        expect(phdr).to.deep.equal(['Gene', 'k (de novo SNVs)', 'μ', 'λ = 2·N·μ', 'P(X≥k)', 'q'])
+        expect(phdr).to.deep.equal(['Gene', 'k (de novo SNVs)', 'p (rate)', 'λ = 2·N·p·ê', 'P(X≥k)', 'q'])
         expect(tscRow, 'TSC2 row').to.not.be.null
         const pgP = tscRow.getCell(phdr.indexOf('P(X≥k)') + 1).value
-        const pgLam = tscRow.getCell(phdr.indexOf('λ = 2·N·μ') + 1).value
+        const pgLam = tscRow.getCell(phdr.indexOf('λ = 2·N·p·ê') + 1).value
         expect(pgP.formula).to.match(/^1-POISSON\(.*TRUE\)$/)
         expect(pgP.result).to.be.closeTo(poissonUpperTail(tscRow.getCell(2).value, pgLam.result), 1e-12)
     })
@@ -3923,19 +3923,45 @@ describe('Gene Summary impact counts and annotations', function () {
         expect(String(dataRow.getCell(hdr.indexOf('HIGH+MOD') + 1).value)).to.equal('3')
     })
 
-    it('Test B is suppressed on a GRCh37/hg19 export (gnomAD μ is GRCh38-only)', async function () {
+    it('Test B RUNS on a GRCh37/hg19 export — the rate table is build-independent', async function () {
+        // This REVERSES the old behaviour, and the reason is that the old reason is gone.
+        // Test B used to be suppressed here because λ came from gnomAD's μ, which is
+        // GRCh38-only. λ now comes from a per-gene-symbol rate table (Samocha 2014 via
+        // DeNovoWEST) that carries no coordinates at all — and if anything is GRCh37-native,
+        // since DeNovoWEST's rates come from the DDD study. Suppressing on hg19 would now
+        // be withholding a valid test for a reason that no longer exists.
         this.timeout(10000)
         const res = await request(app).post('/api/export/xlsx')
             .send({variantIds: [0, 1, 2, 3, 4], exportConfig: {genomeBuild: 'hg19',
                 geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false, gnomadConstraint: {enabled: false}, clinvar: {enabled: false}},
-                geneAnalysis: {enabled: true, domain: false, dnmRateTest: true}}})   // opt in, else hg19 isn't what suppresses it
+                geneAnalysis: {enabled: true, domain: false, dnmRateTest: true}}})
             .buffer(true).parse(binaryParser).expect(200)
         const wb = new ExcelJS.Workbook()
         await wb.xlsx.load(res.body)
-        expect(wb.worksheets.map(w => w.name)).to.not.include.members(['DNM Rate (gene-set)', 'DNM Rate (per-gene)'])
+        expect(wb.worksheets.map(w => w.name)).to.include.members(['DNM Rate (gene-set)', 'DNM Rate (per-gene)'])
     })
 
-    it('xlsx emits the DNM Rate tab when explicitly opted in (inheritance column + gnomAD μ)', async function () {
+    it('...but the CONSTRAINT dimension gets no Σp without the matching gnomAD build', function () {
+        // The one genuinely build-sensitive piece. getBundle() is v4.1/GRCh38, while a GRCh37
+        // export takes its per-gene constraint TERMS from the live v2.1.1 API. Feeding the
+        // v4.1 bundle to categoryRateSums would count a gene as LOEUF-constrained in Σp per
+        // v4.1 while k counted it per v2.1.1 — numerator and denominator over different gene
+        // sets. server.js therefore passes gnomad:null on GRCh37; this pins what that does.
+        const {categoryRateSums} = require('../dnm-enrichment')
+        const dnmRates = require('../dnm-rates')
+        const gnomad = require('../providers/gnomad-provider')
+        const rates = dnmRates.getRates()
+        const withBundle = categoryRateSums(rates, {gnomad: gnomad.getBundle()}, {})
+        const without = categoryRateSums(rates, {gnomad: null}, {})
+        expect(withBundle.byDim.constraint, 'GRCh38: constraint IS tested').to.exist
+        expect(without.byDim.constraint, 'GRCh37: constraint has no Σp ⇒ not tested').to.not.exist
+        // The exome-wide target is unaffected — it comes from the rate table, not gnomAD —
+        // so ê is still fitted and every other dimension still works on GRCh37.
+        expect(without.total.syn).to.be.closeTo(withBundle.total.syn, 1e-12)
+        expect(without.nGenes).to.equal(withBundle.nGenes)
+    })
+
+    it('xlsx emits the DNM Rate tab when explicitly opted in (inheritance column + rate bundle)', async function () {
         this.timeout(10000)
         const exportConfig = {geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false},
             geneAnalysis: {enabled: true, domain: false, dnmRateTest: true}}

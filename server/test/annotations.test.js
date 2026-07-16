@@ -670,7 +670,7 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         dimensions: [{id: 'fam', label: 'Fam'}], muByGene: rates,
         categoryMu: categoryRateSums(rates, {gnomad}, {fam}), N: 100, nReliable: true, minCount: 1}, extra)
 
-    it('gates to pass de novo SNV autosomal coding, and λ = 2·N·μ', function () {
+    it('gates to pass de novo SNV autosomal coding, and λ = 2·N·Σp·ê', function () {
         const variants = [
             V({gene: 'G1', impact: 'HIGH', s: 'P1'}),                                   // used lof
             V({gene: 'G2', impact: 'MODERATE', chrom: '2', ref: 'C', alt: 'T', s: 'P2'}), // used mis
@@ -686,13 +686,18 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(m.exclXY).to.equal(1)
         expect(m.exclNonCoding).to.equal(1)
         expect(m.nUsed).to.equal(2)
-        expect(m.byClass).to.deep.equal({lof: 1, mis: 1, syn: 0})
+        expect(m.byClass).to.deep.equal({nonSplice: 1, mis: 1, syn: 0})
+        // No synonymous variants here ⇒ ê cannot be fitted ⇒ λ falls back to the raw 2·N·Σp
+        // (scale 1) and the tab withholds ✓. Pin it, so the λ assertions below are read
+        // against a KNOWN scale rather than an accidental one.
+        expect(m.calibration.eHatUsable, 'no syn ⇒ ê unfitted').to.equal(false)
+        expect(m.eApplied, 'unfitted ê ⇒ scale 1').to.equal(1)
         const T = res.perCategory.sections.find(s => s.id === 'fam').groups.find(g => g.term === 'T')
         expect(res.perCategory.tiers.map(t => t.key)).to.deep.equal(['HIGH', 'HIGH_MOD'])   // no synonymous tier
         expect(T.cells.HIGH.k).to.equal(1)
-        expect(T.cells.HIGH.lambda).to.be.closeTo(2 * 100 * 3e-6, 1e-12)     // 2·N·μ_lof(T)
+        expect(T.cells.HIGH.lambda).to.be.closeTo(2 * 100 * 3e-6 * 1, 1e-12)     // 2·N·Σp_nonSplice(T)·ê
         expect(T.cells.HIGH.p).to.be.closeTo(poissonUpperTail(1, 2 * 100 * 3e-6), 1e-12)
-        expect(T.cells.HIGH_MOD.k).to.equal(2)                               // lof + mis
+        expect(T.cells.HIGH_MOD.k).to.equal(2)                               // nonsense+splice + mis
         expect(T.cells.HIGH.q).to.be.a('number')                            // BH applied
     })
 
@@ -775,7 +780,7 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         ]
         const pg = computeModelEnrichment(variants, opts()).perGene
         const row = (g, t) => pg.rows.find(r => r.gene === g && r.track === t)
-        // G1 LoF: k=1, μ=lof.mu, λ=2·N·μ
+        // G1 nonsense: k=1, p=pNonSplice, λ=2·N·p·ê
         expect(row('G1', 'lof').k).to.equal(1)
         expect(row('G1', 'lof').lambda).to.be.closeTo(2 * 100 * 1e-6, 1e-12)
         expect(row('G1', 'lof').p).to.be.closeTo(poissonUpperTail(1, 2 * 100 * 1e-6), 1e-12)

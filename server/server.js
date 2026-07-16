@@ -1859,6 +1859,15 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
     banner(`Observed: ${meta.nUsed} curation-pass de novo SNVs (${meta.byClass.nonSplice} nonsense+splice, ${meta.byClass.mis} missense, ${meta.byClass.syn} synonymous) across ${meta.nDistinctProbands} probands${meta.classifiedVia && meta.classifiedVia.impact > 0 ? `. CLASSIFIED BY IMPACT SEVERITY for ${meta.classifiedVia.impact} of them (no VEP Consequence column) — an approximation: VEP LOW is NOT synonymous, and synonymous is what fits ê` : (meta.classifiedVia && meta.classifiedVia.consequence > 0 ? ', classified by VEP molecular consequence' : '')}. Excluded from Test B (still analysed by Test A): ${meta.exclIndel} indels, ${meta.exclXY} chrX/Y, ${meta.exclNonCoding} with no modelled consequence, ${meta.exclNoMu} genes with no rate (or non-autosomal), ${meta.exclNoClassMu} with no rate for the variant's own class. SNV-only and autosomal-only are REQUIRED: the rates are SNV-only, and 2·N counts two parental transmissions, which assumes two copies.`,
         {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    // The excluded consequences, named. This is not decoration: it is how a reader sees
+    // WHAT the model declined to score — e.g. that splice_region/polypyrimidine calls are
+    // not synonymous, which is exactly the contamination that would corrupt ê if these
+    // were classified by IMPACT severity instead.
+    const unmodelled = Object.entries(meta.unmodelledTerms || {}).sort((a, b) => b[1] - a[1])
+    if (unmodelled.length) {
+        banner(`Consequences seen but NOT modelled (no SNV rate term, so they enter neither k nor λ): ${unmodelled.slice(0, 12).map(([t, n]) => `${t} ×${n}`).join(', ')}${unmodelled.length > 12 ? `, … (+${unmodelled.length - 12} more terms)` : ''}. Note what is in this list: every splice_* term other than donor/acceptor (region, polypyrimidine tract, 5th base) is an INTRONIC modifier, not an essential-splice SNV, and none of them are synonymous — which is why classes are taken from the molecular consequence rather than from VEP's IMPACT severity.`,
+            {italic: true, size: 10, color: {argb: 'FF6B7D8D'}})
+    }
     const cal = meta.calibration || {}
     banner(`ê = ${cal.eHat != null ? cal.eHat.toFixed(3) : '—'} — THE HEADLINE QC NUMBER. It is the scale fitted from this cohort's own synonymous de novo variants: ê = observed_syn ÷ (2·N·Σp_syn) = ${cal.syn ? cal.syn.obs : 0} ÷ ${cal.syn && cal.syn.exp != null ? cal.syn.exp.toFixed(1) : '—'}${cal.eHatRelSe != null ? ` (±${(100 * cal.eHatRelSe).toFixed(0)}% relative, from √${cal.syn ? cal.syn.obs : 0})` : ''}. Every discovery λ is scaled by it, so the model is FITTED to this cohort rather than asserted. READ IT AS: ê≈1 ⇒ this cohort's de novo yield matches the model; ê≈0.5 ⇒ roughly half the de novo variants were called (or the rate table runs ~2× high here) and λ is scaled to match. ê ABSORBS both the unsettled absolute rate scale (~16% between published tables) and this cohort's ascertainment.`,
         {bold: true, italic: true, size: 10, color: {argb: 'FF1F618D'}})
@@ -2480,25 +2489,34 @@ app.post('/api/export/xlsx', async (req, res) => {
 
                 // --- Test B: de novo mutation-rate enrichment (separate, gated) ---
                 // A DE-NOVO-ONLY test (λ = 2·N·Σp·ê, Samocha-2014 rates). Suppressed when de novo
-                // status is unknown (no `inheritance` column) or μ is unavailable
-                // (GRCh37 / bundle lacks mutation rates). Isolated try — never affects Test A.
+                // status is unknown (no `inheritance` column) or the rate bundle is absent.
+                // Isolated try — never affects Test A.
                 if (gaCfg.dnmRateTest !== false) {
                     try {
                         const inheritanceCol = headerColumns.includes('inheritance') ? 'inheritance' : null
                         // Molecular consequence is STRONGLY preferred over IMPACT severity:
                         // VEP LOW is not synonymous, and synonymous is what fits ê.
                         const consequenceCol = ['Consequence', 'consequence', 'CONSEQUENCE'].find(c => headerColumns.includes(c)) || null
-                        // The rate table is build-independent (per-gene symbols + the Samocha
-                        // 2014 model), so unlike the gnomAD constraint tail it needs no
-                        // GRCh38 gate — the variants' own chrom/ref/alt carry the coordinates.
+                        // The rate table is keyed by gene symbol and carries no coordinates, so
+                        // it needs no GRCh38 gate — Test B runs on GRCh37 too. (If anything the
+                        // rates are GRCh37-native: DeNovoWEST's table comes from the DDD study.)
                         const rates = dnmRates.getRates()
+                        // The CONSTRAINT dimension is the one exception, and it is gated exactly
+                        // as Test A gates it: getBundle() is v4.1/GRCh38, but on a GRCh37 export
+                        // the per-gene constraint TERMS come from the live v2.1.1 API. Passing
+                        // the v4.1 bundle here would count a gene as LOEUF-constrained in Σp per
+                        // v4.1 while k counted it per v2.1.1 — numerator and denominator over
+                        // different gene sets, the drift this design exists to prevent. Null ⇒
+                        // the constraint dimension simply has no Σp on GRCh37 and is not tested;
+                        // every other dimension still is.
+                        const gnB = gnomadProvider.refGenome(exportCfg) === 'GRCh38' ? gnomadProvider.getBundle() : null
                         if (!inheritanceCol) {
                             exportErrors.push({section: 'DNM Rate Enrichment', error: 'skipped — no `inheritance` column, so de novo status is unknown (the mutation-rate model applies only to de novo variants)'})
                         } else if (!rates.size) {
                             exportErrors.push({section: 'DNM Rate Enrichment', error: 'skipped — per-gene de novo rates unavailable (data/annotations/dnm_rates.json.gz absent; build with `node scripts/build-annotation-data.js dnmRates`)'})
                         } else {
                             const nReliable = (sampleQcTrios.length || 0) > 0
-                            const categoryMu = categoryRateSums(rates, {gnomad: gnomadProvider.getBundle(), clinvar: clinvarProvider.getGenes(), gencc: genccProvider.getGenes()}, gsLibs)
+                            const categoryMu = categoryRateSums(rates, {gnomad: gnB, clinvar: clinvarProvider.getGenes(), gencc: genccProvider.getGenes()}, gsLibs)
                             const dnm = computeModelEnrichment(filtered, {
                                 model: DE_NOVO, geneCol, impactCol: gaImpactCol, consequenceCol, statusCol: 'curation_status',
                                 sampleCol: xlsSampleCol, chromCol: 'chrom', refCol: 'ref', altCol: 'alt', inheritanceCol,
