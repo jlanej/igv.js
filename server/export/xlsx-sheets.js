@@ -23,12 +23,14 @@
 
 'use strict'
 
-const path = require('path')
-const {computeConvergence, sourceUniverseStats, geneTermsFor, benjaminiHochberg,
-    binomUpperTail, DIMENSIONS} = require('../gene-analysis')
-const {computeModelEnrichment, categoryRateSums, DE_NOVO} = require('../dnm-enrichment')
+// Only what this file actually uses. It RENDERS; it does not compute — so it needs the
+// engines' pure helpers (binomUpperTail, to show a live formula reproduces a printed p)
+// and the annotation sources it prints provenance for, and nothing else. If a require
+// for computeConvergence or computeModelEnrichment ever appears here, the boundary has
+// been crossed: the statistic belongs upstream.
+const {binomUpperTail} = require('../gene-analysis')
 const annotationRegistry = require('../annotation-registry')
-const geneSets = require('../gene-sets')
+const geneSets = require('../genesets')
 const gnomadProvider = require('../providers/gnomad-provider')
 const mitocarta = require('../mitocarta')
 

@@ -40,6 +40,39 @@ const gsLibs = {
 // its own gene universe (`genes`), which the engine gates that dimension's trials on.
 const SRC = sourceUniverseStats({gnomad: gnB, clinvar: cvB, gencc: gcB}, gsLibs)
 
+describe('module graph', function () {
+    // A require for a module that does not exist is not a subtle bug — it is a hard crash on
+    // startup, and it took down the whole suite once: `require('../gene-sets')` when the file
+    // is `genesets.js`. It survived local checks because the verification harness STUBBED any
+    // unknown module rather than failing, so an invented path looked fine right up until CI.
+    // Node resolves for real, so let it: walk every first-party source file and require it.
+    it('every server module require()s cleanly (no invented paths)', function () {
+        const fs = require('fs'), path = require('path')
+        const root = path.join(__dirname, '..')
+        const files = []
+        const walk = (dir) => {
+            for (const e of fs.readdirSync(dir, {withFileTypes: true})) {
+                if (e.name === 'node_modules' || e.name === 'test' || e.name === 'data' ||
+                    e.name === 'public' || e.name.startsWith('.')) continue
+                const full = path.join(dir, e.name)
+                if (e.isDirectory()) walk(full)
+                else if (e.name.endsWith('.js') && e.name !== 'server.js') files.push(full)
+            }
+        }
+        walk(root)
+        expect(files.length, 'found first-party modules to check').to.be.greaterThan(8)
+        const broken = []
+        for (const f of files) {
+            try { require(f) } catch (err) {
+                // Only a missing MODULE is a defect here. A module that throws for want of a
+                // bundle/network at load time is a different question, and not this test's.
+                if (err.code === 'MODULE_NOT_FOUND') broken.push(`${path.relative(root, f)}: ${err.message.split('\n')[0]}`)
+            }
+        }
+        expect(broken, `modules with an unresolvable require: ${broken.join(' | ')}`).to.deep.equal([])
+    })
+})
+
 describe('litmus: bundled data loads with expected magnitudes', function () {
     it('gnomAD / ClinVar / GenCC bundles are present and full', function () {
         expect(gnB.size, 'gnomAD').to.be.within(15000, 20000)   // ~17.5k
