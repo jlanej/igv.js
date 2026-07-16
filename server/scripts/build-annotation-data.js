@@ -166,6 +166,146 @@ async function buildGnomad() {
     process.stdout.write(`Wrote ${GNOMAD_OUT}\n  genes: ${Object.keys(genes).length}\n  size: ${(gz.length / 1024).toFixed(0)} KiB (gz)\n`)
 }
 
+// ---------------------------------------------------------------------------
+// Per-gene DE NOVO mutation rates (Test B's λ = 2·N·p).
+//
+// Source: DeNovoWEST's extended results table (Kaplanis & Samocha et al., Nature
+// 2020;586:757), which ships per-gene per-transmission de novo probabilities from the
+// Samocha et al. 2014 (Nat Genet 46:944) trinucleotide model. MIT-licensed, so unlike
+// denovolyzeR (GPL-3) it can be bundled.
+//
+// WHY NOT gnomAD's lof.mu/mis.mu/syn.mu — which we already bundle: they are NOT de novo
+// rates. gnomAD fits `expected = mu·slope + intercept` and refits the slope, so mu is
+// identified only up to a proportionality constant and its absolute scale is meaningless
+// (summing it predicts 0.276 coding de novo/trio against a published ~1.0–1.3). Its class
+// balance is also wrong for this purpose: lof.mu/syn.mu = 0.319, where the published
+// SNV-only value is 0.168 and the genetic code caps nonsense/synonymous near 0.11–0.18.
+// No scale constant can repair a class-balance error. (gnomAD's own exp_lof/exp_syn =
+// 0.187 IS sound — the per-class refit absorbs it — which localises the fault to the
+// per-gene mu aggregation, not the context model.) The mu columns stay in the constraint
+// bundle as a labelled mutability covariate; they are not used for λ.
+//
+// P_LOF IS A TRAP: DeNovoWEST's p_lof INCLUDES frameshift (p_lof/p_syn = 0.298 — as
+// broken as gnomAD's for our purpose). We count SNVs only, so the correct SNV-only
+// nonsense+essential-splice rate is the residual  p_all − p_syn − p_mis  (verified:
+// 0/19,587 negative; residual/p_syn = 0.161 global, 0.167 per-gene median).
+// ---------------------------------------------------------------------------
+const DNM_RATES_URL = 'https://raw.githubusercontent.com/HurlesGroupSanger/DeNovoWEST/master/input/extended_denovoWEST_results.tab'
+const DNM_RATES_OUT = path.join(OUT_DIR, 'dnm_rates.json.gz')
+
+async function buildDnmRates() {
+    process.stdout.write(`Fetching ${DNM_RATES_URL} (~8 MB) …\n`)
+    const resp = await fetch(DNM_RATES_URL)
+    if (!resp.ok) throw new Error(`DeNovoWEST HTTP ${resp.status}`)
+    const lines = (await resp.text()).split('\n')
+    const h = lines[0].split('\t')
+    const ix = (n) => { const i = h.indexOf(n); if (i < 0) throw new Error(`DeNovoWEST column "${n}" missing`); return i }
+    const cSym = ix('symbol'), cHgnc = ix('num_hgnc_id'), cChr = ix('chr')
+    const cAll = ix('p_all'), cSyn = ix('p_syn'), cMis = ix('p_mis')
+
+    const genes = {}
+    let nNa = 0, nNeg = 0, nRows = 0, nDup = 0
+    for (let i = 1; i < lines.length; i++) {
+        const c = lines[i].split('\t')
+        const sym = (c[cSym] || '').trim().toUpperCase()
+        if (!sym) continue
+        nRows++
+        const pAll = ffloat(c[cAll]), pSyn = ffloat(c[cSyn]), pMis = ffloat(c[cMis])
+        // 67 genes (MYC among them) carry no rates. Skip them EXPLICITLY and count them —
+        // silently dropping a gene removes it from λ while its variants may still be
+        // counted, which would deflate the expectation.
+        if (pAll == null || pSyn == null || pMis == null) { nNa++; continue }
+        const pNonSplice = pAll - pSyn - pMis          // SNV-only nonsense + essential splice
+        if (!(pNonSplice >= 0)) { nNeg++; continue }   // guard: never emit a negative rate
+        // The table carries 2 duplicate symbols (C2ORF15, C1ORF220 — separate loci sharing
+        // a name). Keep the FIRST deterministically and count it, rather than letting the
+        // last row silently win.
+        if (genes[sym]) { nDup++; continue }
+        genes[sym] = {
+            pSyn, pMis, pNonSplice,
+            chr: (c[cChr] || '').trim(),
+            hgnc: (c[cHgnc] || '').trim() || null
+        }
+    }
+    process.stdout.write(`  ${nRows} rows → ${Object.keys(genes).length} genes with rates (${nNa} no-rate, ${nNeg} negative-residual, ${nDup} duplicate-symbol rows skipped)\n`)
+
+    // --- modern-symbol resolution -------------------------------------------
+    // The table's symbols are 2020-vintage; our variant `gene` column is modern. Add
+    // aliases from the OFFICIAL HGNC set (never from a source's own annotation — the
+    // denovolyzeR table's HGNC columns are mis-annotated in 1.4% of rows, e.g. SRM's
+    // rates labelled SRMS, CHD5's labelled WRB). Every added alias is CHROMOSOME-VALIDATED
+    // against the gnomAD bundle; a mismatch is rejected rather than trusted.
+    let gnChr = {}
+    try {
+        const gn = JSON.parse(zlib.gunzipSync(fs.readFileSync(GNOMAD_OUT)).toString('utf-8'))
+        for (const [g, r] of Object.entries(gn.genes || {})) gnChr[g.toUpperCase()] = String(r.chr || '')
+    } catch (_) { process.stdout.write('  (gnomAD bundle absent — skipping chromosome validation)\n') }
+
+    process.stdout.write(`Fetching ${GS_HGNC_URL} (for symbol aliases) …\n`)
+    const hr = await fetch(GS_HGNC_URL)
+    if (!hr.ok) throw new Error(`HGNC HTTP ${hr.status}`)
+    const hl = (await hr.text()).split('\n')
+    const hh = hl[0].split('\t')
+    const hSym = hh.indexOf('symbol'), hPrev = hh.indexOf('prev_symbol'), hAlias = hh.indexOf('alias_symbol')
+    let nAlias = 0, nRejected = 0
+    for (let i = 1; i < hl.length; i++) {
+        const c = hl[i].split('\t')
+        const cur = (c[hSym] || '').trim().toUpperCase()
+        if (!cur || genes[cur]) continue                       // already keyed directly
+        const olds = []
+        for (const j of [hPrev, hAlias]) {
+            const v = (c[j] || '').trim().replace(/^"|"$/g, '')
+            if (v) for (const s of v.split('|')) { const t = s.trim().toUpperCase(); if (t) olds.push(t) }
+        }
+        const hit = olds.find(o => genes[o])
+        if (!hit) continue
+        const want = gnChr[cur]
+        if (want && genes[hit].chr && want !== genes[hit].chr) { nRejected++; continue }   // chromosome guard
+        genes[cur] = genes[hit]
+        nAlias++
+    }
+    process.stdout.write(`  + ${nAlias} modern symbols resolved via HGNC prev/alias (${nRejected} rejected by the chromosome guard)\n`)
+
+    // --- coverage report (a missing gene silently deflates λ) ---------------
+    const auto = (c) => /^(?:[1-9]|1\d|2[0-2])$/.test(String(c || ''))
+    const gnAuto = Object.keys(gnChr).filter(g => auto(gnChr[g]))
+    if (gnAuto.length) {
+        const hit = gnAuto.filter(g => genes[g]).length
+        process.stdout.write(`  JOIN: ${hit}/${gnAuto.length} (${(100 * hit / gnAuto.length).toFixed(2)}%) of autosomal MANE genes have a rate\n`)
+    }
+    let sSyn = 0, sMis = 0, sNs = 0
+    for (const [g, r] of Object.entries(genes)) {
+        if (!auto(r.chr)) continue
+        sSyn += r.pSyn; sMis += r.pMis; sNs += r.pNonSplice
+    }
+    process.stdout.write(`  autosomal Σp: syn=${sSyn.toFixed(6)} mis=${sMis.toFixed(6)} non+splice=${sNs.toFixed(6)}\n`)
+    process.stdout.write(`  sanity: (non+splice)/syn = ${(sNs / sSyn).toFixed(4)} (published 0.168; genetic-code cap ~0.11–0.18)\n`)
+    process.stdout.write(`  sanity: 2·Σ(syn+mis+non+splice) = ${(2 * (sSyn + sMis + sNs)).toFixed(3)} coding de novo/trio (published ~1.0–1.3)\n`)
+
+    const payload = {
+        meta: {
+            _source: 'DeNovoWEST extended results (HurlesGroupSanger/DeNovoWEST, input/extended_denovoWEST_results.tab)',
+            _model: 'Samocha et al. 2014, Nat Genet 46:944 — trinucleotide de novo mutation model',
+            _citation: 'Kaplanis & Samocha et al., Nature 2020;586:757 (DeNovoWEST); Samocha et al., Nat Genet 2014;46:944 (model)',
+            _license: 'MIT (DeNovoWEST repository)',
+            _url: 'https://github.com/HurlesGroupSanger/DeNovoWEST',
+            _fields: {
+                pSyn: 'p_syn — per-transmission synonymous de novo probability',
+                pMis: 'p_mis — per-transmission missense de novo probability',
+                pNonSplice: 'p_all − p_syn − p_mis — SNV-only nonsense + essential splice. NOT p_lof, which includes frameshift (p_lof/p_syn = 0.298 vs the correct 0.161).',
+                chr: 'chromosome', hgnc: 'num_hgnc_id'
+            },
+            _note: 'Rates carry NO depth adjustment; the server fits an empirical calibration (ê) from the cohort\'s own synonymous count. λ = 2·N·p·ê.',
+            _builtWith: 'build-annotation-data.js buildDnmRates',
+            geneCount: Object.keys(genes).length, noRateGenes: nNa, aliasResolved: nAlias, aliasRejected: nRejected
+        },
+        genes
+    }
+    fs.mkdirSync(OUT_DIR, {recursive: true})
+    fs.writeFileSync(DNM_RATES_OUT, zlib.gzipSync(Buffer.from(JSON.stringify(payload)), {level: 9}))
+    process.stdout.write(`Wrote ${DNM_RATES_OUT} (${(fs.statSync(DNM_RATES_OUT).size / 1024).toFixed(0)} KB)\n`)
+}
+
 const GENCC_URL = 'https://thegencc.org/download/action/submissions-export-tsv'
 const GENCC_OUT = path.join(OUT_DIR, 'gencc.json.gz')
 const GENCC_RANK = {Definitive: 6, Strong: 5, Moderate: 4, Limited: 3, Supportive: 2,
@@ -404,7 +544,9 @@ async function buildInterproDomain() {
 }
 
 // Named build steps — run all, or only those named on the CLI.
-const STEPS = {clinvar: buildClinvar, gnomad: buildGnomad, gencc: buildGencc, genesets: buildGeneSets, interpro: buildInterproDomain}
+// dnmRates runs AFTER gnomad: it chromosome-validates its symbol aliases against that bundle.
+const STEPS = {clinvar: buildClinvar, gnomad: buildGnomad, dnmRates: buildDnmRates, gencc: buildGencc,
+    genesets: buildGeneSets, interpro: buildInterproDomain}
 
 async function main() {
     try {
