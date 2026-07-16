@@ -66,18 +66,36 @@ const DEFAULT_EXPORT_CONFIG = {
         // Σp/(Σp+Σp_syn)), where 2·N and ê cancel identically), reported per tier and
         // carrying the ✓ when N is provisional or ê could not be fitted.
         //
-        // CORRECTION to what this comment previously claimed: I asserted the Poisson was
-        // "mildly anti-conservative" because ê's uncertainty is not propagated into P(X≥k),
-        // and named that as the blocker. That was never measured, and it is FALSE. Simulated
-        // under the null on the real rate bundle, the Poisson's rejection rate is at or below
-        // nominal at every cohort size tested (0.49–0.99× of α from N=220 to N=20,000, at
-        // both small and large category sizes). ê is unbiased and its residual noise is
-        // second-order against Poisson discreteness at de novo counts.
+        // STILL WITHHELD, and now for MEASURED reasons. Adversarial review (plus independent
+        // re-measurement) found the Poisson is ANTI-CONSERVATIVE exactly where it matters:
         //
-        // So no known defect blocks this. It stays false only pending an adversarial review
-        // of the rebuilt Test B and a look at real output — the same bar the rest of this
-        // workbook is held to, not a specific doubt.
-        dnmRateTest: false        // λ correct + scale-free companion shipped; awaiting review on real data
+        //   λ = 2·N·Σp·ê plugs the FITTED ê in as if it were a known constant. Substituting
+        //   ê = K_syn/(2·N·Σp_syn) gives λ̂ = K_syn · r, with r = Σp_disc / Σp_syn(exome).
+        //   So λ̂ carries the Poisson noise of K_syn, and the ignored variance is a fraction
+        //   r of the total — INDEPENDENT OF N and of ê. Measured null rejection at α=0.05:
+        //   r=0.02 → 0.63×, r=0.10 → 0.99×, r=0.30 → 1.4×, r=0.70 → 2.0×, r=1.5 → 3.0×
+        //   (identical at N=220 and N=1000; the oracle-λ control stays at 0.54–1.00×, which
+        //   isolates the fitted ê as the sole cause).
+        //   The five REAL categories with the largest r are the ones a clinician reads first:
+        //   ClinVar P/LP 0.94, LOEUF<0.6 0.72, GenCC AR 0.64, GenCC AD 0.56, pLI≥0.9 0.56
+        //   (all at the missense-inclusive tier) — i.e. ~2× too many false ✓ on the headline
+        //   rows, and their BH families (m=2/4/12) are far too small to dilute it.
+        //
+        // TWICE NOW I claimed this test was well calibrated after measuring only the low-r
+        // stratum (pNonSplice, r≈0.04, where the predicted inflation is ~1.04× — arithmetically
+        // undetectable) and then generalising along N. Any future calibration claim about this
+        // test must be measured on the HIGH-r stratum before it is written down, let alone
+        // printed in the workbook.
+        //
+        // Also open: class-dependent curation feeds straight into ê (the pass gate applies to
+        // the synonymous calibrator too, and this tool's own impact presets hide LOW from the
+        // common review filters, so the default workflow PRODUCES the skew); the per-gene tab's
+        // live λ formula omits ê; several Read Me rows still describe the retired gnomAD-μ model.
+        //
+        // The route to enabling: drive the ✓ from the exact conditional test (which needs no ê),
+        // delete the false calibration banner, fix the per-gene formula, and expose per-class
+        // curation counts. See the review for the full list.
+        dnmRateTest: false        // ⚠ Poisson ~2× anti-conservative on high-r categories — see above
     },
 
     // Per-gene impact counts on the Gene Summary tab (curation-derived, not
