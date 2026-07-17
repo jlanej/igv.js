@@ -227,17 +227,37 @@ function classifyConsequence(consequence, impact, colPresent) {
 // would be asking whether neutral variation is under selection — not a question worth a
 // column. It never enters a category's k / λ / ranking / ✓.
 const CODING_TIERS = [
-    {key: 'HIGH', label: 'LoF (nonsense+splice+frameshift)', classes: ['nonSplice', 'frameshift']},
+    {key: 'HIGH', label: 'LoF (nonsense+splice+frameshift)', labelSnvOnly: 'LoF (nonsense+splice, SNV only)',
+        classes: ['nonSplice', 'frameshift']},
     {key: 'HIGH_MOD', label: 'LoF+missense', classes: ['nonSplice', 'frameshift', 'mis']}
 ]
 // Per-gene tracks (Stage 2). Separate DISCOVERY families (BH per track across genes).
 // Synonymous is shown for transparency but carries no discovery q — it is the calibrator.
 const PER_GENE_TRACKS = [
-    {key: 'lof', label: 'LoF (nonsense+splice+frameshift)', classes: ['nonSplice', 'frameshift'], discovery: true},
+    {key: 'lof', label: 'LoF (nonsense+splice+frameshift)', labelSnvOnly: 'LoF (nonsense+splice, SNV only)',
+        classes: ['nonSplice', 'frameshift'], discovery: true},
     {key: 'mis', label: 'missense', classes: ['mis'], discovery: true},
     {key: 'protein_altering', label: 'protein-altering', classes: ['nonSplice', 'frameshift', 'mis'], discovery: true},
     {key: 'syn', label: 'synonymous (calibrator)', classes: ['syn'], discovery: false}
 ]
+
+// A tier/track's printed label must describe what was actually COUNTED, not what the class
+// list nominally contains. When the data has no Consequence column, frameshift is not
+// countable and its target is zeroed — so a header reading "+frameshift" is a false
+// statement in the one place a reader cannot skip. Resolve labels HERE, once, so the column
+// header, the Read Me dictionary and the banners cannot drift apart: they all read the label
+// off the same resolved object the engine returns.
+function resolveLabel(t, countFrameshift) {
+    if (!t.labelSnvOnly) return t.label            // label makes no frameshift claim either way
+    return countFrameshift ? t.label : t.labelSnvOnly
+}
+/** The tiers/tracks as PRINTED for this cohort: labels resolved against countFrameshift. */
+function resolvedTiers(countFrameshift) {
+    return CODING_TIERS.map(t => Object.assign({}, t, {label: resolveLabel(t, countFrameshift)}))
+}
+function resolvedTracks(countFrameshift) {
+    return PER_GENE_TRACKS.map(t => Object.assign({}, t, {label: resolveLabel(t, countFrameshift)}))
+}
 
 // ---- extensible genetic-model registry ----
 // Each descriptor: {id, label, nullType, gate(v, cols) -> bool}. computeModelEnrichment
@@ -815,12 +835,12 @@ function computeModelEnrichment(variants, opts) {
     }
     perGeneRows.sort((a, b) => (a.p == null ? 1 : a.p) - (b.p == null ? 1 : b.p) || b.k - a.k || a.gene.localeCompare(b.gene))
 
-    return {perCategory: {sections, tiers: CODING_TIERS},
-        perGene: {tracks: PER_GENE_TRACKS, rows: perGeneRows, familySizes, shareFamilySizes, observedRows}, meta}
+    return {perCategory: {sections, tiers: resolvedTiers(countFrameshift)},
+        perGene: {tracks: resolvedTracks(countFrameshift), rows: perGeneRows, familySizes, shareFamilySizes, observedRows}, meta}
 }
 
 module.exports = {
     computeModelEnrichment, categoryRateSums, poissonUpperTail, classifyConsequence,
     MODELS, DE_NOVO, CONSEQUENCE_CLASS, IMPACT_CLASS, RATE_FIELD, rateFor,
-    CODING_TIERS, PER_GENE_TRACKS, isAutosome, isSnv
+    CODING_TIERS, PER_GENE_TRACKS, resolvedTiers, resolvedTracks, isAutosome, isSnv
 }

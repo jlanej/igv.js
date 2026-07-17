@@ -705,6 +705,32 @@ describe('dnm-enrichment (Test B — de novo mutation-rate)', function () {
         expect(T.cells.HIGH.q).to.be.a('number')                            // BH applied
     })
 
+    it('the LoF label describes what was COUNTED, not what the class list contains', function () {
+        // The column header is the one piece of prose a reader cannot skip. It read
+        // "LoF (nonsense+splice+frameshift)" unconditionally — including on exports with no
+        // Consequence column, where frameshift is not countable and its target is zeroed, so the
+        // header claimed a class the column does not contain. Labels now resolve per-cohort.
+        const withCons = computeModelEnrichment([V({gene: 'G1', Consequence: 'stop_gained', impact: 'HIGH', s: 'P1'})],
+            Object.assign(opts(), {consequenceCol: 'Consequence',
+                categoryMu: categoryRateSums(rates, {gnomad}, {fam}, true)}))
+        const noCons = computeModelEnrichment([V({gene: 'G1', impact: 'HIGH', s: 'P1'})], opts())
+
+        expect(withCons.meta.countFrameshift, 'Consequence column ⇒ frameshift countable').to.equal(true)
+        expect(noCons.meta.countFrameshift, 'IMPACT fallback ⇒ not countable').to.equal(false)
+
+        const lofTier = (r) => r.perCategory.tiers.find(t => t.key === 'HIGH').label
+        const lofTrack = (r) => r.perGene.tracks.find(t => t.key === 'lof').label
+        expect(lofTier(withCons), 'claims frameshift when counted').to.include('frameshift')
+        expect(lofTier(noCons), 'must NOT claim frameshift when it is not counted').to.not.include('frameshift')
+        expect(lofTier(noCons), 'says what it IS instead').to.include('SNV only')
+        expect(lofTrack(withCons)).to.include('frameshift')
+        expect(lofTrack(noCons), 'per-gene track resolves the same way').to.not.include('frameshift')
+        // Resolution is per-cohort: the shared constant must not be mutated, or the second
+        // export in a process would inherit the first one's labels.
+        const {CODING_TIERS} = require('../dnm-enrichment')
+        expect(CODING_TIERS[0].label, 'the module constant is untouched').to.include('frameshift')
+    })
+
     it('per-class rate gate: a nonsense de novo in a gene with no pNonSplice is excluded (k↔λ stay consistent)', function () {
         const gp = new Map([['GP', {pNonSplice: null, pMis: 5e-6, pSyn: 3e-6, chr: '1'}]])
         const res = computeModelEnrichment([V({gene: 'GP', impact: 'HIGH', s: 'PA'})], Object.assign(opts(), {
