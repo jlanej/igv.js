@@ -1318,8 +1318,18 @@ app.post('/api/export/xlsx', async (req, res) => {
         // --- "Read Me" data-dictionary worksheet (first tab) ----------------
         if (exportCfg.sheets.dataDictionary !== false) {
             try {
+                // Which rate table drove Test B, resolved the SAME way the Test B block resolves
+                // it further down. The Read Me is written before that block runs, so this cannot
+                // borrow its `primaryTable` — but it must not diverge from it either, or the
+                // Methods rows would credit a table that did not run. Both read ratePrimary.
+                const rmPrimary = (exportCfg.geneAnalysis && exportCfg.geneAnalysis.ratePrimary) || dnmRates.DEFAULT_TABLE
+                const rmAlt = dnmRates.availableTables().find(t => t !== rmPrimary) || null
                 buildReadmeSheet(workbook, {
                     exportCfg, headerFill, headerFont, borderThin,
+                    // Name the table that ACTUALLY ran: ratePrimary is configurable, so a
+                    // hardcoded "DeNovoWEST" in the prose is false under ratePrimary:'mane'.
+                    rateTable: dnmRates.available(rmPrimary) ? dnmRates.describe(rmPrimary) : null,
+                    rateTableAlt: rmAlt ? dnmRates.describe(rmAlt) : null,
                     genome: exportCfg.genomeBuild || GENOME,
                     hasGene: headerColumns.includes('gene'),
                     hasImpact: headerColumns.includes('impact'),
