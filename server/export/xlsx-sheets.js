@@ -681,8 +681,20 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
     const CG = 1 + nT + 1, CP = CG + 1, PQ0 = CP + 1
     const CQ0 = PQ0 + nT                                   // scale-free p/q, one per tier
     const SQ0 = CQ0 + nT                                   // cohort-conditioned p/q, one per tier
-    const DK = SQ0 + nT, DKS = DK + 1, DMU = DKS + 1, DMUS = DMU + 1, DTH = DMUS + 1
+    // DMU0 is a BLOCK of nT columns: one Σp per tier, not a single unlabelled one. Two reasons.
+    // (1) REPRODUCIBILITY: every tier prints a p/q, so every tier's inputs must be printed, or a
+    //     row can carry a ✓ nobody can check. Σp was the ONLY missing input — k is the tier count
+    //     column, Σp_syn is tier-independent and printed, K per tier is the Observed banner's
+    //     per-class counts, and Σp(exome) per class is recoverable from the MODEL FIT banner's
+    //     expected counts (= 2·N·Σp_class) with the N printed beside them. So one column per tier
+    //     closes the gap for all three tests at once.
+    // (2) A header reading just "Σp" does not say WHICH tier it belongs to, and it silently meant
+    //     the broadest one.
+    const DK = SQ0 + nT, DKS = DK + 1
+    const DMU0 = DKS + 1                                   // Σp, one per tier
+    const DMUS = DMU0 + nT, DTH = DMUS + 1
     const DLAM = DTH + 1, DP = DLAM + 1
+    const DMU = DMU0 + nT - 1                              // the headTier's Σp — what λ/θ/π below use
     const SK = DP + 1, SPI = SK + 1, SEXP = SPI + 1, SP = SEXP + 1   // share derivation
     const DLAMALT = nAlt ? SP + 1 : null, DRATIO = nAlt ? SP + 2 : null
     const GENES = SP + nAlt + 1
@@ -735,7 +747,7 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
         ...tiers.map(t => `${t.label} p/q`),
         ...tiers.map(t => `${t.label} p/q (scale-free)`),
         ...tiers.map(t => `${t.label} p/q (share)`),
-        `k (${headTier.label})`, 'k syn', 'Σp', 'Σp syn', 'θ', 'λ = 2·N·Σp', 'P(X≥k)',
+        `k (${headTier.label})`, 'k syn', ...tiers.map(t => `Σp (${t.label})`), 'Σp syn', 'θ', 'λ = 2·N·Σp', 'P(X≥k)',
         'K (cohort)', 'π = Σp/Σp(exome)', 'exp share = K·π', 'P(X≥k | K)',
         ...(meta.altTable ? ['λ (cross-check)', 'λ ratio'] : []), 'Genes']
     r++
@@ -787,7 +799,10 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
             // derivation (headTier), with live Excel formulas
             const kA = colLetter(DK) + rowNum, muA = colLetter(DMU) + rowNum, lamA = colLetter(DLAM) + rowNum
             const muSA = colLetter(DMUS) + rowNum
-            vals.push(hc.k, hc.kSyn, hc.catMu, hc.catMuSyn)
+            // Σp for EVERY tier — the one input a non-head tier was missing.
+            vals.push(hc.k, hc.kSyn)
+            for (const t of tiers) vals.push(g.cells[t.key].catMu)
+            vals.push(hc.catMuSyn)
             // θ = Σp / (Σp + Σp_syn) — live, so a reader can see that 2·N is simply not in
             // it. That absence IS the scale-free property, not a claim about it.
             vals.push(hc.theta != null ? {formula: `${muA}/(${muA}+${muSA})`, result: hc.theta} : '—')
@@ -814,14 +829,17 @@ function buildDnmRateCategoryTab(workbook, dnm, styles) {
             const row = ws.addRow(vals)
             row.eachCell(c => { c.border = borderThin; if (idx % 2 === 1) c.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}} })
             for (let i = 0; i < nT; i++) row.getCell(T0 + i).alignment = {horizontal: 'center'}
-            for (const c of [CG, CP, DK, DKS, DMU, DMUS, DTH, DLAM, DP]) row.getCell(c).alignment = {horizontal: 'center'}
+            for (const c of [CG, CP, DK, DKS, DMUS, DTH, DLAM, DP]) row.getCell(c).alignment = {horizontal: 'center'}
+            // EVERY Σp column, not just the headTier's — the block is nT wide now.
+            for (let i = 0; i < nT; i++) row.getCell(DMU0 + i).alignment = {horizontal: 'center'}
             if (nAlt) {
                 for (const c of [DLAMALT, DRATIO]) row.getCell(c).alignment = {horizontal: 'center'}
                 if (typeof hc.lambdaAlt === 'number') row.getCell(DLAMALT).numFmt = FMT_LAM
                 if (typeof hc.lambdaRatio === 'number') row.getCell(DRATIO).numFmt = '0.000'
             }
             for (let i = 0; i < nT; i++) { row.getCell(PQ0 + i).alignment = {horizontal: 'center'}; row.getCell(CQ0 + i).alignment = {horizontal: 'center'} }
-            row.getCell(DMU).numFmt = FMT_MU; row.getCell(DMUS).numFmt = FMT_MU
+            for (let i = 0; i < nT; i++) row.getCell(DMU0 + i).numFmt = FMT_MU
+            row.getCell(DMUS).numFmt = FMT_MU
             row.getCell(DTH).numFmt = '0.0000'
             row.getCell(DLAM).numFmt = FMT_LAM; row.getCell(DP).numFmt = FMT_PVAL
             tiers.forEach((t, i) => { if (isSig(g.cells[t.key])) { row.getCell(T0 + i).font = {bold: true, color: {argb: 'FF6C3483'}}; row.getCell(PQ0 + i).font = {bold: true, color: {argb: 'FF6C3483'}} } })

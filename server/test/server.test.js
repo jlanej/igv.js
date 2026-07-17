@@ -4192,6 +4192,58 @@ describe('Gene Summary impact counts and annotations', function () {
     // leaving a reader to notice an absence. The old version of this test pinned the default to
     // false and justified it with the gnomAD-μ defect — a defect fixed long before the switch
     // flipped, which is exactly how a guard outlives its reason and starts asserting history.
+    it('EVERY tier prints its own Σp, so every printed p can be checked by hand', function () {
+        // The standard's second clause: a p-value a reader cannot reproduce from the workbook is
+        // not a result, it is an assertion. The derivation block was bound to the TOP tier, so the
+        // LoF row printed p/q — and could carry a ✓ — with none of its inputs. Σp was the only
+        // one genuinely missing: k is the tier count column, Σp_syn is tier-independent, K per
+        // tier is the Observed banner's per-class counts, and Σp(exome) per class is recoverable
+        // from the MODEL FIT banner's expected counts (= 2·N·Σp_class).
+        const {computeModelEnrichment, categoryRateSums, DE_NOVO} = require('../dnm-enrichment')
+        const {buildDnmRateCategoryTab} = require('../server')
+        const rates = new Map([['G1', {pSyn: 3e-6, pMis: 5e-6, pNonSplice: 1e-6, pLof: 2e-6, chr: '1'}]])
+        const fam = new Map([['G1', ['T']]])
+        const V = (o) => Object.assign({gene: 'G1', curation_status: 'pass', inheritance: 'de_novo', chrom: '1'}, o)
+        const dnm = computeModelEnrichment([
+            V({Consequence: 'stop_gained', ref: 'C', alt: 'T', sample: 's1'}),
+            V({Consequence: 'missense_variant', ref: 'A', alt: 'G', sample: 's2'}),
+            V({Consequence: 'synonymous_variant', ref: 'G', alt: 'A', sample: 's3'})
+        ], {model: DE_NOVO, geneCol: 'gene', impactCol: 'impact', consequenceCol: 'Consequence',
+            sampleCol: 'sample', chromCol: 'chrom', refCol: 'ref', altCol: 'alt', inheritanceCol: 'inheritance',
+            geneTerms: new Map([['G1', {fam: ['T']}]]), dimensions: [{id: 'fam', label: 'Fam'}],
+            muByGene: rates, categoryMu: categoryRateSums(rates, {}, {fam}, true),
+            N: 220, nReliable: true, minCount: 1})
+
+        const wb = new ExcelJS.Workbook()
+        buildDnmRateCategoryTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
+        const ws = wb.getWorksheet('DNM Rate (gene-set)')
+        let hdr = null, dat = null
+        ws.eachRow(r => {
+            const f = r.getCell(1).value
+            if (!hdr && f === 'Category') { hdr = []; r.eachCell(c => hdr.push(String(c.value))) }
+            if (!dat && f === 'T') { dat = []; r.eachCell({includeEmpty: true}, c => dat.push(c.value)) }
+        })
+        const tiers = dnm.perCategory.tiers
+        // One Σp per tier, each under its OWN tier-named header — "Σp" alone did not say which.
+        for (const t of tiers) {
+            const i = hdr.indexOf(`Σp (${t.label})`)
+            expect(i, `Σp column for tier "${t.label}" exists`).to.be.greaterThan(-1)
+            expect(dat[i], `Σp (${t.label}) is a number under its own header`).to.be.a('number')
+        }
+        const iLof = hdr.indexOf(`Σp (${tiers[0].label})`)
+        const iTop = hdr.indexOf(`Σp (${tiers[1].label})`)
+        expect(dat[iLof], 'nested tiers: Σp(LoF) < Σp(LoF+missense)').to.be.lessThan(dat[iTop])
+
+        // THE point: reproduce the LoF Poisson p from printed cells alone.
+        const kLof = parseInt(String(dat[hdr.indexOf(tiers[0].label)]).replace(' ✓', ''), 10)
+        const lam = 2 * 220 * dat[iLof]
+        const pByHand = 1 - Math.exp(-lam)                       // k=1 ⇒ P(X≥1)
+        const pPrinted = dnm.perCategory.sections[0].groups[0].cells[tiers[0].key].p
+        expect(kLof, 'k(LoF) readable from the tier column').to.equal(1)
+        expect(pByHand, 'hand-computed LoF p reproduces the engine to 1e-12').to.be.closeTo(pPrinted, 1e-12)
+        expect(hdr[hdr.length - 1], 'the Genes column did not shift under the insert').to.equal('Genes')
+    })
+
     it('every live formula uses a LEGACY Excel function name (no silent #NAME? column)', function () {
         // This shipped: BINOM.DIST wrote 264 live #NAME? cells — the entire share column — while
         // the POISSON column beside it worked, because POISSON is the pre-2007 name and needs no
