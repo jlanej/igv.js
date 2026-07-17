@@ -4192,6 +4192,72 @@ describe('Gene Summary impact counts and annotations', function () {
     // leaving a reader to notice an absence. The old version of this test pinned the default to
     // false and justified it with the gnomAD-μ defect — a defect fixed long before the switch
     // flipped, which is exactly how a guard outlives its reason and starts asserting history.
+    it('the Read Me documents every column the DNM Rate tabs emit', function () {
+        // These two tabs shipped with no column dictionary while every other tab had one — and
+        // they carry the least familiar columns in the workbook (π, K, λ ratio, q (share)). This
+        // fails if a column is ever added without an entry, which is how the gap opened: the
+        // share and cross-check columns were added and the dictionary was not.
+        this.timeout(20000)
+        const {computeModelEnrichment, categoryRateSums, DE_NOVO} = require('../dnm-enrichment')
+        const {buildDnmRateCategoryTab, buildDnmRatePerGeneTab, buildReadmeSheet} = require('../server')
+        const rates = new Map([['G1', {pSyn: 3e-6, pMis: 5e-6, pNonSplice: 1e-6, pLof: 2e-6, chr: '1'}]])
+        const fam = new Map([['G1', ['T']]])
+        const V = (o) => Object.assign({gene: 'G1', curation_status: 'pass', inheritance: 'de_novo', chrom: '1'}, o)
+        const cs = categoryRateSums(rates, {}, {fam}, true)
+        const dnm = computeModelEnrichment([
+            V({Consequence: 'stop_gained', ref: 'C', alt: 'T', sample: 's1'}),
+            V({Consequence: 'synonymous_variant', ref: 'G', alt: 'A', sample: 's2'})
+        ], {model: DE_NOVO, geneCol: 'gene', impactCol: 'impact', consequenceCol: 'Consequence',
+            sampleCol: 'sample', chromCol: 'chrom', refCol: 'ref', altCol: 'alt', inheritanceCol: 'inheritance',
+            geneTerms: new Map([['G1', {fam: ['T']}]]), dimensions: [{id: 'fam', label: 'Fam'}],
+            muByGene: rates, categoryMu: cs, rateTable: {id: 'denovowest', label: 'DW'},
+            altMuByGene: rates, altCategoryMu: cs, altTable: {id: 'mane', label: 'MANE'},
+            N: 220, nReliable: true, minCount: 1})
+
+        const wb = new ExcelJS.Workbook()
+        buildDnmRateCategoryTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
+        buildDnmRatePerGeneTab(wb, dnm, {headerFill: {}, headerFont: {}, borderThin: {}})
+        const emitted = new Set()
+        for (const ws of wb.worksheets) {
+            let hdr = null
+            ws.eachRow(r => {
+                const f = r.getCell(1).value
+                if (!hdr && (f === 'Category' || f === 'Gene')) { hdr = []; r.eachCell(c => hdr.push(String(c.value))) }
+            })
+            ;(hdr || []).forEach(h => emitted.add(h))
+        }
+        expect(emitted.size, 'columns were actually emitted (else vacuous)').to.be.greaterThan(20)
+
+        // The dictionary describes columns BY ROLE (<tier> is a placeholder), because the tier
+        // labels resolve per-cohort and the Read Me is built before that is known. So match roles.
+        const tierLabels = dnm.perCategory.tiers.map(t => t.label)
+        const roleCovered = (h) => (
+            h === 'Category' || h === 'Gene' || tierLabels.includes(h) ||
+            /p\/q( \(scale-free\)| \(share\))?$/.test(h) ||
+            ['# genes', '# probands', 'k syn', 'Σp syn', 'θ', 'P(X≥k)', 'q', 'K (cohort)',
+             'P(X≥k | K)', 'q (share)', 'λ (cross-check)', 'λ ratio', 'Genes', 'LOEUF', 'pLI',
+             'Constrained?', 'p (rate)', 'k (de novo variants)'].includes(h) ||
+            /^k \(/.test(h) || /^Σp \(/.test(h) || /^λ = 2·N·/.test(h) || /^π/.test(h) || /^exp share/.test(h)
+        )
+        const uncovered = [...emitted].filter(h => !roleCovered(h))
+        expect(uncovered, `columns with no dictionary role: ${uncovered.join(', ')}`).to.deep.equal([])
+
+        // …and the dictionary section is really in the Read Me, gated with the tabs it documents.
+        const readmeItems = (dnmOn) => {
+            const w = new ExcelJS.Workbook()
+            buildReadmeSheet(w, {exportCfg: {sheets: {geneAnalysis: true}, geneAnalysis: {enabled: true, dnmRateTest: dnmOn}},
+                headerFill: {}, headerFont: {}, borderThin: {}, genome: 'GRCh38', hasGene: true, hasImpact: true,
+                hasSampleQc: false, hasScreenshots: false, hasLollipop: false,
+                rateTable: {id: 'denovowest', label: 'DW'}, rateTableAlt: {id: 'mane', label: 'MANE'}})
+            const items = []
+            w.getWorksheet('Read Me').eachRow(r => items.push(String(r.getCell(1).value)))
+            return items
+        }
+        expect(readmeItems(true), 'dictionary present when Test B is on').to.include('DNM Rate tabs — column dictionary')
+        expect(readmeItems(false), 'and absent when the tabs are not emitted').to.not.include('DNM Rate tabs — column dictionary')
+        expect(readmeItems(true), 'the ✓ convention is documented').to.include('✓')
+    })
+
     it('EVERY tier prints its own Σp, so every printed p can be checked by hand', function () {
         // The standard's second clause: a p-value a reader cannot reproduce from the workbook is
         // not a result, it is an assertion. The derivation block was bound to the TOP tier, so the
