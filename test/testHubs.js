@@ -33,7 +33,18 @@ suite("hub.txt", function () {
         const hub = await loadHub(hubURL)
         assert.ok(hub.hubStanza)
         assert.ok(hub.genomeStanzas)
-        assert.equal(22, hub.trackStanzas.length)
+        // NO exact track-stanza count here. This fetches a LIVE hub from UCSC, so the count is
+        // their publishing decision, not a property of the parser — it was 22, it is 23 today,
+        // and it will change again. Asserting it tests UCSC's release schedule and fails the
+        // suite on a day nothing in this repo changed. That a stanza list came back non-empty
+        // and parses into a usable genome config is the part that is actually ours; that is what
+        // the assertions below and in "track configs" check. (The sibling test above reached the
+        // same conclusion earlier and commented its copy out.)
+        // Array.isArray first: hubParser leaves trackStanzas undefined on the multi-file-hub
+        // branch, so a bare .length would throw a TypeError instead of failing readably if UCSC
+        // ever restructures this hub. (The assertion this replaces had the same exposure.)
+        assert.ok(Array.isArray(hub.trackStanzas) && hub.trackStanzas.length > 0,
+            "hub returned a non-empty track stanza list")
 
         const genomeConfig = hub.getGenomeConfig()
         //const genome = await Genome.loadGenome(genomeConfig)
