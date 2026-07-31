@@ -46,6 +46,31 @@ describe('module graph', function () {
     // is `genesets.js`. It survived local checks because the verification harness STUBBED any
     // unknown module rather than failing, so an invented path looked fine right up until CI.
     // Node resolves for real, so let it: walk every first-party source file and require it.
+    it("every name a test imports from '../server' is actually exported", function () {
+        // `buildReadmeSheet` was imported by a test and never exported, so the test threw
+        // TypeError at RUN time rather than failing an assertion. My local harness had called
+        // the function on the xlsx-sheets module directly — proving the function works, and
+        // proving nothing about whether the test's import path resolves. Node only tells you
+        // when the line executes; this asks the question up front, for every name.
+        const fs = require('fs'), path = require('path')
+        const srv = require('../server')
+        const dir = __dirname
+        const wanted = new Map()
+        for (const f of fs.readdirSync(dir).filter(x => x.endsWith('.js'))) {
+            const src = fs.readFileSync(path.join(dir, f), 'utf-8')
+            for (const m of src.matchAll(/const \{([^}]*)\} = require\('\.\.\/server'\)/g)) {
+                for (const raw of m[1].split(',')) {
+                    const name = raw.trim().split(':')[0].trim()
+                    if (name) wanted.set(name, f)
+                }
+            }
+            for (const m of src.matchAll(/require\('\.\.\/server'\)\.(\w+)/g)) wanted.set(m[1], f)
+        }
+        expect(wanted.size, 'tests really do import named things from ../server').to.be.greaterThan(0)
+        const missing = [...wanted].filter(([n]) => srv[n] === undefined).map(([n, f]) => `${n} (${f})`)
+        expect(missing, `imported from '../server' but not exported: ${missing.join(', ')}`).to.deep.equal([])
+    })
+
     it('every server module require()s cleanly (no invented paths)', function () {
         const fs = require('fs'), path = require('path')
         const root = path.join(__dirname, '..')
@@ -476,7 +501,8 @@ describe('litmus: the full XLSX export pipeline produces a valid workbook', func
         const wb = new ExcelJS.Workbook()
         await wb.xlsx.load(res.body)
         const names = wb.worksheets.map(w => w.name)
-        // The DNM tab is always emitted; the samples tab only when a sample column exists.
+        // The variants tab emits whenever Gene Analysis runs and sheets.geneAnalysisVariants is
+        // not false; the samples tab additionally needs a sample column in the data.
         expect(names, names.join(',')).to.include.members(['Read Me', 'Gene Summary', 'Gene Analysis (variants)'])
 
         // The Gene Analysis matrix must carry the category × pass-tier headers.
@@ -491,7 +517,7 @@ describe('litmus: the full XLSX export pipeline produces a valid workbook', func
         // EVERY tier must carry its own derivation block — the whole point of the
         // per-tier rework (previously only pass·ALL was reproducible).
         for (const t of TIERS) {
-            for (const col of [`k DNMs (${t})`, `n pass DNMs (${t})`, `Expected n·p (${t})`, `P(X≥k) (${t})`]) {
+            for (const col of [`k variants (${t})`, `n pass variants (${t})`, `Expected n·p (${t})`, `P(X≥k) (${t})`]) {
                 expect(seen.has(col), `Gene Analysis derivation header "${col}"`).to.equal(true)
             }
         }
@@ -500,9 +526,9 @@ describe('litmus: the full XLSX export pipeline produces a valid workbook', func
         const pCol = headerRow['p (prev)']
         let checked = 0
         for (const t of TIERS) {
-            const kCol = headerRow[`k DNMs (${t})`], nCol = headerRow[`n pass DNMs (${t})`], PCol = headerRow[`P(X≥k) (${t})`]
-            expect(kCol, `column for k DNMs (${t})`).to.be.a('number')
-            expect(nCol, `column for n pass DNMs (${t})`).to.be.a('number')
+            const kCol = headerRow[`k variants (${t})`], nCol = headerRow[`n pass variants (${t})`], PCol = headerRow[`P(X≥k) (${t})`]
+            expect(kCol, `column for k variants (${t})`).to.be.a('number')
+            expect(nCol, `column for n pass variants (${t})`).to.be.a('number')
             expect(PCol, `column for P(X≥k) (${t})`).to.be.a('number')
             ws.eachRow(row => {
                 const k = row.getCell(kCol).value, n = row.getCell(nCol).value, p = row.getCell(pCol).value, P = row.getCell(PCol).value

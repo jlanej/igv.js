@@ -2646,6 +2646,7 @@ if (require.main === module) {
 module.exports = app
 // Exposed for unit tests (the samples tab is otherwise only emitted when the
 // loaded data has a sample column, which the test fixtures lack).
+module.exports.buildReadmeSheet = buildReadmeSheet
 module.exports.buildGeneAnalysisTab = buildGeneAnalysisTab
 module.exports.buildGaDerivationSheet = buildGaDerivationSheet
 module.exports.GA_SAMPLE_TRACK = GA_SAMPLE_TRACK
