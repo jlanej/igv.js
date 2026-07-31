@@ -457,7 +457,7 @@ describe('litmus: independent-individual dedup holds', function () {
 })
 
 describe('litmus: the full XLSX export pipeline produces a valid workbook', function () {
-    it('emits Read Me + Gene Summary + the Gene Analysis (DNMs) matrix tab', async function () {
+    it('emits Read Me + Gene Summary + the Gene Analysis (variants) matrix tab', async function () {
         this.timeout(20000)
         const res = await request(app)
             .post('/api/export/xlsx')
@@ -477,10 +477,10 @@ describe('litmus: the full XLSX export pipeline produces a valid workbook', func
         await wb.xlsx.load(res.body)
         const names = wb.worksheets.map(w => w.name)
         // The DNM tab is always emitted; the samples tab only when a sample column exists.
-        expect(names, names.join(',')).to.include.members(['Read Me', 'Gene Summary', 'Gene Analysis (DNMs)'])
+        expect(names, names.join(',')).to.include.members(['Read Me', 'Gene Summary', 'Gene Analysis (variants)'])
 
         // The Gene Analysis matrix must carry the category × pass-tier headers.
-        const ws = wb.getWorksheet('Gene Analysis (DNMs)')
+        const ws = wb.getWorksheet('Gene Analysis (variants)')
         const seen = new Set()
         const headerRow = {}   // header label -> column number
         ws.eachRow(row => row.eachCell((cell, col) => { if (typeof cell.value === 'string') { seen.add(cell.value); if (headerRow[cell.value] == null) headerRow[cell.value] = col } }))

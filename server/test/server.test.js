@@ -3639,8 +3639,8 @@ describe('Gene Summary impact counts and annotations', function () {
             .buffer(true).parse(binaryParser).expect(200)
         const wb = new ExcelJS.Workbook()
         await wb.xlsx.load(res.body)
-        const ga = wb.getWorksheet('Gene Analysis (DNMs)')
-        expect(ga, 'Gene Analysis (DNMs) sheet present').to.not.be.undefined
+        const ga = wb.getWorksheet('Gene Analysis (variants)')
+        expect(ga, 'Gene Analysis (variants) sheet present').to.not.be.undefined
         const text = []
         ga.eachRow(r => r.eachCell(c => { if (c.value != null) text.push(String(c.value)) }))
         const joined = text.join(' | ')
@@ -4192,6 +4192,58 @@ describe('Gene Summary impact counts and annotations', function () {
     // leaving a reader to notice an absence. The old version of this test pinned the default to
     // false and justified it with the gnomAD-μ defect — a defect fixed long before the switch
     // flipped, which is exactly how a guard outlives its reason and starts asserting history.
+    it('per-tab sheet toggles deselect exactly the tab named, and the master switch still wins', async function () {
+        // Added for inherited cohorts: drop the de-novo-only analyses without losing Test A.
+        // The trap this guards is the one that prompted it — "Gene Analysis (variants)" SOUNDS
+        // de novo-specific (it was called "(DNMs)") but Test A never filters on origin, so it is
+        // exactly the tab an inherited cohort wants. Each toggle must hit its own tab and no other.
+        this.timeout(60000)
+        const base = {geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false},
+            geneAnalysis: {enabled: true, domain: false}}
+        const sheetsFor = async (sheets) => {
+            const res = await request(app).post('/api/export/xlsx')
+                .send({variantIds: [0, 1, 2, 3, 4], exportConfig: Object.assign({}, base, sheets ? {sheets} : {})})
+                .buffer(true).parse(binaryParser).expect(200)
+            const wb = new ExcelJS.Workbook()
+            await wb.xlsx.load(res.body)
+            return wb.worksheets.map(w => w.name)
+        }
+
+        // Baseline: whatever this fixture emits with everything on.
+        const all = await sheetsFor(null)
+        expect(all, 'the renamed tab is what ships').to.not.include('Gene Analysis (DNMs)')
+
+        // Each toggle removes ITS tab and leaves the others that were present.
+        const cases = [
+            ['geneAnalysisSamples', 'Gene Analysis (samples)'],
+            ['geneAnalysisVariants', 'Gene Analysis (variants)'],
+            ['dnmRateGeneSet', 'DNM Rate (gene-set)'],
+            ['dnmRatePerGene', 'DNM Rate (per-gene)']
+        ]
+        for (const [key, tab] of cases) {
+            if (!all.includes(tab)) continue          // not emitted by this fixture; nothing to test
+            const got = await sheetsFor({[key]: false})
+            expect(got, `${key}: false removes "${tab}"`).to.not.include(tab)
+            for (const [, other] of cases) {
+                if (other === tab || !all.includes(other)) continue
+                expect(got, `  …and leaves "${other}" alone`).to.include(other)
+            }
+        }
+
+        // The derivation sheet documents the SAMPLE test, so it follows it off.
+        if (all.includes('Gene Analysis (derivation)')) {
+            const noSamples = await sheetsFor({geneAnalysisSamples: false})
+            expect(noSamples, 'derivation follows the samples tab off (it documents that test)')
+                .to.not.include('Gene Analysis (derivation)')
+        }
+
+        // The master switch still wins over any per-tab value.
+        const masterOff = await sheetsFor({geneAnalysis: false, geneAnalysisVariants: true, geneAnalysisSamples: true})
+        for (const tab of ['Gene Analysis (samples)', 'Gene Analysis (variants)', 'Gene Analysis (derivation)']) {
+            expect(masterOff, `sheets.geneAnalysis:false suppresses "${tab}" regardless of the per-tab flag`).to.not.include(tab)
+        }
+    })
+
     it('the Read Me documents every column the DNM Rate tabs emit', function () {
         // These two tabs shipped with no column dictionary while every other tab had one — and
         // they carry the least familiar columns in the workbook (π, K, λ ratio, q (share)). This

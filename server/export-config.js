@@ -20,11 +20,38 @@ const DEFAULT_EXPORT_CONFIG = {
         variants: true,           // Main variants sheet (always true)
         dataDictionary: true,     // "Read Me" guide + per-tab column dictionary
         geneSummary: true,        // Gene summary tab
-        geneAnalysis: true,       // Gene convergence analysis tab
+        geneAnalysis: true,       // MASTER switch for the whole Gene Analysis family below
         sampleSummary: true,      // Sample summary tab
         sampleQc: true,           // Sample QC tab (if data exists)
         appliedFilters: true,     // Applied filters tab
-        annotationStatus: true    // Annotation status / failure tracking
+        annotationStatus: true,   // Annotation status / failure tracking
+
+        // ---- Per-tab control within the analysis families ------------------------------
+        // Each is ANDed with its family's master switch, so `geneAnalysis: false` still turns
+        // the whole family off regardless of what is set here.
+        //
+        // WHICH OF THESE ARE DE NOVO-SPECIFIC — the question this block exists to answer,
+        // because the tab names used to imply the wrong answer:
+        //   Gene Analysis (samples)    ORIGIN-AGNOSTIC. Test A never filters on inheritance
+        //   Gene Analysis (variants)   ORIGIN-AGNOSTIC. (grep gene-analysis.js for `de_novo` —
+        //   Gene Analysis (derivation)  there is no such gate). All three count de novo AND
+        //                               inherited variants and apply to an inherited cohort.
+        //   DNM Rate (gene-set)        DE NOVO ONLY. Test B gates on `inheritance === 'de_novo'`
+        //   DNM Rate (per-gene)         and is the only genuinely de-novo-specific analysis here.
+        //
+        // FOR AN INHERITED / MIXED COHORT: turn off the two dnmRate* tabs (or set
+        // geneAnalysis.dnmRateTest: false, which suppresses the computation as well). LEAVE the
+        // Gene Analysis tabs ON — they are the convergence test that serves an inherited cohort,
+        // and the "(variants)" tab in particular counts every variant rather than deduplicating
+        // to one per proband. Test B self-suppresses anyway when there is no `inheritance`
+        // column, so these switches are about intent and workbook size, not correctness.
+        geneAnalysisSamples: true,     // "Gene Analysis (samples)"    — per-proband convergence
+        geneAnalysisVariants: true,    // "Gene Analysis (variants)"   — per-variant convergence
+        geneAnalysisDerivation: true,  // "Gene Analysis (derivation)" — reproducibility appendix
+                                       //   for the SAMPLE test; pointless without that tab, so it
+                                       //   is also skipped when geneAnalysisSamples is off.
+        dnmRateGeneSet: true,          // "DNM Rate (gene-set)"        — Test B, de novo only
+        dnmRatePerGene: true           // "DNM Rate (per-gene)"        — Test B, de novo only
     },
 
     // Gene Analysis (convergence) tab. Groups genes by shared attribute and

@@ -33,7 +33,8 @@ OpenDemand desktop access).
   WikiPathways pathways, HGNC gene families, and MSigDB Hallmark processes) — plus up to
   **3 runtime MitoCarta dimensions** when the Broad download succeeds. Both are
   **IGV-pass** only; **Gene Analysis (samples)** counts distinct probands (the
-  conservative headline) and **Gene Analysis (DNMs)** counts pass DNMs. Each is a
+  conservative headline) and **Gene Analysis (variants)** counts pass variants — de novo AND
+  inherited, since Test A never filters on origin. Each is a
   category × **cumulative impact-tier** matrix (HIGH ⊆ HIGH+MOD ⊆ HIGH+MOD+LOW ⊆ ALL)
   of **`count (%)`** (with a green ✓ for FDR q<0.05, and the exact p/q in columns to
   the right) against the category's **genome-wide prevalence** ("% of all genes"), plus
@@ -516,7 +517,7 @@ The **Export XLSX** button generates a publication-ready workbook containing:
 - **Gene Summary** sheet – gene-level statistics (total, samples, pass/fail/
   uncertain/pending), **impact counts passing review** (Pass HIGH / MODERATE /
   LOW / ALL), and gene-level annotations (see *Gene annotations* below).
-- **Gene Analysis (samples)** & **Gene Analysis (DNMs)** sheets – gene
+- **Gene Analysis (samples)** & **Gene Analysis (variants)** sheets – gene
   *convergence*: which shared attributes (gnomAD constraint, ClinVar history, GenCC
   inheritance, protein domain; Reactome & WikiPathways pathways, HGNC gene families,
   MSigDB Hallmark processes) the review's genes stack up on. Two matching **IGV-pass**
@@ -572,7 +573,8 @@ from disk.
 | **Impact Counts** | Pass HIGH/MODERATE/LOW/ALL (on), HIGH/MODERATE/LOW/ALL totals (off) |
 | **Gene Analysis** | Convergence dimensions (constraint/ClinVar/GenCC/domain + Reactome/WikiPathways/HGNC-family/MSigDB-Hallmark) as two IGV-pass tabs (samples + DNMs), category × pass-tier `count (%)` matrix (✓ for FDR q<0.05, exact p/q at right), min-count |
 | **Contamination** | Per-variant species columns + screenshot panel (when `--bed-tracks` set) |
-| **Worksheets** | Variants (always included), Read Me, Gene Summary, Gene Analysis (samples), Gene Analysis (DNMs), Sample Summary, Sample QC, Applied Filters, Annotation Status |
+| **Worksheets** | Variants (always included), Read Me, Gene Summary, Gene Analysis (samples), Gene Analysis (variants), Sample Summary, Sample QC, Applied Filters, Annotation Status |
+| **Per-tab deselect** | `sheets.geneAnalysisSamples` / `geneAnalysisVariants` / `geneAnalysisDerivation` / `dnmRateGeneSet` / `dnmRatePerGene` — each defaults on and is ANDed with its family's master switch. **For an inherited cohort, turn off the two `dnmRate*` tabs** (Test B is the only de-novo-only analysis; it gates on `inheritance === 'de_novo'`). **Leave the Gene Analysis tabs on** — Test A never filters on origin, so both its tabs count inherited variants too. |
 | **Variant Columns** | Core (chrom/pos/ref/alt), Gene Info, Frequency, Quality, Genotypes, Allelic Depth, Genotype Quality, Sample Info, File Paths, Other Annotations |
 
 Most options default to **enabled**.  The variant column categories allow
@@ -706,7 +708,7 @@ terms across **two matching tabs**, both **IGV-pass only**:
 
 - **Two tabs, one unit each** – **Gene Analysis (samples)** counts distinct pass
   **probands** (the conservative, robust headline: a hypermutated proband counts
-  once and can't fake convergence); **Gene Analysis (DNMs)** counts pass **DNMs**
+  once and can't fake convergence); **Gene Analysis (variants)** counts pass **variants**
   (the variant-level companion; a proband with several hits inflates it). Same
   categories, same background, same layout — only the counted unit and its test
   differ. The samples tab is omitted when the data has no `sample_id`/`trio_id`

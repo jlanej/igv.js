@@ -27,7 +27,7 @@ const {computeModelEnrichment, categoryRateSums, DE_NOVO} = require('./dnm-enric
 // request or module state. server.js decides WHAT to build; those decide how it LOOKS.
 const {buildReadmeSheet, buildGaDerivationSheet, buildGeneAnalysisTab,
     buildDnmRateCategoryTab, buildDnmRatePerGeneTab,
-    GA_SAMPLE_TRACK, GA_DNM_TRACK} = require('./export/xlsx-sheets')
+    GA_SAMPLE_TRACK, GA_VARIANT_TRACK, GA_DNM_TRACK} = require('./export/xlsx-sheets')
 const {buildExportHtml} = require('./export/html-export')
 const dnmRates = require('./dnm-rates')
 const geneSets = require('./genesets')
@@ -1727,13 +1727,23 @@ app.post('/api/export/xlsx', async (req, res) => {
                 // The derivation sheet publishes the proband burden histogram — the
                 // sample test's only otherwise-unreported input. Built FIRST so the
                 // samples tab can point its live "Expected Σpᵢ" SUMPRODUCT at it.
+                // Per-tab switches (default on). `!== false` so an older config that predates
+                // them, or one that only sets some, still gets every tab.
+                const wantSamples = exportCfg.sheets.geneAnalysisSamples !== false
+                const wantVariants = exportCfg.sheets.geneAnalysisVariants !== false
+                // The derivation sheet is the SAMPLE test's appendix — it publishes that test's
+                // proband burden histogram and nothing else. Without the samples tab it documents
+                // a tab that is not there, so it follows it.
+                const wantDeriv = wantSamples && exportCfg.sheets.geneAnalysisDerivation !== false
                 let derivRefs = null
-                if (conv.hasSamples) {
-                    try { derivRefs = buildGaDerivationSheet(workbook, conv, gaStyles, conv.cells.filter(c => c.statusKey === 'pass')) }
-                    catch (dErr) { log.warn('Gene Analysis derivation sheet:', dErr.message) }
+                if (conv.hasSamples && wantSamples) {
+                    if (wantDeriv) {
+                        try { derivRefs = buildGaDerivationSheet(workbook, conv, gaStyles, conv.cells.filter(c => c.statusKey === 'pass')) }
+                        catch (dErr) { log.warn('Gene Analysis derivation sheet:', dErr.message) }
+                    }
                     buildGeneAnalysisTab(workbook, conv, gaStyles, GA_SAMPLE_TRACK, derivRefs)
                 }
-                buildGeneAnalysisTab(workbook, conv, gaStyles, GA_DNM_TRACK)
+                if (wantVariants) buildGeneAnalysisTab(workbook, conv, gaStyles, GA_VARIANT_TRACK)
 
                 // --- Test B: de novo mutation-rate enrichment (separate, gated) ---
                 // A DE-NOVO-ONLY test (λ = 2·N·Σp, Samocha-2014 rates). Suppressed when de novo
@@ -1802,8 +1812,12 @@ app.post('/api/export/xlsx', async (req, res) => {
                                 // — never undercounts below observed probands even in the reliable path.
                                 N: totalProbands, nReliable, minCount: 1,
                             })
-                            buildDnmRateCategoryTab(workbook, dnm, gaStyles)
-                            buildDnmRatePerGeneTab(workbook, dnm, gaStyles)
+                            // Test B's two tabs are independently deselectable. dnmRateTest above
+                            // suppresses the COMPUTATION; these suppress a TAB whose numbers were
+                            // still computed — so the Read Me's Test B methods rows stay truthful
+                            // either way (they are gated on dnmRateTest, not on these).
+                            if (exportCfg.sheets.dnmRateGeneSet !== false) buildDnmRateCategoryTab(workbook, dnm, gaStyles)
+                            if (exportCfg.sheets.dnmRatePerGene !== false) buildDnmRatePerGeneTab(workbook, dnm, gaStyles)
                         }
                     } catch (dnmErr) {
                         log.warn('DNM Rate Enrichment failed:', dnmErr.message)
@@ -2635,6 +2649,7 @@ module.exports = app
 module.exports.buildGeneAnalysisTab = buildGeneAnalysisTab
 module.exports.buildGaDerivationSheet = buildGaDerivationSheet
 module.exports.GA_SAMPLE_TRACK = GA_SAMPLE_TRACK
-module.exports.GA_DNM_TRACK = GA_DNM_TRACK
+module.exports.GA_VARIANT_TRACK = GA_VARIANT_TRACK
+module.exports.GA_DNM_TRACK = GA_DNM_TRACK   // back-compat alias
 module.exports.buildDnmRateCategoryTab = buildDnmRateCategoryTab
 module.exports.buildDnmRatePerGeneTab = buildDnmRatePerGeneTab
