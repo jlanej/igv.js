@@ -30,6 +30,7 @@ const {buildReadmeSheet, buildGaDerivationSheet, buildGeneAnalysisTab,
     GA_SAMPLE_TRACK, GA_VARIANT_TRACK, GA_DNM_TRACK} = require('./export/xlsx-sheets')
 const {buildExportHtml} = require('./export/html-export')
 const dnmRates = require('./dnm-rates')
+const {assessCompoundHets, STATUS: CH_STATUS} = require('./compound-het')
 const geneSets = require('./genesets')
 const mitocarta = require('./mitocarta')
 const gnomadProvider = require('./providers/gnomad-provider')
@@ -1376,6 +1377,27 @@ app.post('/api/export/xlsx', async (req, res) => {
                 } catch (_) { /* skip this variant's metrics */ }
             }
         }
+        // Hoisted from further down because the compound-het check below needs it. ONE
+        // definition used by both sites — a second copy is exactly how two places start
+        // disagreeing about which column holds the sample.
+        const xlsSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
+
+        // COMPOUND-HET PAIR INTEGRITY. `compound_het` is a claim about a PAIR carried on a
+        // single ROW, so a row whose partner was failed in review keeps asserting a biallelic
+        // hit that review just refuted — and biallelic vs monoallelic is a different diagnosis.
+        // Assessed against the FULL loaded set (`variants`), not the export subset: that is the
+        // only way to tell "the reviewer rejected the partner" from "the partner was not
+        // selected for this export", which mean opposite things. The pipeline's `inheritance`
+        // value is never rewritten; this is reported in its own column.
+        const chOriginCol = ['origin', 'Origin', 'parent_of_origin', 'inherited_from'].find(c => headerColumns.includes(c)) || null
+        const chAssess = assessCompoundHets(filtered, variants, {
+            geneCol, sampleCol: xlsSampleCol, inheritanceCol: headerColumns.includes('inheritance') ? 'inheritance' : null,
+            originCol: chOriginCol, statusCol: 'curation_status'
+        })
+        // The column earns its place only when there is something to say.
+        const hasCompoundHet = chAssess.summary.total > 0
+        const CH_COL = {header: 'Compound-het partner', key: '_chPartner', width: 34}
+
         const CONTAM_COLS = [
             {header: 'Contamination', key: '_contamAssess', width: 13},
             {header: 'Nonhuman %', key: '_contamNonhuman', width: 12},
@@ -1394,7 +1416,7 @@ app.post('/api/export/xlsx', async (req, res) => {
             key: col,
             width: col === 'curation_note' ? 30 : col === 'Screenshot' ? 14 : Math.max(12, col.length + 4)
         }))
-        ws.columns = hasSpecies ? [...dataColDefs, ...CONTAM_COLS] : dataColDefs
+        ws.columns = [...dataColDefs, ...(hasCompoundHet ? [CH_COL] : []), ...(hasSpecies ? CONTAM_COLS : [])]
 
         // Style the header row
         const headerRow = ws.getRow(1)
@@ -1416,6 +1438,8 @@ app.post('/api/export/xlsx', async (req, res) => {
             for (const col of uniqueCols) {
                 row[col] = v[col] ?? ''
             }
+
+            if (hasCompoundHet) row['_chPartner'] = chAssess.byId.get(v) || ''
 
             // Create screenshot sheet name using short numeric index
             if (hasScreenshots && screenshots[String(v.id)]) {
@@ -1497,7 +1521,6 @@ app.post('/api/export/xlsx', async (req, res) => {
         }
 
         // --- Gene annotations (fetched once, shared by Gene Summary + Gene Analysis) --
-        const xlsSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
         const gaCfg = exportCfg.geneAnalysis || {}
         const gaOn = !!(geneCol && exportCfg.sheets.geneAnalysis && gaCfg.enabled)
         let geneAnnotations = new Map()

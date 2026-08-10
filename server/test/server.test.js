@@ -4192,6 +4192,56 @@ describe('Gene Summary impact counts and annotations', function () {
     // leaving a reader to notice an absence. The old version of this test pinned the default to
     // false and justified it with the gnomAD-μ defect — a defect fixed long before the switch
     // flipped, which is exactly how a guard outlives its reason and starts asserting history.
+    it('a compound-het whose partner failed review is reported as REFUTED, not left asserting', function () {
+        // The bug this exists for: `compound_het` is a claim about a PAIR carried on one ROW, so
+        // when a reviewer fails one member the survivor still exports labelled compound_het —
+        // asserting a biallelic hit that review just refuted. Biallelic vs monoallelic is a
+        // different genetic diagnosis, which makes it the most consequential label in the export.
+        const {assessCompoundHets, STATUS} = require('../compound-het')
+        const cols = {geneCol: 'gene', sampleCol: 'sample', inheritanceCol: 'inheritance',
+            originCol: 'origin', statusCol: 'curation_status'}
+        const V = (o) => Object.assign({sample: 'P1', gene: 'GENEA', inheritance: 'compound_het',
+            curation_status: 'pass'}, o)
+
+        // 1. The reported case: partner failed review.
+        const keep = V({origin: 'mat'}), failed = V({origin: 'pat', curation_status: 'fail'})
+        const r1 = assessCompoundHets([keep], [keep, failed], cols)
+        expect(r1.byId.get(keep), 'survivor is called out as refuted').to.equal(STATUS.REFUTED)
+        expect(r1.byId.get(keep), 'and it LEADS with REFUTED, not a hedge').to.match(/^REFUTED/)
+        expect(keep.inheritance, 'the pipeline value is reported on, never rewritten').to.equal('compound_het')
+
+        // 2. THE DISTINCTION THAT CARRIES THE DESIGN: a partner merely not selected for this
+        //    export means the compound het is unverifiable HERE — very likely still true of the
+        //    sample. Saying "refuted" there would be as wrong as the bug being fixed.
+        const a = V({origin: 'mat'}), b = V({origin: 'pat'})
+        const r2 = assessCompoundHets([a], [a, b], cols)
+        expect(r2.byId.get(a), 'not-exported is its own state').to.equal(STATUS.NOT_EXPORTED)
+        expect(r2.byId.get(a), 'and must NOT claim the biology was refuted').to.not.match(/REFUTED/)
+
+        // 3. Healthy pair, and the cis case the same grouping catches free.
+        const r3 = assessCompoundHets([a, b], [a, b], cols)
+        expect(r3.byId.get(a), 'in trans + both pass + both exported').to.equal(STATUS.CONFIRMED)
+        const c = V({origin: 'mat'}), d = V({origin: 'mat'})
+        expect(assessCompoundHets([c, d], [c, d], cols).byId.get(c),
+            'same origin = one haplotype = not a compound het').to.equal(STATUS.CIS)
+
+        // 4. Scope: a different gene or sample is not a partner; non-compound_het rows stay blank.
+        const e = V({origin: 'mat'}), f = V({origin: 'pat', gene: 'GENEB'})
+        expect(assessCompoundHets([e, f], [e, f], cols).byId.get(e)).to.equal(STATUS.NO_PARTNER)
+        const dn = V({inheritance: 'de_novo', origin: 'mat'})
+        expect(assessCompoundHets([dn], [dn], cols).byId.get(dn),
+            'a de novo row gets an empty cell, not column noise').to.equal('')
+
+        // 5. Origin spellings vary by pipeline and none are wrong; all must normalise.
+        for (const [m, pa] of [['mat', 'pat'], ['maternal', 'paternal'], ['Mother', 'Father']]) {
+            const x = V({origin: m}), y = V({origin: pa})
+            expect(assessCompoundHets([x, y], [x, y], cols).byId.get(x), `${m}/${pa}`).to.equal(STATUS.CONFIRMED)
+        }
+        // …and a missing origin must say phase is unassessable, never imply cis.
+        const g = V({origin: ''}), h = V({origin: 'pat'})
+        expect(assessCompoundHets([g, h], [g, h], cols).byId.get(g)).to.equal(STATUS.NO_ORIGIN)
+    })
+
     it('per-tab sheet toggles deselect exactly the tab named, and the master switch still wins', async function () {
         // Added for inherited cohorts: drop the de-novo-only analyses without losing Test A.
         // The trap this guards is the one that prompted it — "Gene Analysis (variants)" SOUNDS
