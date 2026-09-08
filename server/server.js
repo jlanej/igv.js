@@ -1715,7 +1715,11 @@ app.post('/api/export/xlsx', async (req, res) => {
                 }
                 // The de novo EXPECTATION for this gene, 2·N·p from the bundled rate table — the
                 // direct answer to "is this count surprising for a gene this size".
-                if (hasExpected && ic.expectedDeNovo !== false) {
+                // ONE predicate for both the column push and the per-row number format: with
+                // expectedDeNovo:false the rows still carry expLof, and formatting a key that has no
+                // column would ask ExcelJS for a cell that does not exist.
+                const showExpected = hasExpected && ic.expectedDeNovo !== false
+                if (showExpected) {
                     gsCols.push({header: 'Expected de novo LoF (2·N·p)', key: 'expLof', width: 16})
                     gsCols.push({header: 'Expected de novo missense (2·N·p)', key: 'expMis', width: 18})
                 }
@@ -1762,7 +1766,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                     }
                     const row = gws.addRow(g)
                     for (const k of ['expLof', 'expMis']) {
-                        if (hasExpected && typeof g[k] === 'number') row.getCell(k).numFmt = '0.00E+00'
+                        if (showExpected && typeof g[k] === 'number') row.getCell(k).numFmt = '0.00E+00'
                     }
                     row.eachCell(cell => {
                         cell.border = borderThin
