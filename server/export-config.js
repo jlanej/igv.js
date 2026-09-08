@@ -154,8 +154,16 @@ const DEFAULT_EXPORT_CONFIG = {
     // NOTE: only HIGH/MODERATE/LOW are counted — MODIFIER and blank impacts are
     // excluded, so the three pass columns need not sum to the Pass column.
     impactCounts: {
-        passByImpact: true,
-        totalByImpact: false
+        passByImpact: true,       // Pass HIGH/MODERATE/LOW (+ remainder) and Pass ALL
+        totalByImpact: false,     // the same tallies regardless of review status
+        remainder: true,          // + Pass MODIFIER and Pass (none), so the tiers sum to ALL exactly
+        passSamples: true,        // distinct probands with a PASSING variant — honest recurrence
+                                  //   ("Samples" counts every curation status)
+        consequenceClasses: true, // Pass LoF / missense / synonymous / other, by the SAME classifier
+                                  //   Test B uses (needs a VEP Consequence column; never inferred
+                                  //   from IMPACT — HIGH ≠ LoF)
+        expectedDeNovo: true      // expected de novo LoF / missense = 2·N·p from the bundled rate
+                                  //   table (needs an inheritance column; autosomal genes only)
     },
 
     // Visual elements
@@ -184,7 +192,8 @@ const DEFAULT_EXPORT_CONFIG = {
             loeuf: true,          // LOEUF (oe_lof_upper)
             pli: true,            // pLI
             constrainedFlag: true, // derived Yes/No LoF-constrained flag
-            misZ: false           // missense Z-score
+            misZ: true            // missense Z-score — the missense analogue of LOEUF; without it a
+                                  //   missense-heavy gene has no constraint context
         },
         clinvar: {                // ClinVar gene-level counts (bundled file)
             enabled: true,

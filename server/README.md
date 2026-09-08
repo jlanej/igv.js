@@ -570,7 +570,7 @@ from disk.
 |----------|---------|
 | **Visual Elements** | IGV Screenshots, Lollipop Plots, Protein Domains |
 | **Gene Annotations** | Enable/Disable, Gene Name, Summary, OMIM, Pathways, Gene Type; gnomAD constraint; ClinVar P/LP; GenCC MOI + validity; gene-list membership |
-| **Impact Counts** | Pass HIGH/MODERATE/LOW/ALL (on), HIGH/MODERATE/LOW/ALL totals (off) |
+| **Impact Counts** | Pass HIGH/MODERATE/LOW/**MODIFIER/(none)**/ALL (on; the five tiers sum to ALL), the same totals regardless of review (off); **Pass samples** = distinct probands with a passing variant (on); **Pass LoF/missense/synonymous/other** by VEP Consequence, using Test B's own classifier — HIGH ≠ LoF (on, needs a Consequence column); **Expected de novo LoF/missense = 2·N·p** from the bundled Samocha-2014 rates, autosomal genes only (on, needs an inheritance column); gnomAD **mis_z** now on |
 | **Gene Analysis** | Convergence dimensions (constraint/ClinVar/GenCC/domain + Reactome/WikiPathways/HGNC-family/MSigDB-Hallmark) as two IGV-pass tabs (samples + DNMs), category × pass-tier `count (%)` matrix (✓ for FDR q<0.05, exact p/q at right), min-count |
 | **Contamination** | Per-variant species columns + screenshot panel (when `--bed-tracks` set) |
 | **Worksheets** | Variants (always included), Read Me, Gene Summary, Gene Analysis (samples), Gene Analysis (variants), Sample Summary, Sample QC, Applied Filters, Annotation Status |

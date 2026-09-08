@@ -22,7 +22,7 @@ const {fetchProteinDomains} = require('./pfam')
 const {fetchGeneAnnotationsBatch} = require('./gene-annotations')
 const annotationRegistry = require('./annotation-registry')
 const {computeConvergence, geneTermsFor, sourceUniverseStats, binomUpperTail, DIMENSIONS} = require('./gene-analysis')
-const {computeModelEnrichment, categoryRateSums, DE_NOVO} = require('./dnm-enrichment')
+const {computeModelEnrichment, categoryRateSums, DE_NOVO, classifyConsequence, rateFor, isAutosome} = require('./dnm-enrichment')
 // Sheet rendering lives in ./export — pure (workbook, data, styles) functions with no
 // request or module state. server.js decides WHAT to build; those decide how it LOOKS.
 const {buildReadmeSheet, buildGaDerivationSheet, buildGeneAnalysisTab,
@@ -1249,6 +1249,88 @@ app.get('/api/lollipop/:gene', async (req, res) => {
 })
 
 
+
+/**
+ * Per-gene tallies for the Gene Summary sheet. A PURE function of the exported rows, so the
+ * arithmetic is testable without an HTTP export — which matters because the example fixture
+ * has no Consequence column and could never exercise the class counts through the API.
+ *
+ * Two DIFFERENT classifications of a variant are tallied, and they must not be confused:
+ *   - IMPACT tiers (HIGH/MODERATE/LOW/MODIFIER/none) — VEP's severity bucket. HIGH ≠ LoF:
+ *     stop_lost and start_lost are HIGH with no LoF rate term (the TIMM9 case).
+ *   - Consequence CLASSES (LoF/missense/synonymous/other) — the molecular term, collapsed by
+ *     the SAME classifyConsequence Test B uses, so this sheet's "Pass LoF" and the DNM Rate
+ *     tab's k(LoF) are one function of the same cells. They differ only in SCOPE: this sheet
+ *     is origin-agnostic (inherited included); Test B is de novo only.
+ * MODIFIER and (none) are tallied separately — "annotated as non-coding" and "not annotated"
+ * are different facts — and the five tiers sum to ALL exactly.
+ *
+ * `expLof` / `expMis` are the DE NOVO expectation 2·N·p from the bundled rate table: the
+ * number that says whether a count is surprising for a gene of this mutational size. Being a
+ * de novo null they are computed only when the data carries an inheritance column, and only
+ * for AUTOSOMAL genes — 2·N assumes two copies, so an X-linked gene gets a blank rather than a
+ * number wrong by a sex-dependent factor. p_lof INCLUDES frameshift (it is the table's
+ * published p_lof), which pairs exactly with the Consequence-based "Pass LoF".
+ */
+function summarizeGenes(filtered, o) {
+    const {geneCol, impactCol, consequenceCol, sampleCol, inheritanceCol, rates, N} = o
+    const withRates = !!(inheritanceCol && rates && rates.size && N > 0)
+    const byGene = {}
+    const cap = (k) => k[0].toUpperCase() + k.slice(1)
+    for (const v of filtered) {
+        const gene = v[geneCol]
+        if (!gene) continue
+        let g = byGene[gene]
+        if (!g) g = byGene[gene] = {gene, total: 0, samples: 0, passSamples: 0, pass: 0, fail: 0, uncertain: 0, pending: 0,
+            passHigh: 0, passMod: 0, passLow: 0, passModifier: 0, passNoImpact: 0,
+            high: 0, mod: 0, low: 0, modifier: 0, noImpact: 0,
+            passLof: 0, passMis: 0, passSyn: 0, passOther: 0, lof: 0, mis: 0, syn: 0, other: 0,
+            _samples: new Set(), _passSamples: new Set()}
+        g.total++
+        const st = v.curation_status || 'pending'
+        g[st] = (g[st] || 0) + 1
+        const isPass = st === 'pass'
+        if (impactCol) {
+            const imp = String(v[impactCol] || '').trim().toUpperCase()
+            // (none) = blank OR a value that is not one of VEP's four tiers: both mean "no usable
+            // severity", and neither is silently folded into a real tier.
+            const tier = imp === 'HIGH' ? 'high' : imp === 'MODERATE' ? 'mod' : imp === 'LOW' ? 'low'
+                : imp === 'MODIFIER' ? 'modifier' : 'noImpact'
+            g[tier]++
+            if (isPass) g['pass' + cap(tier)]++
+        }
+        if (consequenceCol) {
+            // colPresent=true: a blank cell in a column that EXISTS is "not annotated" ⇒ other,
+            // never re-classified from IMPACT. The same rule Test B applies.
+            const {cls} = classifyConsequence(v[consequenceCol], impactCol ? v[impactCol] : null, true)
+            const k = (cls === 'nonSplice' || cls === 'frameshift') ? 'lof' : cls === 'mis' ? 'mis' : cls === 'syn' ? 'syn' : 'other'
+            g[k]++
+            if (isPass) g['pass' + cap(k)]++
+        }
+        if (sampleCol && v[sampleCol]) {
+            g._samples.add(v[sampleCol])
+            if (isPass) g._passSamples.add(v[sampleCol])
+        }
+    }
+    return Object.values(byGene).map(g => {
+        g.samples = g._samples.size
+        g.passSamples = g._passSamples.size
+        delete g._samples; delete g._passSamples
+        g.passAll = g.pass          // passing variants of ANY impact
+        g.impactAll = g.total
+        if (withRates) {
+            const rec = rates.get(String(g.gene).toUpperCase())
+            if (rec && isAutosome(rec.chr)) {
+                const pLof = (rateFor(rec, 'nonSplice') || 0) + (rateFor(rec, 'frameshift') || 0)
+                const pMis = rateFor(rec, 'mis') || 0
+                if (pLof > 0) g.expLof = 2 * N * pLof
+                if (pMis > 0) g.expMis = 2 * N * pMis
+            }
+        }
+        return g
+    }).sort((a, b) => b.total - a.total)
+}
+
 // -------------------------------------------------------------------------
 // XLSX Export – publication-quality workbook with variant data and optional
 // IGV screenshots on per-variant tabs, linked from the main sheet.
@@ -1317,20 +1399,38 @@ app.post('/api/export/xlsx', async (req, res) => {
         }
 
         // --- "Read Me" data-dictionary worksheet (first tab) ----------------
+        // ---- Facts about THIS export that several sheets read. ONE definition each. ----------
+        // These were re-derived separately inside the Read Me, Gene Summary, Test A, Test B and
+        // compound-het blocks, which is how two sheets start disagreeing about which column holds
+        // the sample, what N is, or which rate table ran. Everything here depends only on
+        // headerColumns, the loaded variants and the config, so it is safe to settle up front.
+        const xlsSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
+        const inheritanceCol = headerColumns.includes('inheritance') ? 'inheritance' : null
+        // Molecular consequence (VEP `Consequence`). Strongly preferred over IMPACT severity for
+        // any class-level count: HIGH ≠ LoF (stop_lost/start_lost are HIGH with no LoF rate term).
+        const consequenceCol = ['Consequence', 'consequence', 'CONSEQUENCE'].find(c => headerColumns.includes(c)) || null
+        // N: the Sample-QC trio count when a --sample-qc file is loaded (it lists every sequenced
+        // trio, including 0-variant ones), never below the distinct probands actually seen.
+        const probandsWithVariant = xlsSampleCol
+            ? new Set(variants.map(v => v[xlsSampleCol] || 'unknown')).size : 1
+        const totalProbands = Math.max(probandsWithVariant, sampleQcTrios.length || 0) || 1
+        // The rate table that drives Test B AND the Gene Summary's expected-de-novo columns. Both
+        // tables are the same Samocha-2014 model on different transcripts (0.6% apart); ratePrimary
+        // picks provenance, and whichever ran must be the one every sheet names.
+        const primaryTable = (exportCfg.geneAnalysis && exportCfg.geneAnalysis.ratePrimary) || dnmRates.DEFAULT_TABLE
+        const rates = dnmRates.getRates(primaryTable)
+        const altTableId = dnmRates.availableTables().find(t => t !== primaryTable) || null
+
         if (exportCfg.sheets.dataDictionary !== false) {
             try {
-                // Which rate table drove Test B, resolved the SAME way the Test B block resolves
-                // it further down. The Read Me is written before that block runs, so this cannot
-                // borrow its `primaryTable` — but it must not diverge from it either, or the
-                // Methods rows would credit a table that did not run. Both read ratePrimary.
-                const rmPrimary = (exportCfg.geneAnalysis && exportCfg.geneAnalysis.ratePrimary) || dnmRates.DEFAULT_TABLE
-                const rmAlt = dnmRates.availableTables().find(t => t !== rmPrimary) || null
                 buildReadmeSheet(workbook, {
                     exportCfg, headerFill, headerFont, borderThin,
                     // Name the table that ACTUALLY ran: ratePrimary is configurable, so a
                     // hardcoded "DeNovoWEST" in the prose is false under ratePrimary:'mane'.
-                    rateTable: dnmRates.available(rmPrimary) ? dnmRates.describe(rmPrimary) : null,
-                    rateTableAlt: rmAlt ? dnmRates.describe(rmAlt) : null,
+                    rateTable: rates.size ? dnmRates.describe(primaryTable) : null,
+                    rateTableAlt: altTableId ? dnmRates.describe(altTableId) : null,
+                    // What the Gene Summary dictionary rows need to describe only real columns.
+                    hasConsequence: !!consequenceCol, hasInheritance: !!inheritanceCol, hasRates: rates.size > 0,
                     genome: exportCfg.genomeBuild || GENOME,
                     hasGene: headerColumns.includes('gene'),
                     hasImpact: headerColumns.includes('impact'),
@@ -1377,11 +1477,6 @@ app.post('/api/export/xlsx', async (req, res) => {
                 } catch (_) { /* skip this variant's metrics */ }
             }
         }
-        // Hoisted from further down because the compound-het check below needs it. ONE
-        // definition used by both sites — a second copy is exactly how two places start
-        // disagreeing about which column holds the sample.
-        const xlsSampleCol = ['sample_id', 'trio_id'].find(c => headerColumns.includes(c)) || null
-
         // COMPOUND-HET PAIR INTEGRITY. `compound_het` is a claim about a PAIR carried on a
         // single ROW, so a row whose partner was failed in review keeps asserting a biallelic
         // hit that review just refuted — and biallelic vs monoallelic is a different diagnosis.
@@ -1391,7 +1486,7 @@ app.post('/api/export/xlsx', async (req, res) => {
         // value is never rewritten; this is reported in its own column.
         const chOriginCol = ['origin', 'Origin', 'parent_of_origin', 'inherited_from'].find(c => headerColumns.includes(c)) || null
         const chAssess = assessCompoundHets(filtered, variants, {
-            geneCol, sampleCol: xlsSampleCol, inheritanceCol: headerColumns.includes('inheritance') ? 'inheritance' : null,
+            geneCol, sampleCol: xlsSampleCol, inheritanceCol,
             originCol: chOriginCol, statusCol: 'curation_status'
         })
         // The column earns its place only when there is something to say.
@@ -1556,59 +1651,73 @@ app.post('/api/export/xlsx', async (req, res) => {
             // Local impact-column lookup (the handler-level `impactCol` is
             // declared later, in the Sample Summary section).
             const gsImpactCol = headerColumns.includes('impact') ? 'impact' : null
-            const geneMap = {}
-            for (const v of filtered) {
-                const gene = v[geneCol]
-                if (!gene) continue
-                if (!geneMap[gene]) geneMap[gene] = {gene, total: 0, samples: 0, pass: 0, fail: 0, uncertain: 0, pending: 0,
-                    passHigh: 0, passMod: 0, passLow: 0, high: 0, mod: 0, low: 0, _samples: new Set()}
-                const gm = geneMap[gene]
-                gm.total++
-                gm[v.curation_status || 'pending']++
-                if (gsImpactCol) {
-                    const imp = String(v[gsImpactCol] || '').toUpperCase()
-                    const isPass = v.curation_status === 'pass'
-                    // Only HIGH/MODERATE/LOW are tallied; MODIFIER/blank are excluded.
-                    if (imp === 'HIGH') { gm.high++; if (isPass) gm.passHigh++ }
-                    else if (imp === 'MODERATE') { gm.mod++; if (isPass) gm.passMod++ }
-                    else if (imp === 'LOW') { gm.low++; if (isPass) gm.passLow++ }
-                }
-                if (xlsSampleCol && v[xlsSampleCol]) gm._samples.add(v[xlsSampleCol])
-            }
-            const geneSummary = Object.values(geneMap).map(g => {
-                g.samples = g._samples.size
-                delete g._samples
-                // "ALL" impact counts: passing / total regardless of impact
-                // (includes MODIFIER/blank), i.e. not limited to HIGH/MOD/LOW.
-                g.passAll = g.pass
-                g.impactAll = g.total
-                return g
-            }).sort((a, b) => b.total - a.total)
+            const geneSummary = summarizeGenes(filtered, {geneCol, impactCol: gsImpactCol, consequenceCol,
+                sampleCol: xlsSampleCol, inheritanceCol, rates, N: totalProbands})
+            // The expected-de-novo columns earn their place only when at least one row has one.
+            const hasExpected = geneSummary.some(g => g.expLof != null || g.expMis != null)
 
             if (geneSummary.length > 0) {
                 const gws = workbook.addWorksheet('Gene Summary', {views: [{state: 'frozen', ySplit: 1}]})
+                const ic = exportCfg.impactCounts || {}
                 const gsCols = [
                     {header: 'Gene', key: 'gene', width: 16},
                     {header: 'Total', key: 'total', width: 10},
                     {header: 'Samples', key: 'samples', width: 10},
+                    // Recurrence over PASSING variants. "Samples" counts every curation status, so a
+                    // gene with 3 fails and 1 pass across 4 probands reads Samples=4 — overstating
+                    // recurrence the same way an orphaned compound_het label overstates biallelism.
+                    ...(xlsSampleCol && ic.passSamples !== false ? [{header: 'Pass samples', key: 'passSamples', width: 12}] : []),
                     {header: 'Pass', key: 'pass', width: 10},
                     {header: 'Fail', key: 'fail', width: 10},
                     {header: 'Uncertain', key: 'uncertain', width: 12},
                     {header: 'Pending', key: 'pending', width: 10}
                 ]
 
-                // Impact counts passing review (HIGH/MODERATE/LOW + ALL), then optional totals
-                if (exportCfg.impactCounts && exportCfg.impactCounts.passByImpact) {
+                // IMPACT tiers passing review, then optional totals. With `remainder` on, MODIFIER and
+                // (none) print too, so the tiers SUM to ALL exactly — and they are kept apart:
+                // "annotated as non-coding" and "not annotated" are different facts.
+                if (ic.passByImpact) {
                     gsCols.push({header: 'Pass HIGH', key: 'passHigh', width: 10})
                     gsCols.push({header: 'Pass MODERATE', key: 'passMod', width: 14})
                     gsCols.push({header: 'Pass LOW', key: 'passLow', width: 10})
+                    if (ic.remainder !== false) {
+                        gsCols.push({header: 'Pass MODIFIER', key: 'passModifier', width: 13})
+                        gsCols.push({header: 'Pass (none)', key: 'passNoImpact', width: 11})
+                    }
                     gsCols.push({header: 'Pass ALL', key: 'passAll', width: 10})
                 }
-                if (exportCfg.impactCounts && exportCfg.impactCounts.totalByImpact) {
+                if (ic.totalByImpact) {
                     gsCols.push({header: 'HIGH', key: 'high', width: 8})
                     gsCols.push({header: 'MODERATE', key: 'mod', width: 10})
                     gsCols.push({header: 'LOW', key: 'low', width: 8})
+                    if (ic.remainder !== false) {
+                        gsCols.push({header: 'MODIFIER', key: 'modifier', width: 10})
+                        gsCols.push({header: '(none)', key: 'noImpact', width: 8})
+                    }
                     gsCols.push({header: 'ALL', key: 'impactAll', width: 8})
+                }
+                // Consequence CLASSES — the molecular term collapsed by the SAME classifier Test B
+                // uses, so "Pass LoF" here and k(LoF) on the DNM Rate tab are one function of the
+                // same cells. Only with a Consequence column: a class is never inferred from severity.
+                if (consequenceCol && ic.consequenceClasses !== false) {
+                    if (ic.passByImpact) {
+                        gsCols.push({header: 'Pass LoF', key: 'passLof', width: 9})
+                        gsCols.push({header: 'Pass missense', key: 'passMis', width: 13})
+                        gsCols.push({header: 'Pass synonymous', key: 'passSyn', width: 15})
+                        gsCols.push({header: 'Pass other', key: 'passOther', width: 11})
+                    }
+                    if (ic.totalByImpact) {
+                        gsCols.push({header: 'LoF', key: 'lof', width: 7})
+                        gsCols.push({header: 'Missense', key: 'mis', width: 10})
+                        gsCols.push({header: 'Synonymous', key: 'syn', width: 11})
+                        gsCols.push({header: 'Other', key: 'other', width: 8})
+                    }
+                }
+                // The de novo EXPECTATION for this gene, 2·N·p from the bundled rate table — the
+                // direct answer to "is this count surprising for a gene this size".
+                if (hasExpected && ic.expectedDeNovo !== false) {
+                    gsCols.push({header: 'Expected de novo LoF (2·N·p)', key: 'expLof', width: 16})
+                    gsCols.push({header: 'Expected de novo missense (2·N·p)', key: 'expMis', width: 18})
                 }
 
                 // Add annotation columns based on config
@@ -1652,6 +1761,9 @@ app.post('/api/export/xlsx', async (req, res) => {
                         }
                     }
                     const row = gws.addRow(g)
+                    for (const k of ['expLof', 'expMis']) {
+                        if (hasExpected && typeof g[k] === 'number') row.getCell(k).numFmt = '0.00E+00'
+                    }
                     row.eachCell(cell => {
                         cell.border = borderThin
                         if (idx % 2 === 1) cell.fill = {type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFF8F9FA'}}
@@ -1734,9 +1846,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                 // with 0 de novo variants. Prefer the Sample QC trio count (which
                 // lists every sequenced trio); take the max with the distinct
                 // probands present in the variants so it's never an undercount.
-                const probandsWithVariant = xlsSampleCol
-                    ? new Set(variants.map(v => v[xlsSampleCol] || 'unknown')).size : 1
-                const totalProbands = Math.max(probandsWithVariant, sampleQcTrios.length || 0) || 1
+                // (probandsWithVariant / totalProbands are settled once, in the facts block above.)
 
                 const conv = computeConvergence(filtered, {
                     geneCol, impactCol: gaImpactCol, sampleCol: xlsSampleCol,
@@ -1774,11 +1884,9 @@ app.post('/api/export/xlsx', async (req, res) => {
                 // Isolated try — never affects Test A.
                 if (gaCfg.dnmRateTest !== false) {
                     try {
-                        const inheritanceCol = headerColumns.includes('inheritance') ? 'inheritance' : null
                         // Molecular consequence is STRONGLY preferred over IMPACT severity:
                         // VEP LOW is not synonymous, and the synonymous class is the model-fit
                         // diagnostic — contaminating it corrupts the one honest QC readout.
-                        const consequenceCol = ['Consequence', 'consequence', 'CONSEQUENCE'].find(c => headerColumns.includes(c)) || null
                         // The rate table is keyed by gene symbol and carries no coordinates, so
                         // it needs no GRCh38 gate — Test B runs on GRCh37 too. (If anything the
                         // rates are GRCh37-native: DeNovoWEST's table comes from the DDD study.)
@@ -1788,8 +1896,6 @@ app.post('/api/export/xlsx', async (req, res) => {
                         // the published table and is regenerable with one fetch; 'mane' has current
                         // symbols and covers MYC (which DeNovoWEST leaves rate-less) but needs an
                         // offline rebuild. The other table is reported alongside as a cross-check.
-                        const primaryTable = (exportCfg.geneAnalysis && exportCfg.geneAnalysis.ratePrimary) || dnmRates.DEFAULT_TABLE
-                        const rates = dnmRates.getRates(primaryTable)
                         // The CONSTRAINT dimension is the one exception, and it is gated exactly
                         // as Test A gates it: getBundle() is v4.1/GRCh38, but on a GRCh37 export
                         // the per-gene constraint TERMS come from the live v2.1.1 API. Passing
@@ -1821,8 +1927,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                             // source is not carrying a finding instead of taking our word. It yields
                             // a second λ only — no second p, no second BH family. Absent bundle ⇒
                             // null ⇒ the columns simply do not appear.
-                            const altId = dnmRates.availableTables().find(t => t !== primaryTable) || null
-                            const altRates = altId ? dnmRates.getRates(altId) : null
+                            const altRates = altTableId ? dnmRates.getRates(altTableId) : null
                             const altCategoryMu = (altRates && altRates.size)
                                 ? categoryRateSums(altRates, rateBundles, gsLibs, !!consequenceCol) : null
                             const dnm = computeModelEnrichment(filtered, {
@@ -1830,7 +1935,7 @@ app.post('/api/export/xlsx', async (req, res) => {
                                 sampleCol: xlsSampleCol, chromCol: 'chrom', refCol: 'ref', altCol: 'alt', inheritanceCol,
                                 geneTerms, dimensions, muByGene: rates, categoryMu,
                                 rateTable: dnmRates.describe(primaryTable),
-                                altMuByGene: altRates, altCategoryMu, altTable: altId ? dnmRates.describe(altId) : null,
+                                altMuByGene: altRates, altCategoryMu, altTable: altTableId ? dnmRates.describe(altTableId) : null,
                                 // totalProbands = max(distinct probands in callset, Sample-QC trio count)
                                 // — never undercounts below observed probands even in the reliable path.
                                 N: totalProbands, nReliable, minCount: 1,
@@ -2677,3 +2782,4 @@ module.exports.GA_VARIANT_TRACK = GA_VARIANT_TRACK
 module.exports.GA_DNM_TRACK = GA_DNM_TRACK   // back-compat alias
 module.exports.buildDnmRateCategoryTab = buildDnmRateCategoryTab
 module.exports.buildDnmRatePerGeneTab = buildDnmRatePerGeneTab
+module.exports.summarizeGenes = summarizeGenes

@@ -4192,6 +4192,92 @@ describe('Gene Summary impact counts and annotations', function () {
     // leaving a reader to notice an absence. The old version of this test pinned the default to
     // false and justified it with the gnomAD-μ defect — a defect fixed long before the switch
     // flipped, which is exactly how a guard outlives its reason and starts asserting history.
+    it('Gene Summary tallies: tiers sum to ALL, classes come from the Consequence classifier, expectation is 2·N·p', function () {
+        // summarizeGenes is exported precisely so this arithmetic is testable without an HTTP
+        // export: the fixture has no Consequence column and could never exercise the class
+        // counts through the API. Two classifications are tallied and must NOT be confused —
+        // IMPACT is VEP's severity bucket (HIGH includes stop_lost, which has no LoF rate term);
+        // the class columns are the molecular term, collapsed by Test B's own classifier.
+        const {summarizeGenes} = require('../server')
+        const rates = new Map([['GA', {pSyn: 3e-6, pMis: 5e-6, pNonSplice: 1e-6, pLof: 2e-6, chr: '1'}],
+            ['GX', {pSyn: 3e-6, pMis: 5e-6, pNonSplice: 1e-6, pLof: 2e-6, chr: 'X'}]])
+        const O = {geneCol: 'gene', impactCol: 'impact', consequenceCol: 'Consequence', sampleCol: 'sample',
+            inheritanceCol: 'inheritance', rates, N: 100}
+        const V = (o) => Object.assign({gene: 'GA', curation_status: 'pass', sample: 'P1', impact: 'HIGH',
+            Consequence: 'stop_gained', inheritance: 'de_novo'}, o)
+
+        // 1. The five IMPACT tiers partition ALL — pass and total — with MODIFIER and (none) apart.
+        const [g] = summarizeGenes([
+            V({impact: 'HIGH'}), V({impact: 'MODERATE', Consequence: 'missense_variant'}),
+            V({impact: 'LOW', Consequence: 'synonymous_variant'}), V({impact: 'MODIFIER', Consequence: 'intron_variant'}),
+            V({impact: '', Consequence: ''}), V({impact: 'HIGH', curation_status: 'fail'})
+        ], O)
+        expect(g.passHigh + g.passMod + g.passLow + g.passModifier + g.passNoImpact, 'pass tiers sum to Pass ALL').to.equal(g.passAll)
+        expect(g.high + g.mod + g.low + g.modifier + g.noImpact, 'total tiers sum to ALL').to.equal(g.impactAll)
+        expect([g.passModifier, g.passNoImpact], 'MODIFIER and (none) are separate facts').to.deep.equal([1, 1])
+
+        // 2. Recurrence: "Samples" counts every status; "Pass samples" is the honest number.
+        const [r] = summarizeGenes([V({sample: 'P1'}), V({sample: 'P2', curation_status: 'fail'}),
+            V({sample: 'P3', curation_status: 'fail'}), V({sample: 'P4', curation_status: 'fail'})], O)
+        expect([r.samples, r.passSamples], '3 fails + 1 pass across 4 probands').to.deep.equal([4, 1])
+
+        // 3. Classes: HIGH ≠ LoF. stop_lost is HIGH but has no LoF term; a blank cell is
+        //    "not annotated" and is never re-classified from IMPACT.
+        const [c] = summarizeGenes([
+            V({Consequence: 'stop_gained'}), V({Consequence: 'frameshift_variant'}),
+            V({Consequence: 'splice_donor_variant&intron_variant'}), V({Consequence: 'stop_lost'}),
+            V({Consequence: 'missense_variant', impact: 'MODERATE'}), V({Consequence: 'synonymous_variant', impact: 'LOW'}),
+            V({Consequence: '', impact: 'HIGH'})
+        ], O)
+        expect([c.passLof, c.passMis, c.passSyn, c.passOther], 'LoF/mis/syn/other').to.deep.equal([3, 1, 1, 2])
+        expect(c.passHigh, 'IMPACT says HIGH=5 while LoF=3 — the two classifications differ, as they must').to.equal(5)
+        expect(c.passLof + c.passMis + c.passSyn + c.passOther, 'classes partition Pass ALL').to.equal(c.passAll)
+
+        // 4. Expectation = 2·N·p (frameshift-inclusive p_lof), autosomal only, de novo data only.
+        const rows = summarizeGenes([V({gene: 'GA'}), V({gene: 'GX'})], O)
+        const ga = rows.find(x => x.gene === 'GA'), gx = rows.find(x => x.gene === 'GX')
+        expect(ga.expLof, 'GA expLof = 2·100·2e-6').to.be.closeTo(4e-4, 1e-15)
+        expect(ga.expMis, 'GA expMis = 2·100·5e-6').to.be.closeTo(1e-3, 1e-15)
+        expect(gx.expLof, 'chrX: 2·N assumes two copies ⇒ no number rather than a wrong one').to.equal(undefined)
+        expect(summarizeGenes([V()], Object.assign({}, O, {inheritanceCol: null}))[0].expLof,
+            'no inheritance column ⇒ no de novo expectation (the wrong null for inherited data)').to.equal(undefined)
+        expect(summarizeGenes([V()], Object.assign({}, O, {consequenceCol: null}))[0].passLof,
+            'no Consequence column ⇒ classes never inferred from IMPACT').to.equal(0)
+    })
+
+    it('the exported Gene Summary carries the remainder tiers, and every row sums to ALL', async function () {
+        this.timeout(20000)
+        const res = await request(app).post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                exportConfig: {geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false},
+                    geneAnalysis: {enabled: true, domain: false}}})
+            .buffer(true).parse(binaryParser).expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        const ws = wb.getWorksheet('Gene Summary')
+        expect(ws, 'Gene Summary present').to.not.be.undefined
+        const hdr = []; ws.getRow(1).eachCell(c => hdr.push(String(c.value)))
+        for (const h of ['Pass HIGH', 'Pass MODERATE', 'Pass LOW', 'Pass MODIFIER', 'Pass (none)', 'Pass ALL']) {
+            expect(hdr, `header "${h}"`).to.include(h)
+        }
+        const ix = (h) => hdr.indexOf(h) + 1
+        let n = 0
+        ws.eachRow((row, i) => {
+            if (i === 1) return
+            n++
+            const v = (h) => Number(row.getCell(ix(h)).value) || 0
+            expect(v('Pass HIGH') + v('Pass MODERATE') + v('Pass LOW') + v('Pass MODIFIER') + v('Pass (none)'),
+                `row ${i} (${row.getCell(1).value}): tiers sum to Pass ALL`).to.equal(v('Pass ALL'))
+        })
+        expect(n, 'the sheet has gene rows (else the sum check is vacuous)').to.be.greaterThan(0)
+        // The fixture carries `inheritance`, so a gene with a bundled autosomal rate gets an expectation.
+        if (hdr.includes('Expected de novo LoF (2·N·p)')) {
+            let any = false
+            ws.eachRow((row, i) => { if (i > 1 && typeof row.getCell(ix('Expected de novo LoF (2·N·p)')).value === 'number') any = true })
+            expect(any, 'when the column exists, at least one row carries a numeric expectation').to.equal(true)
+        }
+    })
+
     it('a compound-het whose partner failed review is reported as REFUTED, not left asserting', function () {
         // The bug this exists for: `compound_het` is a claim about a PAIR carried on one ROW, so
         // when a reviewer fails one member the survivor still exports labelled compound_het —

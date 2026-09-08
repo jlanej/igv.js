@@ -42,7 +42,9 @@ const mitocarta = require('../mitocarta')
  */
 function buildReadmeSheet(workbook, opts) {
     const {exportCfg, headerFill, headerFont, borderThin, genome, hasGene, hasImpact, hasSampleQc,
-        hasScreenshots, hasLollipop, rateTable, rateTableAlt} = opts
+        hasScreenshots, hasLollipop, rateTable, rateTableAlt,
+        hasConsequence = false, hasInheritance = false, hasRates = false} = opts
+    const ic = (exportCfg && exportCfg.impactCounts) || {}
     // Which rate table actually drove Test B, and which was reported beside it as the
     // cross-check. `ratePrimary` is a supported config, so naming a table here in prose is a
     // claim about THIS export, not a constant — hardcoding "DeNovoWEST" made these rows simply
@@ -116,13 +118,24 @@ function buildReadmeSheet(workbook, opts) {
         section('Gene Summary — column dictionary')
         row('Gene', 'HGNC gene symbol.')
         row('Total', 'Total variants in this gene passing the applied filters.')
-        row('Samples', 'Distinct samples/trios harbouring a variant in this gene.')
+        row('Samples', 'Distinct samples/trios harbouring a variant in this gene at ANY curation status — so it can overstate recurrence: a gene with 3 fails and 1 pass across 4 probands reads 4.')
+        if (ic.passSamples !== false) row('Pass samples', 'Distinct samples/trios harbouring a PASSING variant in this gene. This is the recurrence number: it cannot be inflated by variants a reviewer rejected.', 'Reviewer curation')
         row('Pass / Fail / Uncertain / Pending', 'Per-gene counts of variants by reviewer curation status.', 'Reviewer curation')
         if (hasImpact && exportCfg.impactCounts && exportCfg.impactCounts.passByImpact) {
-            row('Pass HIGH / Pass MODERATE / Pass LOW / Pass ALL', 'Count of HIGH/MODERATE/LOW-impact variants in this gene that PASS review; Pass ALL = passing variants of ANY impact (incl. MODIFIER/blank), i.e. not limited to HIGH/MOD/LOW.', 'impact × curation')
+            row(ic.remainder !== false ? 'Pass HIGH / MODERATE / LOW / MODIFIER / (none) / ALL' : 'Pass HIGH / Pass MODERATE / Pass LOW / Pass ALL',
+                'Passing variants in this gene by VEP IMPACT tier. ' + (ic.remainder !== false
+                    ? 'MODIFIER (UTR/intronic/regulatory) and (none) (blank, or not one of VEP\'s four tiers) are printed separately because "annotated as non-coding" and "not annotated" are different facts — and with them the five tiers SUM to Pass ALL exactly.'
+                    : 'Pass ALL = passing variants of ANY impact (incl. MODIFIER/blank), so the three tiers need not sum to it.')
+                + ' IMPACT is a SEVERITY bucket, not a molecular class: HIGH includes stop_lost/start_lost, which are not loss-of-function in the mutation-rate sense — use the Pass LoF column for that.', 'impact × curation')
         }
         if (hasImpact && exportCfg.impactCounts && exportCfg.impactCounts.totalByImpact) {
-            row('HIGH / MODERATE / LOW', 'Count of HIGH/MODERATE/LOW-impact variants in this gene regardless of review status.', 'impact column')
+            row(ic.remainder !== false ? 'HIGH / MODERATE / LOW / MODIFIER / (none) / ALL' : 'HIGH / MODERATE / LOW / ALL', 'The same IMPACT-tier tallies regardless of review status.', 'impact column')
+        }
+        if (hasImpact && hasConsequence && ic.consequenceClasses !== false) {
+            row('Pass LoF / missense / synonymous / other', 'Passing variants by MOLECULAR CLASS, from the VEP Consequence column — collapsed by the SAME classifier the DNM Rate tabs use, so this sheet\'s Pass LoF and that tab\'s k(LoF) are one function of the same cells (they differ only in scope: this sheet counts every origin, inherited included; the DNM Rate tabs are de novo only). LoF = stop_gained + essential splice + frameshift. "other" = everything the mutation-rate model has no term for — UTR, intronic, inframe indels, stop_lost/start_lost — and BLANK Consequence cells, which are "not annotated" and are never re-classified from IMPACT. These columns appear only when the data has a Consequence column.', 'VEP Consequence × curation')
+        }
+        if (hasInheritance && hasRates && ic.expectedDeNovo !== false) {
+            row('Expected de novo LoF / missense (2·N·p)', 'How many DE NOVO variants of that class the germline mutation rate predicts in this gene for N trios: λ = 2·N·p, with p the gene\'s per-transmission de novo rate from the bundled Samocha-2014 table (the same p the DNM Rate tabs use) and N the trio count from the Sample-QC file (else the distinct probands seen). p_lof includes frameshift, so it pairs exactly with Pass LoF; against Pass HIGH it is an approximation that slightly UNDER-predicts, because HIGH also counts stop_lost/start_lost which have no rate term. Read a count beside its expectation: 2 passing LoF against an expected 0.003 is the whole story. This is a DE NOVO null — for an inherited variant the right comparison is population frequency, not mutation rate. Blank = no rate for the gene, or an X-linked gene (2·N assumes two copies).', 'Samocha 2014 rates × N')
         }
         if (ga.enabled) {
             if (ga.geneName) row('Gene Name', 'Full gene name.', 'MyGene.info', 'see below')
