@@ -11,6 +11,14 @@ on:
       - 'server/**'
       - 'docs/**'
 
+# One docs run per branch, newest wins. This job spends several minutes (two npm installs,
+# Playwright, the full server test suite, then rendering) between checkout and push, so any
+# push landing in that window made `git push` fail with "fetch first". A newer push cancelling
+# the older render is the right outcome: the screenshots should come from the newest code.
+concurrency:
+  group: docs-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   generate-docs:
     runs-on: ubuntu-latest
@@ -57,4 +65,19 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add docs/screenshots/
           git commit -m "docs: auto-update screenshots [skip ci]"
-          git push
+          # The branch may have moved while tests + rendering ran. Rebase our one commit onto
+          # it and push; retry with backoff if it moves again. NEVER force-push here — that
+          # would discard the human commits that caused the rejection in the first place.
+          # `-X theirs`: in a rebase, "theirs" is the commit being REPLAYED (ours), so if a
+          # previous bot run also touched these binaries, the fresher render wins the conflict.
+          BRANCH="${{ github.head_ref || github.ref_name }}"
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase -X theirs origin "$BRANCH" && git push origin "HEAD:$BRANCH"; then
+              exit 0
+            fi
+            echo "push rejected on attempt $attempt — remote moved; retrying"
+            git rebase --abort 2>/dev/null || true
+            sleep $((attempt * 10))
+          done
+          echo "::error::could not push screenshots after 5 attempts"
+          exit 1
