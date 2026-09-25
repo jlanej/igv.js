@@ -26,7 +26,10 @@ const registry = require('../annotation-registry')
 describe('export-config: nested deep-merge', function () {
     it('fills all new defaults on empty input', function () {
         const cfg = mergeWithDefaults({})
-        expect(cfg.impactCounts).to.deep.equal({passByImpact: true, totalByImpact: false})
+        // The literal is deliberate: it catches an accidental change to a shipped default.
+        // remainder / passSamples / consequenceClasses / expectedDeNovo were added 2026-09-08.
+        expect(cfg.impactCounts).to.deep.equal({passByImpact: true, totalByImpact: false,
+            remainder: true, passSamples: true, consequenceClasses: true, expectedDeNovo: true})
         expect(cfg.sheets.dataDictionary).to.equal(true)
         expect(cfg.geneAnnotations.gnomadConstraint.enabled).to.equal(true)
         expect(cfg.geneAnnotations.clinvar.enabled).to.equal(true)
@@ -123,9 +126,10 @@ describe('gnomAD provider (pure logic)', function () {
     })
 
     it('toRow rounds and renders the constrained flag', function () {
-        expect(gnomad.toRow({loeuf: 0.23381, pli: 0.99999, misZ: 3.64, constrained: true}, cfg))
-            .to.deep.equal({gnomadLoeuf: 0.23, gnomadPli: 1, gnomadConstrained: 'Yes'})
-        expect(gnomad.toRow(null, cfg)).to.deep.equal({gnomadLoeuf: '', gnomadPli: '', gnomadConstrained: ''})
+        // misZ ships on by default now (the missense analogue of LOEUF), so the row carries it.
+        expect(gnomad.toRow({loeuf: 0.23381, pli: 0.99999, misZ: 3.6449, constrained: true}, cfg))
+            .to.deep.equal({gnomadLoeuf: 0.23, gnomadPli: 1, gnomadConstrained: 'Yes', gnomadMisZ: 3.64})
+        expect(gnomad.toRow(null, cfg)).to.deep.equal({gnomadLoeuf: '', gnomadPli: '', gnomadConstrained: '', gnomadMisZ: ''})
     })
 
     it('column header records the dataset version for the build', function () {
