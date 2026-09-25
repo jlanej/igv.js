@@ -90,7 +90,7 @@ function buildReadmeSheet(workbook, opts) {
     // --- Worksheet overview ---
     section('Worksheets in this report')
     row('Read Me', 'This guide: worksheet overview, column dictionary, and data sources.')
-    row('Variants', 'One row per exported variant. Rows are colour-coded by curation status (Pass/Fail/Uncertain/Pending). When --bed-tracks (kraken2 species BEDs) are configured, adds contamination columns: Contamination (assessment), Nonhuman %, Contam Reads, Nonhuman Reads, Top Taxa.')
+    row('Variants', 'One row per exported variant. Rows are colour-coded by curation status (Pass/Fail/Uncertain/Pending). Excel allows at most 32,767 characters per cell; any longer value (typically a VEP CSQ-style annotation with every transcript concatenated) is TRUNCATED by this export with a visible marker naming the source length, and listed on the Export Errors tab — Excel would otherwise refuse the file and cut it silently. When --bed-tracks (kraken2 species BEDs) are configured, adds contamination columns: Contamination (assessment), Nonhuman %, Contam Reads, Nonhuman Reads, Top Taxa.')
     if (hasGene && exportCfg.sheets.geneSummary) row('Gene Summary', 'One row per gene: curation counts, impact-passing counts, and gene-level annotations. See the column dictionary below.')
     // The worksheet list must describe the workbook IN HAND. These rows are gated on the same
     // per-tab switches the builders use, or deselecting a tab would leave the Read Me promising

@@ -1331,6 +1331,47 @@ function summarizeGenes(filtered, o) {
     }).sort((a, b) => b.total - a.total)
 }
 
+
+// ---- Excel's hard per-cell limits, enforced ONCE at the exit -------------------------------
+// Excel refuses a cell over 32,767 characters and a cell containing a control character
+// (0x00–0x1F other than tab/LF/CR). Either makes it report "We found a problem with some
+// content" and, on "repair", cut the text SILENTLY. A VEP CSQ-style annotation with every
+// transcript concatenated does this easily — the case that surfaced was a 44,729-char cell.
+// So the export truncates first, VISIBLY: the cell ends in a marker naming the source length,
+// and every change is reported on the Export Errors tab. One pass over every sheet, rather than
+// a guard at each of the N places a string is written, is the version that cannot be forgotten
+// by the next builder.
+const XLSX_CELL_LIMIT = 32767
+const XLSX_CTRL_G = /[\x00-\x08\x0b\x0c\x0e-\x1f]/g
+function sanitizeWorkbook(workbook) {
+    const report = []
+    for (const ws of workbook.worksheets) {
+        ws.eachRow({includeEmpty: false}, (row) => {
+            row.eachCell({includeEmpty: false}, (cell) => {
+                const v = cell.value
+                if (typeof v !== 'string') return          // numbers, formulas, rich text, links: untouched
+                let out = v
+                const notes = []
+                const stripped = out.replace(XLSX_CTRL_G, '')
+                if (stripped.length !== out.length) {
+                    notes.push(`removed ${out.length - stripped.length} control character(s) (bytes 0x00–0x1F) that Excel rejects`)
+                    out = stripped
+                }
+                if (out.length > XLSX_CELL_LIMIT) {
+                    const marker = `\n… [TRUNCATED BY EXPORT: ${v.length.toLocaleString()} chars in source — Excel's cell limit is ${XLSX_CELL_LIMIT.toLocaleString()}]`
+                    out = out.slice(0, XLSX_CELL_LIMIT - marker.length) + marker
+                    notes.push(`truncated to Excel's ${XLSX_CELL_LIMIT.toLocaleString()}-character cell limit (source had ${v.length.toLocaleString()} chars); the full value is in the source data, not in this workbook`)
+                }
+                if (notes.length) {
+                    cell.value = out
+                    report.push({sheet: ws.name, cell: cell.address, note: notes.join('; ')})
+                }
+            })
+        })
+    }
+    return report
+}
+
 // -------------------------------------------------------------------------
 // XLSX Export – publication-quality workbook with variant data and optional
 // IGV screenshots on per-variant tabs, linked from the main sheet.
@@ -2571,6 +2612,16 @@ app.post('/api/export/xlsx', async (req, res) => {
             exportErrors.push({section: 'Screenshots', error: sectionErr.message})
         }
 
+        // --- Excel hard limits: one pass over EVERY sheet, before Export Errors is built ----
+        // so that each truncation lands on that tab. See sanitizeWorkbook() for why this is one
+        // gate at the exit rather than a guard per writer.
+        try {
+            for (const t of sanitizeWorkbook(workbook)) exportErrors.push({section: `${t.sheet}!${t.cell}`, error: t.note})
+        } catch (sanErr) {
+            log.warn('Workbook sanitize failed:', sanErr.message)
+            exportErrors.push({section: 'Workbook limits', error: `sanitize pass failed: ${sanErr.message}`})
+        }
+
         // --- Export Errors worksheet -----------------------------------------
         // If any non-fatal errors occurred during export, embed them in a
         // dedicated tab so the user can see exactly what went wrong.
@@ -2787,3 +2838,5 @@ module.exports.GA_DNM_TRACK = GA_DNM_TRACK   // back-compat alias
 module.exports.buildDnmRateCategoryTab = buildDnmRateCategoryTab
 module.exports.buildDnmRatePerGeneTab = buildDnmRatePerGeneTab
 module.exports.summarizeGenes = summarizeGenes
+module.exports.sanitizeWorkbook = sanitizeWorkbook
+module.exports.XLSX_CELL_LIMIT = XLSX_CELL_LIMIT

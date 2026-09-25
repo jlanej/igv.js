@@ -4278,6 +4278,57 @@ describe('Gene Summary impact counts and annotations', function () {
         }
     })
 
+    it('cells over Excel\'s 32,767-char limit are truncated VISIBLY and reported, control chars removed', function () {
+        // A real export shipped a 44,729-char cell (a VEP CSQ-style annotation), and Excel
+        // reported "We found a problem with some content" then cut it silently on repair. The
+        // export now truncates first — with a marker naming the source length — and reports it.
+        const {sanitizeWorkbook, XLSX_CELL_LIMIT} = require('../server')
+        const wb = new ExcelJS.Workbook()
+        const ws = wb.addWorksheet('Variants')
+        ws.columns = [{header: 'a', key: 'a'}, {header: 'b', key: 'b'}, {header: 'c', key: 'c'}, {header: 'd', key: 'd'}, {header: 'e', key: 'e'}]
+        const big = 'x'.repeat(44729)
+        ws.addRow({a: big, b: 'a\u0001b\u001fc', c: 12345, d: {formula: '1+1', result: 2}, e: 'short'})
+        const report = sanitizeWorkbook(wb)
+
+        const r2 = ws.getRow(2)
+        expect(r2.getCell('a').value.length, 'over-limit cell is now within the limit').to.be.at.most(XLSX_CELL_LIMIT)
+        expect(r2.getCell('a').value, 'and says so, naming the source length').to.match(/TRUNCATED BY EXPORT: 44,729 chars/)
+        expect(r2.getCell('a').value.startsWith('xxxx'), 'the leading content is kept').to.equal(true)
+        expect(r2.getCell('b').value, 'control characters removed').to.equal('abc')
+        expect(r2.getCell('c').value, 'numbers untouched').to.equal(12345)
+        expect(r2.getCell('d').value.formula, 'formulas untouched').to.equal('1+1')
+        expect(r2.getCell('e').value, 'short strings untouched').to.equal('short')
+        // Every change is reported, addressed, so it can be listed on Export Errors.
+        expect(report.map(t => `${t.sheet}!${t.cell}`).sort()).to.deep.equal(['Variants!A2', 'Variants!B2'])
+        expect(report.find(t => t.cell === 'A2').note).to.match(/44,729/)
+        // Header row (row 1) is short and must be left alone.
+        expect(ws.getRow(1).getCell(1).value).to.equal('a')
+    })
+
+    it('a real export has no cell over Excel\'s limit and no control characters', async function () {
+        this.timeout(20000)
+        const res = await request(app).post('/api/export/xlsx')
+            .send({variantIds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                exportConfig: {geneAnnotations: {enabled: true, geneName: false, summary: false, omim: false, pathways: false, geneType: false},
+                    geneAnalysis: {enabled: true, domain: false}}})
+            .buffer(true).parse(binaryParser).expect(200)
+        const wb = new ExcelJS.Workbook()
+        await wb.xlsx.load(res.body)
+        let cells = 0; const bad = []
+        for (const ws of wb.worksheets) {
+            ws.eachRow(row => row.eachCell(cell => {
+                cells++
+                const v = cell.value
+                const text = typeof v === 'string' ? v : (v && typeof v === 'object' && typeof v.richText !== 'undefined') ? v.richText.map(r => r.text).join('') : null
+                if (text == null) return
+                if (text.length > 32767) bad.push(`${ws.name}!${cell.address} ${text.length} chars`)
+                if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) bad.push(`${ws.name}!${cell.address} control char`)
+            }))
+        }
+        expect(cells, 'the export has cells (else this is vacuous)').to.be.greaterThan(100)
+        expect(bad, 'cells Excel would reject').to.deep.equal([])
+    })
+
     it('a compound-het whose partner failed review is reported as REFUTED, not left asserting', function () {
         // The bug this exists for: `compound_het` is a claim about a PAIR carried on one ROW, so
         // when a reviewer fails one member the survivor still exports labelled compound_het —
